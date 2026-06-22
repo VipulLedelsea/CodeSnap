@@ -23,3 +23,6 @@ captures/
 
 # Cowork / Claude cache
 .claude/
+
+# Word temp lock files
+~$*

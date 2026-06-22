@@ -10,3 +10,6 @@ Pillow
 
 # Document export (Milestone 2.5+)
 python-docx
+
+# Global hotkey listener (Milestone 3)
+pynput
