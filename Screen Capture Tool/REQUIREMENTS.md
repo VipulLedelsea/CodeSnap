@@ -31,6 +31,7 @@ Teaching project; user has authorization to access the content. Caveat noted: "a
 ## Milestones (riskiest slice first)
 1. ~~**Foundation**~~ ✅ *(completed 2026-06-17)* — repo, virtualenv, `anthropic` installed, API key in `.env`, a "hello Claude" Messages API call returns text (`hello_api.py`).
 2. **Core value end-to-end** — manual screenshot saved to disk → base64-encoded → sent as an image block in a Messages API call with a prompt → printed explanation. Do not move on until this feels good.
+2.5. **Multi-image doc export** — accept multiple image files; for each, explain what's on screen and extract any visible text preserving its original structure (headings, lists, tables, paragraphs); combine all output into a single `.docx`, one section per image.
 3. **Real capture** — hotkey-triggered region/full-screen capture feeding step 2 automatically.
 4. **Content routing** — prompt-engineer open-ended content typing, then have Claude explain with an approach suited to that type. (Prompt work, not loop-building.)
 5. **Multi-capture context** — dedupe near-identical frames, stitch, maintain running context across screens by passing prior messages/explanations back in the `messages` array.
