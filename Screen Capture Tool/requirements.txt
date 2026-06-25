@@ -13,3 +13,6 @@ python-docx
 
 # Global hotkey listener (Milestone 3)
 pynput
+
+# Near-duplicate frame detection (Milestone 5)
+imagehash
