@@ -170,11 +170,17 @@ EXTRACT_SYSTEM_PROMPT = (
     "output nothing."
 )
 
-OVERVIEW_SYSTEM_PROMPT = (
-    "You are given the full text of a document that was captured across several "
-    "ordered screenshots. Write a concise plain-English overview of what it is and "
-    "what it covers. Lead with the content type (e.g. 'Code:', 'Document:', "
-    "'Spreadsheet:'). Output only the overview, no preamble."
+FINALIZE_SYSTEM_PROMPT = (
+    "You are given the full text extracted from a sequence of screenshots that "
+    "together form one document. Classify it and summarise it.\n"
+    "Return ONLY a JSON object with exactly these keys:\n"
+    '  "overview": a concise plain-English overview, leading with the content type.\n'
+    '  "is_code": true if the content is primarily source code, otherwise false.\n'
+    '  "language": if code, the programming language name (e.g. "Python", "C++", '
+    '"C#", "JavaScript"); otherwise "".\n'
+    '  "extension": if code, the conventional source-file extension WITHOUT a dot '
+    '(e.g. "py", "cpp", "cs", "js"); otherwise "".\n'
+    "Return only the raw JSON object — no code fences, no commentary."
 )
 
 
@@ -193,17 +199,46 @@ def extract_one(client, path: Path) -> str:
     return "".join(getattr(b, "text", "") for b in msg.content).strip()
 
 
-def synthesize_overview(client, full_text: str) -> str:
-    """One cheap text-only call: summarise the stitched document."""
+def _parse_json(raw: str) -> dict:
+    """Best-effort JSON parse: direct, then the outermost { } block."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    start, end = raw.find("{"), raw.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return json.loads(raw[start:end + 1])
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+def synthesize_final(client, full_text: str) -> dict:
+    """One cheap text-only call: classify the document AND summarise it.
+
+    Returns {"overview", "is_code", "language", "extension"}.
+    """
+    fallback = {"overview": "", "is_code": False, "language": "", "extension": ""}
     if not full_text.strip():
-        return ""
+        return fallback
     msg = client.messages.create(
         model=MODEL,
         max_tokens=1024,
-        system=OVERVIEW_SYSTEM_PROMPT,
+        system=FINALIZE_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": full_text}],
     )
-    return "".join(getattr(b, "text", "") for b in msg.content).strip()
+    raw = "".join(getattr(b, "text", "") for b in msg.content).strip()
+    data = _parse_json(raw)
+    if data is None:
+        # Couldn't parse — keep the raw text as the overview, treat as non-code.
+        return {**fallback, "overview": raw}
+    return {
+        "overview": str(data.get("overview", "")).strip(),
+        "is_code": bool(data.get("is_code", False)),
+        "language": str(data.get("language", "")).strip(),
+        "extension": str(data.get("extension", "")).strip().lstrip(".").lower(),
+    }
 
 
 def _overlap_len(a: list, b: list, min_overlap: int = 2, max_check: int = 300) -> int:
@@ -269,11 +304,18 @@ def analyse_incremental(client, image_paths: list, cache_dir: Path = None) -> di
 
     full_text = stitch_parts(parts)
     if not full_text.strip():
-        return {"explanation": "", "extracted_text": ""}
+        return {"explanation": "", "extracted_text": "",
+                "is_code": False, "language": "", "extension": ""}
 
-    print("  writing overview...")
-    overview = synthesize_overview(client, full_text)
-    return {"explanation": overview, "extracted_text": full_text}
+    print("  classifying + writing overview...")
+    meta = synthesize_final(client, full_text)
+    return {
+        "explanation": meta["overview"],
+        "extracted_text": full_text,
+        "is_code": meta["is_code"],
+        "language": meta["language"],
+        "extension": meta["extension"],
+    }
 
 
 
@@ -297,6 +339,37 @@ def extract_to_cache(client, path: Path, cache_dir: Path) -> None:
     text = extract_one(client, path)
     cache_dir.mkdir(parents=True, exist_ok=True)
     cf.write_text(text)
+
+
+# ── Code fix loop (Milestone 7, Layer C) ─────────────────────────────────────────
+
+FIX_SYSTEM_PROMPT = (
+    "You are correcting a source file that was transcribed from screenshots and "
+    "failed to compile. You are given the language, the compiler/parser errors, "
+    "and the current code. The errors are TRANSCRIPTION mistakes (a mis-read "
+    "character, a missing bracket/colon/semicolon, a wrong quote, a broken indent).\n"
+    "Fix ONLY what the errors point to, with the MINIMAL change needed. Do NOT add, "
+    "remove, rename, or invent functionality, imports, comments, or logic that is "
+    "not clearly required to resolve the specific reported error. Preserve the "
+    "original code exactly everywhere else. If a fix is genuinely ambiguous, leave "
+    "that line unchanged rather than guessing.\n"
+    "Return ONLY the corrected, complete source file — no commentary, no markdown."
+)
+
+
+def fix_source(client, code: str, language: str, errors: str) -> str:
+    """One API call: return a corrected version of the code given compiler errors."""
+    msg = client.messages.create(
+        model=MODEL,
+        max_tokens=4096,
+        system=FIX_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": (
+            f"Language: {language or 'unknown'}\n\n"
+            f"Compiler/parser errors:\n{errors}\n\n"
+            f"Current code:\n{code}"
+        )}],
+    )
+    return "".join(getattr(b, "text", "") for b in msg.content).strip()
 
 
 # ── Document builder ───────────────────────────────────────────────────────────

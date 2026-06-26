@@ -26,3 +26,6 @@ captures/
 
 # Word temp lock files
 ~$*
+
+# Generated reports / source files (may contain sensitive screen text)
+reports/

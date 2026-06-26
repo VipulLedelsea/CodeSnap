@@ -38,13 +38,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 from pathlib import Path
 
 # Analysis engine: env loading, background per-image extraction + cache, the
 # incremental analyser (cache hits + one overview call), and the docx builder.
-from analysis import load_env, extract_to_cache, analyse_incremental, build_docx
+from analysis import load_env, extract_to_cache, analyse_incremental, build_docx, fix_source
+from validate import check_source
 
 # Hotkey config. Avoid Cmd+Shift+3/4/5/6 — macOS reserves those for screenshots.
 HK_TOGGLE = "<cmd>+<shift>+1"
@@ -56,6 +58,7 @@ CAPTURES_ROOT = Path("captures")  # scratch PNGs (gitignored); deleted on quit
 REPORTS_ROOT = Path("reports")    # persistent .docx reports; survive quit
 BG_WORKERS = 3                    # how many images to read concurrently
 DUP_THRESHOLD = 3                 # perceptual-hash distance treated as a near-duplicate
+MAX_FIX_ITERS = 3                 # max auto-fix passes when a code check fails
 
 # Uses the MSS library for full-screen capture (cross-platform) and macOS's native
 # screencapture for region capture (native crosshair). Both return PNG bytes.
@@ -98,6 +101,22 @@ def _phash(data: bytes):
         return imagehash.phash(Image.open(io.BytesIO(data)))
     except Exception:  # noqa: BLE001 - dedup is best-effort; never block a capture
         return None
+
+
+def _safe_ext(ext: str) -> str:
+    """Allow only a short alphanumeric extension; fall back to txt."""
+    ext = ext.strip().lstrip(".").lower()
+    return ext if ext.isalnum() and 1 <= len(ext) <= 10 else "txt"
+
+
+def _strip_code_fences(text: str) -> str:
+    """Remove a wrapping ```lang ... ``` fence if the model added one anyway."""
+    lines = text.splitlines()
+    if lines and lines[0].lstrip().startswith("```"):
+        lines = lines[1:]
+        if lines and lines[-1].lstrip().startswith("```"):
+            lines = lines[:-1]
+    return "\n".join(lines)
 
 
 class App:
@@ -244,8 +263,68 @@ class App:
         print(f"\n{'-' * 60}\nEXTRACTED TEXT\n{'-' * 60}")
         print(extracted)
 
-        answer = input("\nSave report to a Word document? [y/n]: ").strip().lower()
-        if answer != "y":
+        # Route the output by content type.
+        if result.get("is_code"):
+            self._save_source(result, session_dir)
+        else:
+            self._save_docx(result, session_dir)
+
+    # --- output savers ---
+    def _save_source(self, result, session_dir):
+        lang = result.get("language") or "code"
+        ext_guess = (result.get("extension") or "txt").lstrip(".").lower() or "txt"
+        print(f"\nDetected: {lang} source code  ->  .{ext_guess}")
+        if input("Save as a source file? [y/n]: ").strip().lower() != "y":
+            print("No file saved.")
+            return
+        typed = input(f"File extension [{ext_guess}]: ").strip().lstrip(".").lower()
+        ext = _safe_ext(typed or ext_guess)
+        try:
+            REPORTS_ROOT.mkdir(parents=True, exist_ok=True)
+            ts = session_dir.name.replace("session_", "")
+            out = REPORTS_ROOT / f"report_{ts}.{ext}"
+            out.write_text(_strip_code_fences(result.get("extracted_text", "")))
+            print(f"Saved source file: {out.resolve()}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"(could not save source file: {type(exc).__name__}: {exc})", file=sys.stderr)
+            return
+        self._validate_and_fix(out, result.get("language") or "")
+
+    def _validate_and_fix(self, path, language):
+        """Syntax/compile-check the saved file; on failure, loop with Claude to
+        fix transcription errors and re-check (check only — never runs the code)."""
+        res = check_source(path)
+        if not res["checked"]:
+            print(f"  (not syntax-checked — {res['note']})")
+            return
+        if res["ok"]:
+            print(f"  check passed ({res['tool']}) — no syntax errors found.")
+            return
+
+        print(f"  check FAILED ({res['tool']}):")
+        print(textwrap.indent(res["errors"] or "(no detail)", "    "))
+        if input("  Attempt auto-fix? [y/n]: ").strip().lower() != "y":
+            print("  Left as-is.")
+            return
+
+        for i in range(1, MAX_FIX_ITERS + 1):
+            print(f"  fix attempt {i}/{MAX_FIX_ITERS}...")
+            try:
+                fixed = _strip_code_fences(fix_source(self.client, path.read_text(), language, res["errors"]))
+            except Exception as exc:  # noqa: BLE001
+                print(f"  (fix call failed: {type(exc).__name__}: {exc}) — kept the last version", file=sys.stderr)
+                return
+            path.write_text(fixed)
+            res = check_source(path)
+            if res["ok"]:
+                print(f"  fixed — check passed ({res['tool']}) after {i} attempt(s).")
+                return
+            print("  still failing:")
+            print(textwrap.indent(res["errors"] or "(no detail)", "    "))
+        print(f"  Could not fully fix after {MAX_FIX_ITERS} attempt(s); saved the latest version.")
+
+    def _save_docx(self, result, session_dir):
+        if input("\nSave report to a Word document? [y/n]: ").strip().lower() != "y":
             print("No report saved.")
             return
         try:
