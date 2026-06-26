@@ -16,3 +16,6 @@ pynput
 
 # Near-duplicate frame detection (Milestone 5)
 imagehash
+
+# Testing
+pytest

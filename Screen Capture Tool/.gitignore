@@ -29,3 +29,9 @@ captures/
 
 # Generated reports / source files (may contain sensitive screen text)
 reports/
+
+# Local test inputs — keep the folders + READMEs, ignore screenshots/fixtures
+tests/inbox/*
+!tests/inbox/README.md
+tests/real/*
+!tests/real/README.md
