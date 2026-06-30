@@ -7,10 +7,9 @@ import shutil
 import tempfile
 from pathlib import Path
 
-import analysis
-import validate
-import hotkey_capture as hk
 import pytest
+from core import analysis, validate
+import hotkey_capture as hk
 
 
 # ── stitch / overlap merge ───────────────────────────────────────────────────

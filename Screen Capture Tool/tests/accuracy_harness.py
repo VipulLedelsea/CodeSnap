@@ -54,7 +54,7 @@ def score(gt: str, got: str):
 
 
 def compiles(code: str, ext: str) -> bool:
-    import validate
+    from core import validate
     tmp = Path(tempfile.mktemp(suffix=f".{ext}"))
     tmp.write_text(code)
     try:
@@ -78,7 +78,7 @@ def _print_table(rows):
 
 def _make_client():
     import os
-    from analysis import load_env
+    from core.analysis import load_env
     load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("ANTHROPIC_API_KEY not set (add it to .env).", file=sys.stderr)
@@ -92,7 +92,7 @@ def _make_client():
 
 
 def run_real(client) -> int:
-    from analysis import analyse_incremental
+    from core.analysis import analyse_incremental
     real_dir = HERE / "real"
     sample_dirs = sorted(d for d in real_dir.iterdir() if d.is_dir()) if real_dir.exists() else []
     if not sample_dirs:
@@ -130,7 +130,7 @@ def run_synthetic(client, selftest, line_numbers, classify) -> int:
             if selftest:
                 got, class_ok = gt, None
             else:
-                from analysis import extract_one, synthesize_final
+                from core.analysis import extract_one, synthesize_final
                 got = extract_one(client, png)
                 class_ok = None
                 if classify:
@@ -146,7 +146,7 @@ def run_inbox(client) -> int:
     """Dead-simple: analyse whatever .png files are in tests/inbox/ as ONE
     document and print the result. Drop a same-stem source file (any non-png,
     non-md) in there too and it will also be scored."""
-    from analysis import analyse_incremental
+    from core.analysis import analyse_incremental
     inbox = HERE / "inbox"
     pngs = sorted(inbox.glob("*.png"))
     if not pngs:

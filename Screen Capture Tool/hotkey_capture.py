@@ -45,8 +45,17 @@ from pathlib import Path
 
 # Analysis engine: env loading, background per-image extraction + cache, the
 # incremental analyser (cache hits + one overview call), and the docx builder.
-from analysis import load_env, extract_to_cache, analyse_incremental, build_docx, fix_source
-from validate import check_source
+from core.analysis import load_env, extract_to_cache, analyse_incremental, fix_source
+from core.validate import check_source
+from core.capture import capture_full_png, capture_region_png, next_png_path
+from agent import run_agent
+from tools import ToolContext
+from core.outputs import (
+    safe_ext as _safe_ext,
+    strip_code_fences as _strip_code_fences,
+    save_source_file,
+    save_docx,
+)
 
 # Hotkey config. Avoid Cmd+Shift+3/4/5/6 — macOS reserves those for screenshots.
 HK_TOGGLE = "<cmd>+<shift>+1"
@@ -60,39 +69,6 @@ BG_WORKERS = 3                    # how many images to read concurrently
 DUP_THRESHOLD = 3                 # perceptual-hash distance treated as a near-duplicate
 MAX_FIX_ITERS = 3                 # max auto-fix passes when a code check fails
 
-# Uses the MSS library for full-screen capture (cross-platform) and macOS's native
-# screencapture for region capture (native crosshair). Both return PNG bytes.
-def capture_full_png() -> bytes:
-    """Full primary-screen capture via mss -> PNG bytes."""
-    import mss
-    from PIL import Image
-
-    with mss.mss() as sct:
-        raw = sct.grab(sct.monitors[1]) 
-    img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-# Uses macOS's native screencapture for region capture (crosshair). Returns PNG bytes or None if cancelled.
-def capture_region_png() -> "bytes | None":
-
-    fd, path = tempfile.mkstemp(suffix=".png")
-    os.close(fd)
-    subprocess.run(["screencapture", "-i", "-x", path])  # -i interactive, -x silent
-    try:
-        if os.path.getsize(path) == 0:
-            return None  # cancelled — screencapture wrote nothing
-        with open(path, "rb") as f:
-            return f.read()
-    finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-
-
 #Hashing of images for near-duplicate detection. If difference is below a threshold, the capture is skipped.
 def _phash(data: bytes):
     try:
@@ -103,28 +79,14 @@ def _phash(data: bytes):
         return None
 
 
-def _safe_ext(ext: str) -> str:
-    """Allow only a short alphanumeric extension; fall back to txt."""
-    ext = ext.strip().lstrip(".").lower()
-    return ext if ext.isalnum() and 1 <= len(ext) <= 10 else "txt"
-
-
-def _strip_code_fences(text: str) -> str:
-    """Remove a wrapping ```lang ... ``` fence if the model added one anyway."""
-    lines = text.splitlines()
-    if lines and lines[0].lstrip().startswith("```"):
-        lines = lines[1:]
-        if lines and lines[-1].lstrip().startswith("```"):
-            lines = lines[:-1]
-    return "\n".join(lines)
-
-
 class App:
     """Run state + API client + background reader pool."""
 
     def __init__(self, client):
         self.client = client
         self.running = False                      # idle until a session is started
+        self.agent_mode = False                   # set from --agent in main
+        self.capture_enabled = False              # captures allowed (stays on during agent run)
         self.session_dir = None                   # current session's capture folder
         self.count = 0                            # captures taken this session
         self._last_phash = None                   # for near-duplicate detection
@@ -161,11 +123,14 @@ class App:
         self.count = 0
         self._last_phash = None
         self.running = True
+        self.capture_enabled = True
         print(f"\n[running] session: {self.session_dir.resolve()}")
         print("  Cmd+Shift+2 = full screen, Cmd+Shift+8 = region, Cmd+Shift+1 = stop & analyse.")
 
     def _stop_session(self):
         self.running = False
+        if not self.agent_mode:
+            self.capture_enabled = False
         session_dir = self.session_dir
         print("\n[stopped] wrapping up session...")
         threading.Thread(target=self._analyse_then_idle, args=(session_dir,), daemon=True).start()
@@ -175,7 +140,7 @@ class App:
         print("\n[idle] Cmd+Shift+1 to start a new session, Cmd+Shift+9 to quit.")
 
     def _capture(self, kind):
-        if not self.running:
+        if not self.capture_enabled:
             print("(idle — press Cmd+Shift+1 to start a session first)")
             return
         threading.Thread(target=self._do_capture, args=(kind, self.session_dir), daemon=True).start()
@@ -205,9 +170,9 @@ class App:
                 return
             if ph is not None:
                 self._last_phash = ph
-            self.count += 1
-            out = session_dir / f"{self.count:03d}.png"
+            out = next_png_path(session_dir)
             out.write_bytes(data)
+            self.count += 1
             print(f"  saved capture {self.count}: {out.name} — reading in background...")
         except Exception as exc:  # noqa: BLE001
             print(f"Capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -242,6 +207,11 @@ class App:
             imgs = sorted(session_dir.glob("*.png")) if session_dir else []
             if not imgs:
                 print("[stopped] no captures in this session — nothing to analyse.")
+                self.capture_enabled = False
+                return
+            if self.agent_mode:
+                self._run_agent(session_dir, imgs)
+                self.capture_enabled = False
                 return
             print(f"Stitching {len(imgs)} capture(s) and writing the overview...")
             try:
@@ -269,6 +239,26 @@ class App:
         else:
             self._save_docx(result, session_dir)
 
+    def _run_agent(self, session_dir, imgs):
+        """Agent mode: hand the session to the tool-use agent (it reads, classifies,
+        checks, fixes, saves, and can ask for more captures)."""
+        ts = session_dir.name.replace("session_", "")
+        ctx = ToolContext(
+            client=self.client, images=list(imgs),
+            cache_dir=session_dir / ".cache", out_dir=REPORTS_ROOT,
+            out_name=f"report_{ts}", session_dir=session_dir, interactive=True,
+        )
+        print("[agent] working over the session (it may ask for more captures)...")
+        goal = (f"There are {len(imgs)} screenshot(s). Produce the best verified output, "
+                f"following your instructions.")
+        try:
+            audit = []
+            final, _ = run_agent(self.client, ctx, goal=goal, verbose=True, audit=audit)
+            print(f"\n{'=' * 60}\n{final}\n{'=' * 60}")
+            print(f"(agent used {len(audit)} tool step(s))")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Agent failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+
     # --- output savers ---
     def _save_source(self, result, session_dir):
         lang = result.get("language") or "code"
@@ -280,10 +270,8 @@ class App:
         typed = input(f"File extension [{ext_guess}]: ").strip().lstrip(".").lower()
         ext = _safe_ext(typed or ext_guess)
         try:
-            REPORTS_ROOT.mkdir(parents=True, exist_ok=True)
             ts = session_dir.name.replace("session_", "")
-            out = REPORTS_ROOT / f"report_{ts}.{ext}"
-            out.write_text(_strip_code_fences(result.get("extracted_text", "")))
+            out = save_source_file(result.get("extracted_text", ""), REPORTS_ROOT, f"report_{ts}", ext)
             print(f"Saved source file: {out.resolve()}")
         except Exception as exc:  # noqa: BLE001
             print(f"(could not save source file: {type(exc).__name__}: {exc})", file=sys.stderr)
@@ -328,10 +316,8 @@ class App:
             print("No report saved.")
             return
         try:
-            REPORTS_ROOT.mkdir(parents=True, exist_ok=True)
             ts = session_dir.name.replace("session_", "")
-            out = REPORTS_ROOT / f"report_{ts}.docx"
-            build_docx(result).save(out)
+            out = save_docx(result, REPORTS_ROOT, f"report_{ts}")
             print(f"Saved report: {out.resolve()}")
         except Exception as exc:  # noqa: BLE001
             print(f"(could not save docx: {type(exc).__name__}: {exc})", file=sys.stderr)
@@ -364,6 +350,10 @@ class App:
 
 
 def main() -> int:
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--agent", action="store_true", help="Use the agent (not the fixed pipeline) at stop.")
+    args = ap.parse_args()
     load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("ANTHROPIC_API_KEY is not set (add it to .env).", file=sys.stderr)
@@ -377,9 +367,10 @@ def main() -> int:
         return 1
 
     app = App(anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]))
+    app.agent_mode = args.agent
 
     print(
-        "Screen Capture Tool - hotkey mode (background reads)\n"
+        "Screen Capture Tool - hotkey mode" + (" [AGENT]" if args.agent else "") + "\n"
         "  Cmd+Shift+1  start / stop session\n"
         "  Cmd+Shift+2  capture full screen\n"
         "  Cmd+Shift+8  capture region\n"
