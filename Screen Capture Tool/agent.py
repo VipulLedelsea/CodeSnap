@@ -22,22 +22,28 @@ from tools import TOOL_SCHEMAS, ToolContext, run_tool
 MAX_ITERS = 14          # hard cap on think/act cycles (runaway guard)
 MAX_TOKENS = 4096
 
-SYSTEM_PROMPT = (
-    "You turn captured screenshots into the best, verified output. You work by "
-    "calling tools — you cannot see the screenshots until you read them.\n"
-    "Recommended approach:\n"
-    "  1. Call list_captures to see how many there are.\n"
-    "  2. read_capture each one (in order) to get its text.\n"
-    "  3. Decide what the content is. If it spans several shots, treat them as one document.\n"
-    "  4. If a capture looks cut off or incomplete, call request_more_captures instead of guessing.\n"
-    "  5. If it is code: save_output as a 'source' file with the right extension, then check_code; "
-    "if it fails, use fix_code on the reported errors and check again (a few times). "
-    "Fix only transcription errors — never invent code.\n"
-    "  6. If it is a document/prose: save_output as 'docx'. Otherwise 'text'.\n"
-    "  7. When done, briefly tell the user what you produced and where.\n"
-    "Never execute the captured code (check_code only compiles/parses). Be economical: "
-    "do not re-read a screenshot you already read."
-)
+SYSTEM_PROMPT = """
+You turn captured screenshots into the best, verified output. You work by calling tools — you cannot see the screenshots until you read them.
+
+Core rule: NEVER invent, complete, or guess content. Transcribe and report only what is actually captured. It is better to flag a gap than to fabricate.
+
+Workflow:
+  1. list_captures, then read_capture each one in order. Keep the code EXACTLY as returned — do not silently fix indentation, typos, or cut-off lines.
+  2. If a capture is blank, or a line is marked [CUT OFF] or clearly incomplete, do NOT fill it in. Note it, and call request_more_captures to ask for a clean shot. Never reconstruct missing code.
+  3. If it is CODE: call check_code on the code EXACTLY as captured (do not pre-fix it). The errors it returns are the REAL errors in the captured code — these are what you report.
+  4. Present your final answer in EXACTLY this format (Markdown):
+        **Language:** <language>
+        **Overview:** <plain-English summary of what the code does>
+        **Errors found:** <the actual errors check_code reported on the as-captured code, e.g. an IndentationError with its line; or 'None' only if it genuinely passed. List blank/cut-off captures here too.>
+        **Code:**
+        ```<ext>
+        <the code — corrected ONLY for the specific errors you reported (e.g. fix the bad indent). Do NOT change anything else, and do NOT invent content for missing/cut-off parts; leave a clear  # [missing — recapture]  marker instead.>
+        ```
+  5. In that SAME turn, also call save_output (format 'source', with the extension and the code you displayed) to offer saving — the user will be asked to confirm. Never save before presenting.
+
+For non-code content: give **Language/Type** and **Overview**, show the text, then call save_output ('docx' for documents, else 'text').
+Never execute the captured code (check_code only compiles/parses). Do not re-read a screenshot you already read.
+"""
 
 
 def _blocks(resp):
@@ -67,6 +73,9 @@ def run_agent(client, ctx, goal=None, messages=None, max_iters=MAX_ITERS, verbos
         messages.append({"role": "assistant", "content": _blocks(resp)})
 
         if getattr(resp, "stop_reason", None) == "tool_use":
+            for b in _blocks(resp):
+                if getattr(b, "type", None) == "text" and (b.text or "").strip():
+                    print("\n" + b.text.strip())
             results = []
             for b in _blocks(resp):
                 if getattr(b, "type", None) == "tool_use":

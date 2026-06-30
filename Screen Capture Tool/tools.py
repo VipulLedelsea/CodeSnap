@@ -76,6 +76,12 @@ def _t_fix_code(ctx, inp):
 def _t_save_output(ctx, inp):
     fmt = (inp.get("format") or "text").lower()
     content = inp.get("content", "")
+    try:
+        ans = input(f"\nSave this output (as {fmt})? [Y/n]: ").strip().lower()
+    except EOFError:
+        ans = "y"
+    if ans in ("n", "no"):
+        return "User chose NOT to save. Nothing was written."
     if fmt == "source":
         out = outputs.save_source_file(content, ctx.out_dir, ctx.out_name, inp.get("extension", "txt"))
     elif fmt == "docx":
