@@ -165,6 +165,8 @@ EXTRACT_SYSTEM_PROMPT = (
     "reproduce it AS-IS. Do NOT correct, complete, reformat, or improve anything. "
     "If a line is cut off at the screen edge or unreadable, transcribe what is visible and append "
     "the marker [CUT OFF] — never guess the missing part. "
+    "Example: if a method's def line is at the SAME indentation as its class header "
+    "(not indented under it), copy it at that same wrong indentation — do not indent it to fix it. "
     "Ignore editor and application UI chrome that is not part of the content itself: "
     "gutter line numbers, code-folding arrows or chevrons (such as v, >, or triangle "
     "glyphs), breakpoint dots, diff/git markers, minimaps, scrollbars, tab bars, and "

@@ -73,6 +73,31 @@ def _t_check_code(ctx, inp):
     return json.dumps(res)
 
 
+def _t_check_captured_code(ctx, inp):
+    """Check the code EXACTLY as captured — reads the raw extraction from the cache
+    (the model cannot re-type/clean it first), so real on-screen errors surface.
+    Returns the raw code + the checker result."""
+    ext = outputs.safe_ext(inp.get("extension", "txt"))
+    from core.analysis import cache_path_for, stitch_parts
+    parts = []
+    for pth in sorted(ctx.images):
+        if ctx.cache_dir is not None:
+            cf = cache_path_for(pth, ctx.cache_dir)
+            if cf.exists():
+                parts.append(cf.read_text())
+    code = stitch_parts(parts)
+    if not code.strip():
+        return json.dumps({"ok": None, "note": "No cached extraction yet — read the captures first."})
+    tmp = Path(tempfile.mktemp(suffix=f".{ext}"))
+    tmp.write_text(code)
+    try:
+        res = validate.check_source(tmp)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return json.dumps({"checked": res["checked"], "ok": res["ok"], "tool": res["tool"],
+                       "errors": res["errors"], "code": code})
+
+
 def _t_fix_code(ctx, inp):
     return analysis.fix_source(ctx.client, inp.get("content", ""),
                                inp.get("language", ""), inp.get("errors", ""))
@@ -246,6 +271,11 @@ TOOL_SCHEMAS = [
                       "properties": {"content": {"type": "string"},
                                      "extension": {"type": "string", "description": "e.g. py, js, c, cpp, cs"}},
                       "required": ["content", "extension"]}},
+    {"name": "check_captured_code",
+     "description": "Check the code EXACTLY as captured from the screen (reads the raw extraction; you cannot clean it up first). Returns the raw code and any real errors (e.g. a genuine IndentationError). Use THIS to find errors, not check_code.",
+     "input_schema": {"type": "object",
+                      "properties": {"extension": {"type": "string", "description": "e.g. py, js, c, cpp, cs"}},
+                      "required": ["extension"]}},
     {"name": "fix_code",
      "description": "Given code, its language, and compiler errors, return a minimally corrected version (transcription fixes only).",
      "input_schema": {"type": "object",
@@ -291,6 +321,7 @@ DISPATCH = {
     "read_capture": _t_read_capture,
     "classify": _t_classify,
     "check_code": _t_check_code,
+    "check_captured_code": _t_check_captured_code,
     "fix_code": _t_fix_code,
     "save_output": _t_save_output,
     "request_more_captures": _t_request_more_captures,

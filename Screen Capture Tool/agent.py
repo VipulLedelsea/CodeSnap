@@ -50,6 +50,18 @@ def _blocks(resp):
     return getattr(resp, "content", []) or []
 
 
+def _plain(text):
+    """Strip Markdown so terminal output is easy to read (saved files are untouched)."""
+    if not text:
+        return text
+    import re
+    t = re.sub(r"^\s*```[^\n]*$", "", text, flags=re.M)   # code-fence lines
+    t = t.replace("```", "")
+    t = re.sub(r"^\s{0,3}#{1,6}\s*", "", t, flags=re.M)     # markdown headers
+    t = t.replace("**", "").replace("__", "").replace("`", "")
+    return t
+
+
 def _short(d):
     s = str(d)
     return s if len(s) <= 60 else s[:57] + "..."
@@ -75,7 +87,7 @@ def run_agent(client, ctx, goal=None, messages=None, max_iters=MAX_ITERS, verbos
         if getattr(resp, "stop_reason", None) == "tool_use":
             for b in _blocks(resp):
                 if getattr(b, "type", None) == "text" and (b.text or "").strip():
-                    print("\n" + b.text.strip())
+                    print("\n" + _plain(b.text.strip()))
             results = []
             for b in _blocks(resp):
                 if getattr(b, "type", None) == "tool_use":
@@ -89,7 +101,7 @@ def run_agent(client, ctx, goal=None, messages=None, max_iters=MAX_ITERS, verbos
 
         final = "".join(getattr(b, "text", "") for b in _blocks(resp)
                          if getattr(b, "type", None) == "text").strip()
-        return final, messages
+        return _plain(final), messages
 
     return "(stopped: hit the iteration cap before finishing)", messages
 
@@ -103,14 +115,14 @@ Workflow:
   1. A full-screen capture is available as index 0. read_capture(0) and focus ONLY on the primary code/document content (ignore other windows, the dock, menu bar, browser).
   2. Decide: is the content complete? If it clearly continues (ends mid-statement, or shows [CUT OFF]), call next_capture with a short scroll hint — it notifies the user, waits for them to scroll, and re-captures the full screen. Then read the new index (focus on the code again). Repeat.
   3. Stop capturing once the content looks complete (a natural end, no cut-off), or when next_capture reports the capture limit / times out. Then call capturing_done to tell the user capturing is finished and to return to the terminal.
-  4. If it is CODE: call check_code on the code EXACTLY as captured (do not pre-fix). The errors it returns are the real errors to report.
+  4. If it is CODE: call check_captured_code (with the extension) — it checks the raw on-screen text and returns {code, errors}. Those errors ARE what you report; do not fix the code before checking.
   5. Present your final answer in EXACTLY this format (Markdown):
         **Language:** <language>
         **Overview:** <plain-English summary of what the code does>
         **Errors found:** <the actual errors check_code reported, e.g. an IndentationError with its line; or 'None'>
         **Code:**
         ```<ext>
-        <the code, corrected ONLY for the reported errors; never invent missing parts — leave  # [missing — recapture]  instead>
+        <the exact code returned by check_captured_code, corrected ONLY for the reported errors; never invent missing parts — leave  # [missing — recapture]  instead>
         ```
   6. In that SAME turn, also call save_output to save the result (it saves automatically and notifies the user).
 For non-code: give **Language/Type** + **Overview**, show the text, then save_output ('docx' or 'text').
