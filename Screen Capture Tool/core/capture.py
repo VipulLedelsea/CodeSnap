@@ -52,3 +52,35 @@ def next_png_path(session_dir):
     while (session_dir / f"{n:03d}.png").exists():
         n += 1
     return session_dir / f"{n:03d}.png"
+
+
+def pick_region():
+    """Run the region picker subprocess; return {top,left,width,height} or None."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    picker = Path(__file__).resolve().parent / "region_picker.py"
+    try:
+        r = subprocess.run([sys.executable, str(picker)], capture_output=True, text=True)
+    except Exception:  # noqa: BLE001
+        return None
+    out = (r.stdout or "").strip().splitlines()
+    if not out:
+        return None
+    try:
+        return json.loads(out[-1])
+    except Exception:  # noqa: BLE001
+        return None  # "CANCELLED" or junk
+
+
+def capture_region_coords(region) -> bytes:
+    """Capture a fixed screen rectangle (dict top/left/width/height) -> PNG bytes."""
+    import mss
+    from PIL import Image
+    with mss.mss() as sct:
+        raw = sct.grab(region)
+    img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()

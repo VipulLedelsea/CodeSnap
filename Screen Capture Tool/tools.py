@@ -12,6 +12,7 @@ Public surface:
 """
 
 import json
+import time
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +29,10 @@ class ToolContext:
     out_name: str = "agent_output"       # base filename for saved artifacts
     session_dir: Path = None             # live session folder (enables capture/ask-more)
     interactive: bool = False            # True in the live hotkey session
+    max_captures: int = 20               # safety cap on agent-driven captures
+    region: dict = None                  # fixed capture rectangle (owned session)
+    ready_event: object = None           # threading.Event set by the "next" hotkey
+    confirm_saves: bool = True            # False in owned/auto mode -> save without asking
 
 
 # ── wrappers (ctx, input dict) -> str ────────────────────────────────────────
@@ -76,18 +81,22 @@ def _t_fix_code(ctx, inp):
 def _t_save_output(ctx, inp):
     fmt = (inp.get("format") or "text").lower()
     content = inp.get("content", "")
-    try:
-        ans = input(f"\nSave this output (as {fmt})? [Y/n]: ").strip().lower()
-    except EOFError:
-        ans = "y"
-    if ans in ("n", "no"):
-        return "User chose NOT to save. Nothing was written."
+    if getattr(ctx, "confirm_saves", True):
+        try:
+            ans = input(f"\nSave this output (as {fmt})? [Y/n]: ").strip().lower()
+        except EOFError:
+            ans = "y"
+        if ans in ("n", "no"):
+            return "User chose NOT to save. Nothing was written."
     if fmt == "source":
         out = outputs.save_source_file(content, ctx.out_dir, ctx.out_name, inp.get("extension", "txt"))
     elif fmt == "docx":
         out = outputs.save_docx({"extracted_text": content}, ctx.out_dir, ctx.out_name)
     else:
         out = outputs.save_text(content, ctx.out_dir, ctx.out_name)
+    if not getattr(ctx, "confirm_saves", True):
+        from core.notify import notify
+        notify("Screen Capture", f"Saved {Path(out).name}")
     return f"Saved: {Path(out).resolve()}"
 
 
@@ -114,6 +123,8 @@ def _t_request_more_captures(ctx, inp):
 def _t_capture_screen(ctx, inp):
     if ctx.session_dir is None:
         return "Capture is not available in this run (offline mode)."
+    if len(ctx.images) >= ctx.max_captures:
+        return f"Capture limit ({ctx.max_captures}) reached — proceed with what you have."
     from core.capture import capture_full_png
     from core.capture import next_png_path
     out = next_png_path(ctx.session_dir)
@@ -125,6 +136,8 @@ def _t_capture_screen(ctx, inp):
 def _t_capture_region(ctx, inp):
     if ctx.session_dir is None:
         return "Capture is not available in this run (offline mode)."
+    if len(ctx.images) >= ctx.max_captures:
+        return f"Capture limit ({ctx.max_captures}) reached — proceed with what you have."
     from core.capture import capture_region_png
     data = capture_region_png()
     if data is None:
@@ -134,6 +147,82 @@ def _t_capture_region(ctx, inp):
     out.write_bytes(data)
     ctx.images.append(out)
     return f"Captured a region as index {len(ctx.images) - 1}."
+
+
+def _t_capture_next(ctx, inp):
+    """Owned-session capture: tell the user to scroll, wait, then grab the screen."""
+    if ctx.session_dir is None:
+        return "Capture is not available in this run (offline mode)."
+    if len(ctx.images) >= ctx.max_captures:
+        return f"Capture limit ({ctx.max_captures}) reached — proceed with what you have."
+    hint = inp.get("hint", "Scroll so the next section is visible.")
+    print(f"\n[agent] {hint}")
+    try:
+        input("  Scroll, then press Enter (or just Enter if nothing more to show): ")
+    except EOFError:
+        pass
+    from core.capture import capture_full_png, next_png_path
+    out = next_png_path(ctx.session_dir)
+    out.write_bytes(capture_full_png())
+    ctx.images.append(out)
+    return f"Captured the screen as index {len(ctx.images) - 1}. Read it to see the new content."
+
+
+def _t_capturing_done(ctx, inp):
+    """Signal that all needed captures are taken — notify the user to return to the terminal."""
+    from core.notify import notify
+    notify("Screen Capture", "All images captured — return to the terminal for the result.")
+    print("\n[agent] All images captured — the result is below.")
+    return "Notified the user that capturing is complete."
+
+
+def _t_await_capture(ctx, inp):
+    """Owned session: ask the user to capture (Cmd+Shift+8 region / Cmd+Shift+2 full),
+    then WAIT for the screenshot to appear and return it. The user drives the capture."""
+    if ctx.session_dir is None:
+        return "Capture is not available in this run (offline mode)."
+    if len(ctx.images) >= ctx.max_captures:
+        return f"Capture limit ({ctx.max_captures}) reached — proceed with what you have."
+    hint = inp.get("hint", "Capture the part you want.")
+    print(f"\n[agent] {hint}")
+    print("  Select a REGION with Cmd+Shift+8 (or full screen with Cmd+Shift+2). Waiting...")
+    seen = set(ctx.images)
+    deadline = time.monotonic() + 180
+    new = []
+    while time.monotonic() < deadline:
+        new = [p for p in sorted(ctx.session_dir.glob("*.png")) if p not in seen]
+        if new:
+            break
+        time.sleep(0.5)
+    if not new:
+        return "No new capture detected (timed out). Ask again, or finish with what you already have."
+    ctx.images.extend(new)
+    start = len(ctx.images) - len(new)
+    return f"Captured {len(new)} screenshot(s) at indices {start}..{len(ctx.images) - 1}. Read them."
+
+
+def _t_next_capture(ctx, inp):
+    """Owned session: notify the user to scroll, wait for the next-capture signal
+    (Cmd+Shift+7), then re-capture the full screen."""
+    if ctx.session_dir is None:
+        return "Owned-session capture is not set up."
+    if len(ctx.images) >= ctx.max_captures:
+        return f"Capture limit ({ctx.max_captures}) reached — proceed with what you have."
+    hint = inp.get("hint", "Scroll to the next part.")
+    from core.notify import notify
+    notify("Screen Capture", f"{hint} Then press Cmd+Shift+7.")
+    print(f"\n[agent] {hint}  (scroll, then press Cmd+Shift+7)")
+    if ctx.ready_event is not None:
+        ctx.ready_event.clear()
+        if not ctx.ready_event.wait(timeout=300):
+            return "Timed out waiting for Cmd+Shift+7. Ask again, or finish with what you have."
+    from core.capture import capture_full_png, next_png_path
+    out = next_png_path(ctx.session_dir)
+    out.write_bytes(capture_full_png())
+    ctx.images.append(out)
+    notify("Screen Capture", "Captured — analysing...")
+    print("  captured — analysing...")
+    return f"Captured the screen as index {len(ctx.images) - 1}. Read it."
 
 
 # ── schemas (what the model sees) ────────────────────────────────────────────
@@ -180,6 +269,21 @@ TOOL_SCHEMAS = [
     {"name": "capture_region",
      "description": "Capture a user-selected screen region right now (live session only). Adds a new screenshot.",
      "input_schema": {"type": "object", "properties": {}}},
+    {"name": "capture_next",
+     "description": "Ask the user to scroll to the next part, then capture the screen. Use to page through content longer than one screen.",
+     "input_schema": {"type": "object",
+                      "properties": {"hint": {"type": "string", "description": "What to scroll to, e.g. 'scroll down past line 40'"}}}},
+    {"name": "await_capture",
+     "description": "Ask the user to capture the region/screen they want (they press Cmd+Shift+8 or 2), then wait for and return that screenshot. Use this in an owned session to get each capture from the user.",
+     "input_schema": {"type": "object",
+                      "properties": {"hint": {"type": "string", "description": "What to capture next"}}}},
+    {"name": "next_capture",
+     "description": "Owned session only: notify the user to scroll, wait for their Cmd+Shift+7 signal, then re-capture the full screen. Use this to page through long content.",
+     "input_schema": {"type": "object",
+                      "properties": {"hint": {"type": "string", "description": "Scroll instruction shown to the user, e.g. 'scroll down past line 40'"}}}},
+    {"name": "capturing_done",
+     "description": "Owned session only: call this once you have captured everything you need, BEFORE presenting your final answer. Notifies the user that capturing is complete and to return to the terminal.",
+     "input_schema": {"type": "object", "properties": {}}},
 ]
 
 DISPATCH = {
@@ -192,6 +296,10 @@ DISPATCH = {
     "request_more_captures": _t_request_more_captures,
     "capture_screen": _t_capture_screen,
     "capture_region": _t_capture_region,
+    "capture_next": _t_capture_next,
+    "await_capture": _t_await_capture,
+    "next_capture": _t_next_capture,
+    "capturing_done": _t_capturing_done,
 }
 
 

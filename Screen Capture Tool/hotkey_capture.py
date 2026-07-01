@@ -48,7 +48,7 @@ from pathlib import Path
 from core.analysis import load_env, extract_to_cache, analyse_incremental, fix_source
 from core.validate import check_source
 from core.capture import capture_full_png, capture_region_png, next_png_path
-from agent import run_agent
+from agent import run_agent, run_session
 from tools import ToolContext
 from core.outputs import (
     safe_ext as _safe_ext,
@@ -62,6 +62,7 @@ HK_TOGGLE = "<cmd>+<shift>+1"
 HK_FULL = "<cmd>+<shift>+2"
 HK_REGION = "<cmd>+<shift>+8"
 HK_QUIT = "<cmd>+<shift>+9"
+HK_READY = "<cmd>+<shift>+7"   # owned session: "I scrolled, capture the next part"
 
 CAPTURES_ROOT = Path("captures")  # scratch PNGs (gitignored); deleted on quit
 REPORTS_ROOT = Path("reports")    # persistent .docx reports; survive quit
@@ -86,6 +87,8 @@ class App:
         self.client = client
         self.running = False                      # idle until a session is started
         self.agent_mode = False                   # set from --agent in main
+        self.auto_mode = False                    # set from --auto (agent owns the session)
+        self._ready_event = threading.Event()     # set by Cmd+Shift+7 to advance an owned session
         self.capture_enabled = False              # captures allowed (stays on during agent run)
         self.session_dir = None                   # current session's capture folder
         self.count = 0                            # captures taken this session
@@ -100,6 +103,9 @@ class App:
 
     # --- hotkey handlers: run on the listener thread; keep them light ---
     def toggle(self):
+        if self.auto_mode:
+            self._begin_owned_session()
+            return
         if not self.running:
             self._start_session()
         else:
@@ -114,7 +120,56 @@ class App:
     def quit(self):
         threading.Thread(target=self._shutdown, daemon=True).start()
 
+    def ready(self):
+        self._ready_event.set()
+
     # --- session lifecycle ---
+    def _begin_owned_session(self):
+        if self.running:
+            print("(a session is already running)")
+            return
+        from core.capture import capture_full_png
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        self.session_dir = CAPTURES_ROOT / f"session_{ts}"
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        self.sessions.append(self.session_dir)
+        self.count = 1
+        self._last_phash = None
+        self.running = True
+        self.capture_enabled = True
+        try:
+            first = self.session_dir / "001.png"
+            first.write_bytes(capture_full_png())
+        except Exception as exc:  # noqa: BLE001
+            print(f"First capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            self.running = False
+            return
+        from core.notify import notify
+        notify("Screen Capture", "Captured — analysing...")
+        print("  Captured the screen — analysing. The agent will notify you to scroll "
+              "(press Cmd+Shift+7), and tell you when to return to the terminal. Cmd+Shift+9 to quit.")
+        threading.Thread(target=self._run_owned_session, args=(self.session_dir, [first]), daemon=True).start()
+
+    def _run_owned_session(self, session_dir, first_imgs):
+        ts = session_dir.name.replace("session_", "")
+        ctx = ToolContext(
+            client=self.client, images=list(first_imgs),
+            cache_dir=session_dir / ".cache", out_dir=REPORTS_ROOT,
+            out_name=f"report_{ts}", session_dir=session_dir, interactive=True,
+            ready_event=self._ready_event, confirm_saves=False,
+        )
+        try:
+            audit = []
+            final, _ = run_session(self.client, ctx, audit=audit)
+            print(f"\n{'=' * 60}\n{final}\n{'=' * 60}")
+            print(f"(agent session used {len(audit)} tool step(s))")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Agent session failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        finally:
+            self.running = False
+            self.capture_enabled = False
+            print("\n[idle] Cmd+Shift+1 for a new session, Cmd+Shift+9 to quit.")
+
     def _start_session(self):
         ts = time.strftime("%Y%m%d_%H%M%S")
         self.session_dir = CAPTURES_ROOT / f"session_{ts}"
@@ -351,8 +406,14 @@ class App:
 
 def main() -> int:
     import argparse
+    try:
+        sys.stdout.reconfigure(line_buffering=True)  # ensure prints show live, not buffered
+    except Exception:
+        pass
     ap = argparse.ArgumentParser()
-    ap.add_argument("--agent", action="store_true", help="Use the agent (not the fixed pipeline) at stop.")
+    ap.add_argument("--classic", action="store_true", help="Old fixed pipeline (you capture; it analyses at stop).")
+    ap.add_argument("--agent", action="store_true", help="Agent analyses at stop (you still capture manually).")
+    ap.add_argument("--auto", action="store_true", help="(default) Agent-owned session: it captures and pages itself.")
     args = ap.parse_args()
     load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -367,15 +428,23 @@ def main() -> int:
         return 1
 
     app = App(anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]))
-    app.agent_mode = args.agent
+    if args.classic:
+        app.agent_mode = app.auto_mode = False
+        mode = "CLASSIC (fixed pipeline)"
+    elif args.agent:
+        app.agent_mode, app.auto_mode = True, False
+        mode = "AGENT (analyses at stop)"
+    else:  # default -> owned agent session
+        app.agent_mode, app.auto_mode = False, True
+        mode = "AUTO-AGENT (owned session)"
 
     print(
-        "Screen Capture Tool - hotkey mode" + (" [AGENT]" if args.agent else "") + "\n"
-        "  Cmd+Shift+1  start / stop session\n"
-        "  Cmd+Shift+2  capture full screen\n"
-        "  Cmd+Shift+8  capture region\n"
-        "  Cmd+Shift+9  quit  (analyses a pending session, deletes this run's folders)\n"
-        "[idle] Press Cmd+Shift+1 to start a session."
+        f"Screen Capture Tool — {mode}\n"
+        "  Cmd+Shift+1  start a session\n"
+        "  Cmd+Shift+7  next capture (after you scroll)   [owned session]\n"
+        "  Cmd+Shift+2 / 8  capture full screen / region  [manual]\n"
+        "  Cmd+Shift+9  quit\n"
+        "[idle] Press Cmd+Shift+1 to start."
     )
 
     app.listener = keyboard.GlobalHotKeys({
@@ -383,6 +452,7 @@ def main() -> int:
         HK_FULL: app.on_full,
         HK_REGION: app.on_region,
         HK_QUIT: app.quit,
+        HK_READY: app.ready,
     })
     app.listener.start()
     try:

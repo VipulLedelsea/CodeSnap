@@ -55,7 +55,7 @@ def _short(d):
     return s if len(s) <= 60 else s[:57] + "..."
 
 
-def run_agent(client, ctx, goal=None, messages=None, max_iters=MAX_ITERS, verbose=True, audit=None):
+def run_agent(client, ctx, goal=None, messages=None, max_iters=MAX_ITERS, verbose=True, audit=None, system=SYSTEM_PROMPT):
     """Drive the tool-use loop. Continues `messages` if given (so a conversation
     can span turns). Returns (final_text, messages)."""
     if messages is None:
@@ -68,7 +68,7 @@ def run_agent(client, ctx, goal=None, messages=None, max_iters=MAX_ITERS, verbos
     for _ in range(max_iters):
         resp = client.messages.create(
             model=MODEL, max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT, tools=TOOL_SCHEMAS, messages=messages,
+            system=system, tools=TOOL_SCHEMAS, messages=messages,
         )
         messages.append({"role": "assistant", "content": _blocks(resp)})
 
@@ -92,6 +92,39 @@ def run_agent(client, ctx, goal=None, messages=None, max_iters=MAX_ITERS, verbos
         return final, messages
 
     return "(stopped: hit the iteration cap before finishing)", messages
+
+
+SESSION_SYSTEM_PROMPT = """
+You OWN this capture session. You decide when to capture, when to ask the user to scroll, and when you have the complete content. You drive — the user only scrolls when you ask and approves saving.
+
+Core rule: NEVER invent, complete, or guess content. Transcribe and report only what is actually captured.
+
+Workflow:
+  1. A full-screen capture is available as index 0. read_capture(0) and focus ONLY on the primary code/document content (ignore other windows, the dock, menu bar, browser).
+  2. Decide: is the content complete? If it clearly continues (ends mid-statement, or shows [CUT OFF]), call next_capture with a short scroll hint — it notifies the user, waits for them to scroll, and re-captures the full screen. Then read the new index (focus on the code again). Repeat.
+  3. Stop capturing once the content looks complete (a natural end, no cut-off), or when next_capture reports the capture limit / times out. Then call capturing_done to tell the user capturing is finished and to return to the terminal.
+  4. If it is CODE: call check_code on the code EXACTLY as captured (do not pre-fix). The errors it returns are the real errors to report.
+  5. Present your final answer in EXACTLY this format (Markdown):
+        **Language:** <language>
+        **Overview:** <plain-English summary of what the code does>
+        **Errors found:** <the actual errors check_code reported, e.g. an IndentationError with its line; or 'None'>
+        **Code:**
+        ```<ext>
+        <the code, corrected ONLY for the reported errors; never invent missing parts — leave  # [missing — recapture]  instead>
+        ```
+  6. In that SAME turn, also call save_output to save the result (it saves automatically and notifies the user).
+For non-code: give **Language/Type** + **Overview**, show the text, then save_output ('docx' or 'text').
+Never execute captured code (check_code only compiles/parses). Do not re-read a screenshot you already read.
+"""
+
+
+def run_session(client, ctx, max_iters=MAX_ITERS, verbose=True, audit=None):
+    """Agent-owned session: the agent captures, pages through, and finishes itself."""
+    goal = ("Begin the session. A full-screen capture is available as index 0 — focus on the main code/document "
+            "content. Read it, then use next_capture (notifies the user to scroll, re-captures the screen) "
+            "until you have the complete content, then produce the verified output.")
+    return run_agent(client, ctx, goal=goal, max_iters=max_iters, verbose=verbose,
+                     audit=audit, system=SESSION_SYSTEM_PROMPT)
 
 
 def converse(client, ctx, goal, verbose=True):
