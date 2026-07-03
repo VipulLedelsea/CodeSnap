@@ -33,7 +33,7 @@ Workflow:
   3. If it is CODE: call check_code on the code EXACTLY as captured (do not pre-fix it). The errors it returns are the REAL errors in the captured code — these are what you report.
   4. Present your final answer in EXACTLY this format (Markdown):
         **Language:** <language>
-        **Overview:** <plain-English summary of what the code does>
+        **Overview:** <plain-English summary of what the content does, with INLINE source citations woven into the sentences — after each part you describe, note the screenshot it came from in parentheses. Example: "This app implements a retrieval-augmented (RAG) system with a main pipeline (Screenshot 1), then a hybrid_retrieval method combining dense and BM25 results (Screenshot 2)...">
         **Errors found:** <the actual errors check_code reported on the as-captured code, e.g. an IndentationError with its line; or 'None' only if it genuinely passed. List blank/cut-off captures here too.>
         **Code:**
         ```<ext>
@@ -41,7 +41,7 @@ Workflow:
         ```
   5. In that SAME turn, also call save_output (format 'source', with the extension and the code you displayed) to offer saving — the user will be asked to confirm. Never save before presenting.
 
-For non-code content: give **Language/Type** and **Overview**, show the text, then call save_output ('docx' for documents, else 'text').
+For non-code content: give **Language/Type** and **Overview** (with the same inline (Screenshot N) citations), show the text, then call save_output ('docx' for documents, else 'text').
 Never execute the captured code (check_code only compiles/parses). Do not re-read a screenshot you already read.
 """
 
@@ -118,14 +118,14 @@ Workflow:
   4. If it is CODE: call check_captured_code (with the extension) — it checks the raw on-screen text and returns {code, errors}. Those errors ARE what you report; do not fix the code before checking.
   5. Present your final answer in EXACTLY this format (Markdown):
         **Language:** <language>
-        **Overview:** <plain-English summary of what the code does>
+        **Overview:** <plain-English summary of what the content does, with INLINE source citations woven into the sentences — after each part you describe, note the screenshot it came from in parentheses, e.g. "...a main pipeline (Screenshot 1), then a hybrid_retrieval method (Screenshot 2)...">
         **Errors found:** <the actual errors check_code reported, e.g. an IndentationError with its line; or 'None'>
         **Code:**
         ```<ext>
         <the exact code returned by check_captured_code, corrected ONLY for the reported errors; never invent missing parts — leave  # [missing — recapture]  instead>
         ```
   6. In that SAME turn, also call save_output to save the result (it saves automatically and notifies the user).
-For non-code: give **Language/Type** + **Overview**, show the text, then save_output ('docx' or 'text').
+For non-code: give **Language/Type** + **Overview** (with inline (Screenshot N) citations), show the text, then save_output ('docx' or 'text').
 Never execute captured code (check_code only compiles/parses). Do not re-read a screenshot you already read.
 """
 

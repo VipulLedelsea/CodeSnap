@@ -21,6 +21,9 @@ import time
 from pathlib import Path
 
 MODEL = "claude-sonnet-4-6"
+# Per-image extraction is an OCR-like task — use a cheaper/faster model to cut cost.
+# Reasoning steps (classify, fix) keep MODEL. Change if this model isn't available.
+EXTRACT_MODEL = "claude-haiku-4-5-20251001"
 
 # Strict JSON response keeps explanation and extracted text cleanly separated.
 SYSTEM_PROMPT = (
@@ -196,7 +199,7 @@ def extract_one(client, path: Path) -> str:
     """Send ONE image to the API and return its visible text as Markdown."""
     b64 = base64.standard_b64encode(path.read_bytes()).decode()
     msg = client.messages.create(
-        model=MODEL,
+        model=EXTRACT_MODEL,
         max_tokens=4096,
         system=EXTRACT_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": [

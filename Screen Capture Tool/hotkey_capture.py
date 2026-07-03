@@ -410,6 +410,7 @@ def main() -> int:
         sys.stdout.reconfigure(line_buffering=True)  # ensure prints show live, not buffered
     except Exception:
         pass
+    print("Starting Screen Capture Tool — loading dependencies (a few seconds)...", flush=True)
     ap = argparse.ArgumentParser()
     ap.add_argument("--classic", action="store_true", help="Old fixed pipeline (you capture; it analyses at stop).")
     ap.add_argument("--agent", action="store_true", help="Agent analyses at stop (you still capture manually).")
