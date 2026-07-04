@@ -39,6 +39,7 @@ Workflow:
         ```<ext>
         <the code — corrected ONLY for the specific errors you reported (e.g. fix the bad indent). Do NOT change anything else, and do NOT invent content for missing/cut-off parts; leave a clear  # [missing — recapture]  marker instead.>
         ```
+        **Tech-stack review:** <Is this code current for its language/frameworks, or does it use obsolete or deprecated patterns, APIs, or libraries? State clearly whether it's up to date, then give concrete upgrade suggestions — newer idioms/APIs, better practices, and updated dependencies.>
   5. In that SAME turn, also call save_output (format 'source', with the extension and the code you displayed) to offer saving — the user will be asked to confirm. Never save before presenting.
 
 For non-code content: give **Language/Type** and **Overview** (with the same inline (Screenshot N) citations), show the text, then call save_output ('docx' for documents, else 'text').
@@ -124,6 +125,7 @@ Workflow:
         ```<ext>
         <the exact code returned by check_captured_code, corrected ONLY for the reported errors; never invent missing parts — leave  # [missing — recapture]  instead>
         ```
+        **Tech-stack review:** <Is this code current for its language/frameworks, or does it use obsolete or deprecated patterns, APIs, or libraries? State clearly whether it's up to date, then give concrete upgrade suggestions — newer idioms/APIs, better practices, and updated dependencies.>
   6. In that SAME turn, also call save_output to save the result (it saves automatically and notifies the user).
 For non-code: give **Language/Type** + **Overview** (with inline (Screenshot N) citations), show the text, then save_output ('docx' or 'text').
 Never execute captured code (check_code only compiles/parses). Do not re-read a screenshot you already read.

@@ -83,8 +83,8 @@ def _phash(data: bytes):
 class App:
     """Run state + API client + background reader pool."""
 
-    def __init__(self, client):
-        self.client = client
+    def __init__(self, client=None):
+        self.client = client   # created lazily on first session (fast startup)
         self.running = False                      # idle until a session is started
         self.agent_mode = False                   # set from --agent in main
         self.auto_mode = False                    # set from --auto (agent owns the session)
@@ -99,6 +99,7 @@ class App:
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=BG_WORKERS)
         self._futures = []                         # pending background reads
         self._fut_lock = threading.Lock()
+        self._client_lock = threading.Lock()      # guards lazy client creation
         self.listener = None                       # set in main()
 
     # --- hotkey handlers: run on the listener thread; keep them light ---
@@ -123,11 +124,22 @@ class App:
     def ready(self):
         self._ready_event.set()
 
+    def _ensure_client(self):
+        """Import anthropic + build the client once (warmed in the background at startup)."""
+        if self.client is None:
+            with self._client_lock:
+                if self.client is None:
+                    print("  (starting session — loading model, one moment...)", flush=True)
+                    import anthropic
+                    self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        return self.client
+
     # --- session lifecycle ---
     def _begin_owned_session(self):
         if self.running:
             print("(a session is already running)")
             return
+        self._ensure_client()   # load the model client now so the rest of the session is fast
         from core.capture import capture_full_png
         ts = time.strftime("%Y%m%d_%H%M%S")
         self.session_dir = CAPTURES_ROOT / f"session_{ts}"
@@ -151,6 +163,7 @@ class App:
         threading.Thread(target=self._run_owned_session, args=(self.session_dir, [first]), daemon=True).start()
 
     def _run_owned_session(self, session_dir, first_imgs):
+        self._ensure_client()
         ts = session_dir.name.replace("session_", "")
         ctx = ToolContext(
             client=self.client, images=list(first_imgs),
@@ -158,6 +171,10 @@ class App:
             out_name=f"report_{ts}", session_dir=session_dir, interactive=True,
             ready_event=self._ready_event, confirm_saves=False,
         )
+        # warm the first capture's extraction in the background (instant first read)
+        import tools as _tools
+        for _img in first_imgs:
+            threading.Thread(target=_tools._bg_extract, args=(ctx, _img), daemon=True).start()
         try:
             audit = []
             final, _ = run_session(self.client, ctx, audit=audit)
@@ -257,6 +274,7 @@ class App:
             concurrent.futures.wait(futs)
 
     def _finish(self, session_dir):
+        self._ensure_client()
         self._wait_for_reads()
         with self._analysis_lock:
             imgs = sorted(session_dir.glob("*.png")) if session_dir else []
@@ -410,7 +428,7 @@ def main() -> int:
         sys.stdout.reconfigure(line_buffering=True)  # ensure prints show live, not buffered
     except Exception:
         pass
-    print("Starting Screen Capture Tool — loading dependencies (a few seconds)...", flush=True)
+    print("Starting Screen Capture Tool — loading (a few seconds)...", flush=True)
     ap = argparse.ArgumentParser()
     ap.add_argument("--classic", action="store_true", help="Old fixed pipeline (you capture; it analyses at stop).")
     ap.add_argument("--agent", action="store_true", help="Agent analyses at stop (you still capture manually).")
@@ -428,7 +446,7 @@ def main() -> int:
         print(f"Missing dependency: {exc}.\nRun: pip install -r requirements.txt", file=sys.stderr)
         return 1
 
-    app = App(anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]))
+    app = App(anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]))  # loaded at boot
     if args.classic:
         app.agent_mode = app.auto_mode = False
         mode = "CLASSIC (fixed pipeline)"

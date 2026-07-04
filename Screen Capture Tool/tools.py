@@ -35,6 +35,17 @@ class ToolContext:
     confirm_saves: bool = True            # False in owned/auto mode -> save without asking
 
 
+def _bg_extract(ctx, path):
+    """Warm the extraction cache for one image in the background so a later
+    read_capture is an instant cache hit (keeps subsequent captures snappy)."""
+    try:
+        if ctx.cache_dir is not None and ctx.client is not None:
+            from core.analysis import extract_to_cache
+            extract_to_cache(ctx.client, path, ctx.cache_dir)
+    except Exception:  # noqa: BLE001 - best effort
+        pass
+
+
 # ── wrappers (ctx, input dict) -> str ────────────────────────────────────────
 
 def _t_list_captures(ctx, _inp):
@@ -247,6 +258,8 @@ def _t_next_capture(ctx, inp):
     ctx.images.append(out)
     notify("Screen Capture", "Captured — analysing...")
     print("  captured — analysing...")
+    import threading
+    threading.Thread(target=_bg_extract, args=(ctx, out), daemon=True).start()
     return f"Captured the screen as index {len(ctx.images) - 1}. Read it."
 
 
