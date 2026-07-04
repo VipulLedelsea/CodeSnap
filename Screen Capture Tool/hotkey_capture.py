@@ -140,6 +140,9 @@ class App:
             print("(a session is already running)")
             return
         self._ensure_client()   # load the model client now so the rest of the session is fast
+        from core import status
+        status.clear()
+        status.publish("Session started", "start")
         from core.capture import capture_full_png
         ts = time.strftime("%Y%m%d_%H%M%S")
         self.session_dir = CAPTURES_ROOT / f"session_{ts}"
@@ -398,6 +401,11 @@ class App:
     # --- shutdown: analyse a pending session, delete this run's folders, exit ---
     def _shutdown(self):
         print("\n[quit] wrapping up...")
+        try:
+            from core import status
+            status.publish("Session ended", "end")
+        except Exception:
+            pass
         if self.running:
             self.running = False
             self._finish(self.session_dir)

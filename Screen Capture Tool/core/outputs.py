@@ -51,3 +51,29 @@ def save_docx(result, dest_dir, name: str) -> Path:
     out = dest_dir / f"{name}.docx"
     build_docx(result).save(out)
     return out
+
+
+def save_report_bundle(report: dict, dest_dir, name: str):
+    """Write a code file + a report_<name>.json bundle (language, overview, errors,
+    tech_stack, code). Returns the code file Path. Used so the web UI can show the
+    full report, not just the raw code."""
+    import json
+    from datetime import datetime
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    ext = safe_ext(report.get("extension", "txt"))
+    code = strip_code_fences(report.get("code", ""))
+    code_path = dest_dir / f"{name}.{ext}"
+    code_path.write_text(code)
+    meta = {
+        "language": report.get("language", ""),
+        "overview": report.get("overview", ""),
+        "errors": report.get("errors", ""),
+        "tech_stack": report.get("tech_stack", ""),
+        "extension": ext,
+        "code": code,
+        "code_file": code_path.name,
+        "created": datetime.now().isoformat(timespec="seconds"),
+    }
+    (dest_dir / f"{name}.json").write_text(json.dumps(meta, indent=2))
+    return code_path

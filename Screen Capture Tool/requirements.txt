@@ -19,3 +19,7 @@ imagehash
 
 # Testing
 pytest
+
+# Web UI (Milestone 6)
+fastapi
+uvicorn

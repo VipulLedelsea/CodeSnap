@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ledelsea — Screen Capture</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="mark">l</span><span class="name">ledelsea</span></div>
+      <div class="nav-label">Modules</div>
+      <a class="nav-item active"><span class="l">Screen capture</span></a>
+      <div class="nav-item disabled"><span class="l">Documents</span><span class="pill-soon">soon</span></div>
+      <div class="nav-item disabled"><span class="l">Data extract</span><span class="pill-soon">soon</span></div>
+      <div class="nav-add">＋ Add module</div>
+      <div class="spacer"></div>
+      <div class="footer-item">Settings</div>
+      <div class="footer-item"><span class="avatar">V</span><span>Vipul</span></div>
+    </aside>
+
+    <main class="main">
+      <h1>Screen capture</h1>
+      <p class="sub">Pull code or text off your screen and get a clean, verified result — the agent reads, checks, and writes it for you.</p>
+
+      <div class="card">
+        <div class="start-row">
+          <div>
+            <p style="font-size:15px;font-weight:500;margin:0 0 4px">Start a session</p>
+            <p style="font-size:13px;color:var(--muted);margin:0">Capture, scroll for more, and it builds the report.</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="status" id="status">Ready</span>
+            <button class="btn-primary" id="startBtn">Start capture</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="status-feed" id="statusFeed" style="display:none"></div>
+
+      <div class="steps">
+        <span class="step">1 · Capture</span>
+        <span class="step">2 · Read &amp; check</span>
+        <span class="step">3 · Report</span>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <p class="section-label">Recent results</p>
+        <button class="btn-primary" id="refreshBtn" style="background:transparent;color:var(--muted);border:0.5px solid var(--line);padding:6px 12px">Refresh</button>
+      </div>
+      <div id="reports"></div>
+    </main>
+  </div>
+  <div class="toast" id="toast"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

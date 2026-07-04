@@ -125,7 +125,11 @@ def _t_save_output(ctx, inp):
         if ans in ("n", "no"):
             return "User chose NOT to save. Nothing was written."
     if fmt == "source":
-        out = outputs.save_source_file(content, ctx.out_dir, ctx.out_name, inp.get("extension", "txt"))
+        out = outputs.save_report_bundle({
+            "code": content, "extension": inp.get("extension", "txt"),
+            "language": inp.get("language", ""), "overview": inp.get("overview", ""),
+            "errors": inp.get("errors", ""), "tech_stack": inp.get("tech_stack", ""),
+        }, ctx.out_dir, ctx.out_name)
     elif fmt == "docx":
         out = outputs.save_docx({"extracted_text": content}, ctx.out_dir, ctx.out_name)
     else:
@@ -296,11 +300,15 @@ TOOL_SCHEMAS = [
                                      "errors": {"type": "string"}},
                       "required": ["content", "errors"]}},
     {"name": "save_output",
-     "description": "Save the final result. format: 'source' (a code file, needs extension), 'docx' (a Word doc), or 'text'.",
+     "description": "Save the final result. format: 'source' (a code file, needs extension), 'docx' (a Word doc), or 'text'. For code, also pass language/overview/errors/tech_stack so the report is saved with the code (shown in the web UI).",
      "input_schema": {"type": "object",
                       "properties": {"content": {"type": "string"},
                                      "format": {"type": "string", "enum": ["source", "docx", "text"]},
-                                     "extension": {"type": "string"}},
+                                     "extension": {"type": "string"},
+                                     "language": {"type": "string"},
+                                     "overview": {"type": "string", "description": "the Overview text (with inline (Screenshot N) citations)"},
+                                     "errors": {"type": "string", "description": "the Errors found text"},
+                                     "tech_stack": {"type": "string", "description": "the Tech-stack review text"}},
                       "required": ["content", "format"]}},
     {"name": "request_more_captures",
      "description": "Ask the user to capture more screenshots when the current ones look incomplete or cut off.",

@@ -4,7 +4,12 @@ import subprocess
 
 
 def notify(title: str, message: str) -> None:
-    """Show a macOS notification. Best-effort — never raises."""
+    """Show a macOS notification + publish to the session status stream. Never raises."""
+    try:
+        from core import status
+        status.publish(message)
+    except Exception:  # noqa: BLE001
+        pass
     msg = (message or "").replace('"', "'")
     ttl = (title or "").replace('"', "'")
     try:
