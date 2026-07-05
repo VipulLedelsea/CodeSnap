@@ -75,6 +75,38 @@ $("refreshBtn").addEventListener("click", loadReports);
 let sessionRunning = false;
 let lastEventCount = 0;
 
+const FLOW = [
+  ["start","Start"],["capture","Capture"],["read","Read"],["classify","Classify"],
+  ["check","Check"],["fix","Fix"],["save","Save"],["done","Done"]
+];
+
+function fmtDur(sec) {
+  if (sec < 1) return "<1s";
+  if (sec < 60) return Math.round(sec) + "s";
+  const m = Math.floor(sec / 60);
+  return m + "m " + Math.round(sec % 60) + "s";
+}
+
+let lastFlowEvents = [];
+
+function renderFlow(events) {
+  lastFlowEvents = events;
+  const box = $("devflow");
+  const nodes = [];
+  if (events.some(e => e.kind === "start")) nodes.push({ label: "Start", stage: "start" });
+  for (const e of events) { if (e.kind === "tool") nodes.push({ label: e.msg, stage: e.stage || "tool" }); }
+  const done = events.some(e => e.kind === "done" || e.kind === "end");
+  if (done) nodes.push({ label: "Done", stage: "done" });
+  if (!nodes.length) { box.innerHTML = ""; return; }
+  const activeIdx = done ? -1 : nodes.length - 1;
+  box.innerHTML = nodes.map((n, i) => {
+    let cls = "node n-" + (n.stage || "tool");
+    if (i === activeIdx && sessionRunning) cls += " active";
+    const arrow = i < nodes.length - 1 ? '<span class="arrow">\u2192</span>' : "";
+    return `<span class="${cls}">${escapeHtml(n.label)}</span>${arrow}`;
+  }).join("");
+}
+
 function renderStatus(events) {
   const box = $("statusFeed");
   if (!events.length) { box.innerHTML = ""; return; }
@@ -88,6 +120,7 @@ async function pollStatus() {
     const r = await fetch("/api/session/status");
     const d = await r.json();
     renderStatus(d.events || []);
+    renderFlow(d.events || []);
     setRunning(d.running);
     if ((d.events || []).length !== lastEventCount) {
       lastEventCount = (d.events || []).length;
@@ -103,6 +136,7 @@ function setRunning(running) {
   b.textContent = running ? "Stop session" : "Start capture";
   b.classList.toggle("stop", running);
   $("statusFeed").style.display = running ? "block" : "none";
+  $("devflow").style.display = running ? "flex" : "none";
 }
 
 $("startBtn").addEventListener("click", async () => {
@@ -121,3 +155,4 @@ $("refreshBtn").addEventListener("click", loadReports);
 loadReports();
 setInterval(pollStatus, 1500);
 pollStatus();
+window.addEventListener("resize", () => { if (sessionRunning) renderFlow(lastFlowEvents); });

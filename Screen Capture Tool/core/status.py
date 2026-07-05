@@ -12,10 +12,13 @@ from pathlib import Path
 STATUS_FILE = Path(tempfile.gettempdir()) / "ledelsea_session_status.jsonl"
 
 
-def publish(msg: str, kind: str = "info") -> None:
+def publish(msg: str, kind: str = "info", stage: str = None) -> None:
+    rec = {"t": time.time(), "kind": kind, "msg": msg}
+    if stage:
+        rec["stage"] = stage
     try:
         with open(STATUS_FILE, "a") as f:
-            f.write(json.dumps({"t": time.time(), "kind": kind, "msg": msg}) + "\n")
+            f.write(json.dumps(rec) + "\n")
     except Exception:  # noqa: BLE001
         pass
 

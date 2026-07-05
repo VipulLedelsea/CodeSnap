@@ -47,6 +47,34 @@ Never execute the captured code (check_code only compiles/parses). Do not re-rea
 """
 
 
+_STAGE = {
+    "list_captures": "start", "read_capture": "read",
+    "await_capture": "capture", "next_capture": "capture",
+    "capture_screen": "capture", "capture_region": "capture",
+    "request_more_captures": "capture", "classify": "classify",
+    "check_code": "check", "check_captured_code": "check",
+    "fix_code": "fix", "save_output": "save", "capturing_done": "done",
+}
+
+
+def _publish_stage(name, tool_input):
+    try:
+        from core import status
+        d = tool_input or {}
+        label = name
+        if name == 'read_capture' and 'index' in d:
+            label = f"read_capture #{d['index']}"
+        elif name in ('check_code', 'check_captured_code') and d.get('extension'):
+            label = f"{name} ({d['extension']})"
+        elif name == 'save_output':
+            label = f"save_output ({d.get('format', '')})"
+        elif name == 'fix_code' and d.get('language'):
+            label = f"fix_code ({d['language']})"
+        status.publish(label, kind='tool', stage=_STAGE.get(name))
+    except Exception:
+        pass
+
+
 def _blocks(resp):
     return getattr(resp, "content", []) or []
 
@@ -93,6 +121,7 @@ def run_agent(client, ctx, goal=None, messages=None, max_iters=MAX_ITERS, verbos
             for b in _blocks(resp):
                 if getattr(b, "type", None) == "tool_use":
                     audit.append(b.name)
+                    _publish_stage(b.name, b.input)
                     if verbose:
                         print(f"  → {b.name}({_short(b.input)})")
                     out = run_tool(b.name, ctx, b.input)
@@ -102,6 +131,11 @@ def run_agent(client, ctx, goal=None, messages=None, max_iters=MAX_ITERS, verbos
 
         final = "".join(getattr(b, "text", "") for b in _blocks(resp)
                          if getattr(b, "type", None) == "text").strip()
+        try:
+            from core import status
+            status.publish("Report ready", kind="done", stage="done")
+        except Exception:
+            pass
         return _plain(final), messages
 
     return "(stopped: hit the iteration cap before finishing)", messages
