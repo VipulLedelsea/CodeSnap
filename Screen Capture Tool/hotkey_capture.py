@@ -69,6 +69,11 @@ REPORTS_ROOT = Path("reports")    # persistent .docx reports; survive quit
 BG_WORKERS = 3                    # how many images to read concurrently
 DUP_THRESHOLD = 3                 # perceptual-hash distance treated as a near-duplicate
 MAX_FIX_ITERS = 3                 # max auto-fix passes when a code check fails
+BURST_INTERVAL = 0.8              # seconds between burst captures
+BURST_IDLE_STOP = 3.0             # stop after this many seconds with no new frame
+BURST_KEEP_DIST = 6              # phash distance above which a frame counts as 'changed'
+BURST_MAX_FRAMES = 40            # safety cap on burst frames
+BURST_MAX_WAIT = 20              # stop if scrolling never starts (still 1 frame)
 
 #Hashing of images for near-duplicate detection. If difference is below a threshold, the capture is skipped.
 def _phash(data: bytes):
@@ -83,11 +88,12 @@ def _phash(data: bytes):
 class App:
     """Run state + API client + background reader pool."""
 
-    def __init__(self, client=None):
-        self.client = client   # created lazily on first session (fast startup)
+    def __init__(self, client):
+        self.client = client
         self.running = False                      # idle until a session is started
         self.agent_mode = False                   # set from --agent in main
         self.auto_mode = False                    # set from --auto (agent owns the session)
+        self.burst_mode = False                   # set from --burst (auto-capture while scrolling)
         self._ready_event = threading.Event()     # set by Cmd+Shift+7 to advance an owned session
         self.capture_enabled = False              # captures allowed (stays on during agent run)
         self.session_dir = None                   # current session's capture folder
@@ -99,11 +105,13 @@ class App:
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=BG_WORKERS)
         self._futures = []                         # pending background reads
         self._fut_lock = threading.Lock()
-        self._client_lock = threading.Lock()      # guards lazy client creation
         self.listener = None                       # set in main()
 
     # --- hotkey handlers: run on the listener thread; keep them light ---
     def toggle(self):
+        if self.burst_mode:
+            self._begin_burst_session()
+            return
         if self.auto_mode:
             self._begin_owned_session()
             return
@@ -125,24 +133,104 @@ class App:
         self._ready_event.set()
 
     def _ensure_client(self):
-        """Import anthropic + build the client once (warmed in the background at startup)."""
+        """Client is normally built at boot; load lazily if it isn't (safe no-op otherwise)."""
         if self.client is None:
-            with self._client_lock:
-                if self.client is None:
-                    print("  (starting session — loading model, one moment...)", flush=True)
-                    import anthropic
-                    self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+            import anthropic
+            self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         return self.client
+
+    # --- burst mode: auto-capture while the user scrolls; phash drops near-dups ---
+    def _begin_burst_session(self):
+        if self.running:
+            print("(a session is already running)")
+            return
+        self._ensure_client()
+        from core import status
+        status.clear()
+        status.publish("Burst capture — scroll through the file steadily", "start")
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        self.session_dir = CAPTURES_ROOT / f"session_{ts}"
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        self.sessions.append(self.session_dir)
+        self.running = True
+        self.capture_enabled = True
+        print("[burst] Scroll through the file steadily. It captures automatically and "
+              "stops when you stop scrolling. Cmd+Shift+9 to quit.")
+        threading.Thread(target=self._burst_loop, args=(self.session_dir,), daemon=True).start()
+
+    def _safe_extract(self, path, cache_dir):
+        try:
+            from core.analysis import extract_to_cache
+            extract_to_cache(self.client, path, cache_dir)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _burst_loop(self, session_dir):
+        from core.capture import capture_full_png, next_png_path
+        from core import status
+        cache = session_dir / ".cache"
+        last_hash = None
+        kept = 0
+        last_change = time.monotonic()
+        started = time.monotonic()
+        while self.running and kept < BURST_MAX_FRAMES:
+            try:
+                data = capture_full_png()
+            except Exception as exc:  # noqa: BLE001
+                print(f"Capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+                break
+            h = _phash(data)
+            changed = (last_hash is None) or (h is None) or ((h - last_hash) >= BURST_KEEP_DIST)
+            if changed:
+                out = next_png_path(session_dir)
+                out.write_bytes(data)
+                kept += 1
+                last_hash = h
+                last_change = time.monotonic()
+                status.publish(f"Captured frame {kept}")
+                print(f"  burst frame {kept}: {out.name}")
+                self._pool.submit(self._safe_extract, out, cache)
+            idle = time.monotonic() - last_change
+            if kept >= 2 and idle >= BURST_IDLE_STOP:
+                break
+            if kept < 2 and (time.monotonic() - started) >= BURST_MAX_WAIT:
+                break
+            time.sleep(BURST_INTERVAL)
+        status.publish(f"Scrolling stopped — {kept} unique frame(s), analysing", "info")
+        print(f"[burst] done capturing: {kept} unique frame(s). Analysing...")
+        self._analyse_burst(session_dir)
+
+    def _analyse_burst(self, session_dir):
+        imgs = sorted(session_dir.glob("*.png"))
+        if not imgs:
+            print("[burst] no frames captured.")
+            self.running = False
+            self.capture_enabled = False
+            return
+        ts = session_dir.name.replace("session_", "")
+        ctx = ToolContext(
+            client=self.client, images=list(imgs),
+            cache_dir=session_dir / ".cache", out_dir=REPORTS_ROOT,
+            out_name=f"report_{ts}", session_dir=session_dir, interactive=False, confirm_saves=False,
+        )
+        try:
+            audit = []
+            goal = (f"There are {len(imgs)} screenshots of one scrolled document/code, in order "
+                    f"(consecutive shots overlap). Produce the best verified output.")
+            final, _ = run_agent(self.client, ctx, goal=goal, verbose=True, audit=audit)
+            print(f"\n{'=' * 60}\n{final}\n{'=' * 60}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        finally:
+            self.running = False
+            self.capture_enabled = False
+            print("\n[idle] Cmd+Shift+1 for a new burst, Cmd+Shift+9 to quit.")
 
     # --- session lifecycle ---
     def _begin_owned_session(self):
         if self.running:
             print("(a session is already running)")
             return
-        self._ensure_client()   # load the model client now so the rest of the session is fast
-        from core import status
-        status.clear()
-        status.publish("Session started", "start")
         from core.capture import capture_full_png
         ts = time.strftime("%Y%m%d_%H%M%S")
         self.session_dir = CAPTURES_ROOT / f"session_{ts}"
@@ -166,7 +254,6 @@ class App:
         threading.Thread(target=self._run_owned_session, args=(self.session_dir, [first]), daemon=True).start()
 
     def _run_owned_session(self, session_dir, first_imgs):
-        self._ensure_client()
         ts = session_dir.name.replace("session_", "")
         ctx = ToolContext(
             client=self.client, images=list(first_imgs),
@@ -174,10 +261,6 @@ class App:
             out_name=f"report_{ts}", session_dir=session_dir, interactive=True,
             ready_event=self._ready_event, confirm_saves=False,
         )
-        # warm the first capture's extraction in the background (instant first read)
-        import tools as _tools
-        for _img in first_imgs:
-            threading.Thread(target=_tools._bg_extract, args=(ctx, _img), daemon=True).start()
         try:
             audit = []
             final, _ = run_session(self.client, ctx, audit=audit)
@@ -277,7 +360,6 @@ class App:
             concurrent.futures.wait(futs)
 
     def _finish(self, session_dir):
-        self._ensure_client()
         self._wait_for_reads()
         with self._analysis_lock:
             imgs = sorted(session_dir.glob("*.png")) if session_dir else []
@@ -401,11 +483,6 @@ class App:
     # --- shutdown: analyse a pending session, delete this run's folders, exit ---
     def _shutdown(self):
         print("\n[quit] wrapping up...")
-        try:
-            from core import status
-            status.publish("Session ended", "end")
-        except Exception:
-            pass
         if self.running:
             self.running = False
             self._finish(self.session_dir)
@@ -436,11 +513,11 @@ def main() -> int:
         sys.stdout.reconfigure(line_buffering=True)  # ensure prints show live, not buffered
     except Exception:
         pass
-    print("Starting Screen Capture Tool — loading (a few seconds)...", flush=True)
     ap = argparse.ArgumentParser()
     ap.add_argument("--classic", action="store_true", help="Old fixed pipeline (you capture; it analyses at stop).")
     ap.add_argument("--agent", action="store_true", help="Agent analyses at stop (you still capture manually).")
-    ap.add_argument("--auto", action="store_true", help="(default) Agent-owned session: it captures and pages itself.")
+    ap.add_argument("--auto", action="store_true", help="Agent-owned session: it captures and pages itself.")
+    ap.add_argument("--burst", action="store_true", help="(default) Burst: auto-capture while you scroll; phash drops duplicates.")
     args = ap.parse_args()
     load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -454,16 +531,19 @@ def main() -> int:
         print(f"Missing dependency: {exc}.\nRun: pip install -r requirements.txt", file=sys.stderr)
         return 1
 
-    app = App(anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]))  # loaded at boot
+    app = App(anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]))
     if args.classic:
-        app.agent_mode = app.auto_mode = False
+        app.agent_mode = app.auto_mode = app.burst_mode = False
         mode = "CLASSIC (fixed pipeline)"
     elif args.agent:
-        app.agent_mode, app.auto_mode = True, False
+        app.agent_mode = True; app.auto_mode = app.burst_mode = False
         mode = "AGENT (analyses at stop)"
-    else:  # default -> owned agent session
-        app.agent_mode, app.auto_mode = False, True
+    elif args.auto:
+        app.auto_mode = True; app.agent_mode = app.burst_mode = False
         mode = "AUTO-AGENT (owned session)"
+    else:  # default -> burst
+        app.burst_mode = True; app.agent_mode = app.auto_mode = False
+        mode = "BURST (auto-capture while scrolling)"
 
     print(
         f"Screen Capture Tool — {mode}\n"
