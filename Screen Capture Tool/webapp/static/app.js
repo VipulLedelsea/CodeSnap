@@ -38,7 +38,7 @@ function reportCard(r) {
       ${section("Tech-stack review", r.tech_stack, "tech")}
       <div class="rsec"><span class="rsec-label">Code</span>
         <pre class="code">${escapeHtml(r.code || "")}</pre></div>
-      <div class="report-actions">${dl}</div>
+      <div class="report-actions">${acts}</div>
     </div>`;
   }
   const body = r.content
@@ -54,21 +54,97 @@ function reportCard(r) {
   </div>`;
 }
 
+const _pending = {};
+
+function _download(filename, text, mime) {
+  const blob = new Blob([text], { type: mime || "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadCode(name) {
+  const r = _pending[name];
+  if (!r) return;
+  const fn = r.code_file || (name + "." + (r.extension || "txt"));
+  _download(fn, r.code || "", "text/plain");
+  toast("Code file saved to your Downloads.");
+}
+
+function downloadReport(name) {
+  const r = _pending[name];
+  if (!r) return;
+  const lines = [
+    "# Report — " + name,
+    "",
+    "**Language:** " + (r.language || r.extension || "n/a"),
+    "",
+    "## Overview",
+    (r.overview || "(none)"),
+    "",
+    "## Errors found",
+    (r.errors || "None"),
+    "",
+    "## Tech-stack review",
+    (r.tech_stack || "n/a"),
+    ""
+  ];
+  _download(name + "_report.md", lines.join("\n"), "text/markdown");
+  toast("Report saved to your Downloads.");
+}
+
+function pendingCard(r) {
+  const time = (r.modified || "").replace("T", " ");
+  _pending[r.name] = r;
+  const acts = `<button class="dl" onclick="downloadCode('${r.name}')">Save code</button>`
+    + `<button class="dl secondary" onclick="downloadReport('${r.name}')">Save report</button>`;
+  return `<div class="report pending">
+    <div class="report-head">
+      <span class="tag ready">Ready \u00b7 not saved</span>
+      <span class="tag code">${escapeHtml(r.language || r.extension || "code")}</span>
+      <span class="report-name">${escapeHtml(r.code_file || r.name)}</span>
+      <span class="report-time">${time}</span>
+    </div>
+    ${section("Overview", r.overview, "overview")}
+    ${section("Errors found", r.errors, "errors")}
+    ${section("Tech-stack review", r.tech_stack, "tech")}
+    <div class="rsec"><span class="rsec-label">Code</span>
+      <pre class="code">${escapeHtml(r.code || "")}</pre></div>
+    <div class="report-actions">${acts}</div>
+  </div>`;
+}
+
 async function loadReports() {
   const box = $("reports");
   box.innerHTML = `<p style="color:var(--muted)">Loading…</p>`;
+  let saved = [], pending = [], reachedServer = false;
   try {
     const res = await fetch("/api/reports");
-    const data = await res.json();
-    const list = data.reports || [];
-    if (!list.length) {
-      box.innerHTML = `<div class="empty">No results yet. Start a capture session to create your first report.</div>`;
-      return;
-    }
-    box.innerHTML = list.map(reportCard).join("");
-  } catch (e) {
+    saved = (await res.json()).reports || [];
+    reachedServer = true;
+  } catch (e) { console.error("loadReports: /api/reports failed", e); }
+  try {
+    const res = await fetch("/api/pending");
+    pending = (await res.json()).reports || [];
+    reachedServer = true;
+  } catch (e) { console.error("loadReports: /api/pending failed", e); }
+
+  if (!reachedServer) {
     box.innerHTML = `<div class="empty">Couldn't load results. Is the server running?</div>`;
+    return;
   }
+  const html = [];
+  for (const r of pending) {
+    try { html.push(pendingCard(r)); } catch (e) { console.error("pendingCard failed", r, e); }
+  }
+  for (const r of saved) {
+    try { html.push(reportCard(r)); } catch (e) { console.error("reportCard failed", r, e); }
+  }
+  box.innerHTML = html.length
+    ? html.join("")
+    : `<div class="empty">No results yet. Start a capture session to create your first report.</div>`;
 }
 
 $("refreshBtn").addEventListener("click", loadReports);
@@ -131,6 +207,8 @@ async function pollStatus() {
 
 function setRunning(running) {
   sessionRunning = running;
+  const tt = $("teamToggle");
+  if (tt) tt.disabled = running;
   const b = $("startBtn");
   $("status").textContent = running ? "Session running" : "Ready";
   b.textContent = running ? "Stop session" : "Start capture";
@@ -144,8 +222,11 @@ $("startBtn").addEventListener("click", async () => {
     await fetch("/api/session/stop", { method: "POST" });
     toast("Session stopped.");
   } else {
-    await fetch("/api/session/start", { method: "POST" });
-    toast("Session launched — switch to your editor and press Cmd+Shift+1.");
+    const team = $("teamToggle") && $("teamToggle").checked;
+    await fetch("/api/session/start" + (team ? "?team=true" : ""), { method: "POST" });
+    toast(team
+      ? "Team session launched — switch to your editor and press Cmd+Shift+1."
+      : "Session launched — switch to your editor and press Cmd+Shift+1.");
   }
   pollStatus();
 });
@@ -156,3 +237,5 @@ loadReports();
 setInterval(pollStatus, 1500);
 pollStatus();
 window.addEventListener("resize", () => { if (sessionRunning) renderFlow(lastFlowEvents); });
+window.downloadCode = downloadCode;
+window.downloadReport = downloadReport;

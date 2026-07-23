@@ -17,17 +17,17 @@ class SessionManager:
     def running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
-    def start(self) -> bool:
+    def start(self, team: bool = False) -> bool:
         if self.running():
             return False
         from core import status
         status.clear()
         status.publish("Launching capture session...", "start")
-        # default hotkey app = owned agent session
-        self._proc = subprocess.Popen(
-            [sys.executable, str(PROJECT / "hotkey_capture.py")],
-            cwd=str(PROJECT),
-        )
+        # no flags -> hotkey app default mode (burst: auto-capture + phash dedup)
+        argv = [sys.executable, str(PROJECT / "hotkey_capture.py")]
+        if team:
+            argv.append("--team")   # burst analysed by the multi-agent team
+        self._proc = subprocess.Popen(argv, cwd=str(PROJECT))
         return True
 
     def stop(self) -> bool:

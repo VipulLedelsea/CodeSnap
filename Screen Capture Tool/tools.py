@@ -117,26 +117,34 @@ def _t_fix_code(ctx, inp):
 def _t_save_output(ctx, inp):
     fmt = (inp.get("format") or "text").lower()
     content = inp.get("content", "")
-    if getattr(ctx, "confirm_saves", True):
+    # Interactive modes still prompt Y/n. Auto/burst does NOT auto-save to reports/;
+    # it stages the report under reports/pending/ so the website can offer a download.
+    auto = not getattr(ctx, "confirm_saves", True)
+    if not auto:
         try:
             ans = input(f"\nSave this output (as {fmt})? [Y/n]: ").strip().lower()
         except EOFError:
             ans = "y"
         if ans in ("n", "no"):
             return "User chose NOT to save. Nothing was written."
+    dest = (Path(ctx.out_dir) / "pending") if auto else Path(ctx.out_dir)
     if fmt == "source":
         out = outputs.save_report_bundle({
             "code": content, "extension": inp.get("extension", "txt"),
             "language": inp.get("language", ""), "overview": inp.get("overview", ""),
             "errors": inp.get("errors", ""), "tech_stack": inp.get("tech_stack", ""),
-        }, ctx.out_dir, ctx.out_name)
+        }, dest, ctx.out_name)
     elif fmt == "docx":
-        out = outputs.save_docx({"extracted_text": content}, ctx.out_dir, ctx.out_name)
+        out = outputs.save_docx({"extracted_text": content}, dest, ctx.out_name)
     else:
-        out = outputs.save_text(content, ctx.out_dir, ctx.out_name)
-    if not getattr(ctx, "confirm_saves", True):
+        out = outputs.save_text(content, dest, ctx.out_name)
+    if auto:
         from core.notify import notify
-        notify("Screen Capture", f"Saved {Path(out).name}")
+        from core import status
+        status.publish(f"Report ready to download: {ctx.out_name}", "ready")
+        notify("Code Capture", "Report ready — open the website to download")
+        return (f"Report prepared for download (not auto-saved): {Path(out).name}. "
+                "It is staged in reports/pending and downloadable from the website.")
     return f"Saved: {Path(out).resolve()}"
 
 

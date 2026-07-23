@@ -33,13 +33,13 @@ Workflow:
   3. If it is CODE: call check_code on the code EXACTLY as captured (do not pre-fix it). The errors it returns are the REAL errors in the captured code — these are what you report.
   4. Present your final answer in EXACTLY this format (Markdown):
         **Language:** <language>
-        **Overview:** <plain-English summary of what the content does, with INLINE source citations woven into the sentences — after each part you describe, note the screenshot it came from in parentheses. Example: "This app implements a retrieval-augmented (RAG) system with a main pipeline (Screenshot 1), then a hybrid_retrieval method combining dense and BM25 results (Screenshot 2)...">
+        **Overview:** <A clear, plain-English summary that a non-expert can follow. Start with one sentence saying what the whole thing does overall. Then walk through it in a logical order, one short paragraph per main part, explaining what each part does in everyday language (avoid jargon; if you must use a technical term, briefly say what it means). Weave INLINE source citations into the sentences — after each part you describe, note the screenshot it came from in parentheses. Keep sentences short and easy to read. Example: "This app answers questions by looking up relevant documents before responding — a retrieval-augmented (RAG) system (Screenshot 1). It first pulls candidate documents using two search methods and merges them (Screenshot 2)...">
         **Errors found:** <the actual errors check_code reported on the as-captured code, e.g. an IndentationError with its line; or 'None' only if it genuinely passed. List blank/cut-off captures here too.>
         **Code:**
         ```<ext>
         <the code — corrected ONLY for the specific errors you reported (e.g. fix the bad indent). Do NOT change anything else, and do NOT invent content for missing/cut-off parts; leave a clear  # [missing — recapture]  marker instead.>
         ```
-        **Tech-stack review:** <Is this code current for its language/frameworks, or does it use obsolete or deprecated patterns, APIs, or libraries? State clearly whether it's up to date, then give concrete upgrade suggestions — newer idioms/APIs, better practices, and updated dependencies.>
+        **Tech-stack review:** <List AT MOST the 5 most important issues, most critical first. State clearly whether the code is up to date overall, then give at most 5 concrete points covering obsolete/deprecated patterns, APIs, or libraries and the newer idioms/APIs, better practices, or updated dependencies to use instead. If there are more than 5, keep only the 5 that matter most and omit the rest. If it is fully current, say so in one line.>
   5. In that SAME turn, also call save_output (format 'source', extension, content = the code you displayed, AND language + overview + errors + tech_stack = the exact sections you just presented) so the full report is saved with the code. Never save before presenting.
 
 For non-code content: give **Language/Type** and **Overview** (with the same inline (Screenshot N) citations), show the text, then call save_output ('docx' for documents, else 'text').
@@ -153,13 +153,13 @@ Workflow:
   4. If it is CODE: call check_captured_code (with the extension) — it checks the raw on-screen text and returns {code, errors}. Those errors ARE what you report; do not fix the code before checking.
   5. Present your final answer in EXACTLY this format (Markdown):
         **Language:** <language>
-        **Overview:** <plain-English summary of what the content does, with INLINE source citations woven into the sentences — after each part you describe, note the screenshot it came from in parentheses, e.g. "...a main pipeline (Screenshot 1), then a hybrid_retrieval method (Screenshot 2)...">
+        **Overview:** <A clear, plain-English summary a non-expert can follow. One sentence on what it does overall, then one short paragraph per main part in everyday language (explain any technical term briefly), in a logical order. Weave INLINE source citations into the sentences, e.g. "...a main pipeline (Screenshot 1), then it merges two search methods (Screenshot 2)...". Keep sentences short.>
         **Errors found:** <the actual errors check_code reported, e.g. an IndentationError with its line; or 'None'>
         **Code:**
         ```<ext>
         <the exact code returned by check_captured_code, corrected ONLY for the reported errors; never invent missing parts — leave  # [missing — recapture]  instead>
         ```
-        **Tech-stack review:** <Is this code current for its language/frameworks, or does it use obsolete or deprecated patterns, APIs, or libraries? State clearly whether it's up to date, then give concrete upgrade suggestions — newer idioms/APIs, better practices, and updated dependencies.>
+        **Tech-stack review:** <List AT MOST the 5 most important issues, most critical first. State clearly whether the code is up to date overall, then give at most 5 concrete points covering obsolete/deprecated patterns, APIs, or libraries and the newer idioms/APIs, better practices, or updated dependencies to use instead. If there are more than 5, keep only the 5 that matter most and omit the rest. If it is fully current, say so in one line.>
   6. In that SAME turn, also call save_output (format 'source', extension, content = the code, AND language + overview + errors + tech_stack = the sections you presented) so the full report is saved with the code. It saves automatically and notifies the user.
 For non-code: give **Language/Type** + **Overview** (with inline (Screenshot N) citations), show the text, then save_output ('docx' or 'text').
 Never execute captured code (check_code only compiles/parses). Do not re-read a screenshot you already read.
@@ -202,6 +202,7 @@ def main() -> int:
     ap.add_argument("--dir", default="tests/inbox", help="Folder of .png screenshots (default tests/inbox).")
     ap.add_argument("--out", default="reports", help="Where to save outputs (default reports).")
     ap.add_argument("--chat", action="store_true", help="Stay interactive for follow-up instructions.")
+    ap.add_argument("--team", action="store_true", help="Use the multi-agent team (Coordinator + Extractor + Analyst + Code doctor).")
     ap.add_argument("--max-iters", type=int, default=MAX_ITERS)
     args = ap.parse_args()
 
@@ -231,8 +232,15 @@ def main() -> int:
     goal = (f"There are {len(images)} screenshot(s) available. Produce the best verified "
             f"output of what they show, following your instructions.")
 
-    print(f"Agent running over {len(images)} screenshot(s) from {args.dir}/ ...\n")
-    if args.chat:
+    mode = "TEAM (multi-agent)" if args.team else ("CHAT" if args.chat else "single-agent")
+    print(f"Agent running over {len(images)} screenshot(s) from {args.dir}/  [{mode}] ...\n")
+    if args.team:
+        from team import run_team
+        audit = []
+        final, _ = run_team(ctx.client, ctx, goal=goal, audit=audit)
+        print(f"\n{'=' * 60}\n{final}\n{'=' * 60}")
+        print(f"(team: {len(audit)} delegation(s) — {', '.join(audit) or 'none'})")
+    elif args.chat:
         converse(ctx.client, ctx, goal)
     else:
         audit = []

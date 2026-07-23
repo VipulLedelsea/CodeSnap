@@ -49,6 +49,7 @@ from core.analysis import load_env, extract_to_cache, analyse_incremental, fix_s
 from core.validate import check_source
 from core.capture import capture_full_png, capture_region_png, next_png_path
 from agent import run_agent, run_session
+from team import run_team
 from tools import ToolContext
 from core.outputs import (
     safe_ext as _safe_ext,
@@ -94,6 +95,7 @@ class App:
         self.agent_mode = False                   # set from --agent in main
         self.auto_mode = False                    # set from --auto (agent owns the session)
         self.burst_mode = False                   # set from --burst (auto-capture while scrolling)
+        self.team_mode = False                    # set from --team (multi-agent Coordinator+Extractor+Analyst+Doctor)
         self._ready_event = threading.Event()     # set by Cmd+Shift+7 to advance an owned session
         self.capture_enabled = False              # captures allowed (stays on during agent run)
         self.session_dir = None                   # current session's capture folder
@@ -148,6 +150,8 @@ class App:
         from core import status
         status.clear()
         status.publish("Burst capture — scroll through the file steadily", "start")
+        from core.notify import notify
+        notify("Code Capture", "Session started — start scrolling")
         ts = time.strftime("%Y%m%d_%H%M%S")
         self.session_dir = CAPTURES_ROOT / f"session_{ts}"
         self.session_dir.mkdir(parents=True, exist_ok=True)
@@ -197,6 +201,8 @@ class App:
                 break
             time.sleep(BURST_INTERVAL)
         status.publish(f"Scrolling stopped — {kept} unique frame(s), analysing", "info")
+        from core.notify import notify
+        notify("Code Capture", f"Session captured — {kept} frame(s), analysing")
         print(f"[burst] done capturing: {kept} unique frame(s). Analysing...")
         self._analyse_burst(session_dir)
 
@@ -217,7 +223,8 @@ class App:
             audit = []
             goal = (f"There are {len(imgs)} screenshots of one scrolled document/code, in order "
                     f"(consecutive shots overlap). Produce the best verified output.")
-            final, _ = run_agent(self.client, ctx, goal=goal, verbose=True, audit=audit)
+            runner = run_team if self.team_mode else run_agent
+            final, _ = runner(self.client, ctx, goal=goal, verbose=True, audit=audit)
             print(f"\n{'=' * 60}\n{final}\n{'=' * 60}")
         except Exception as exc:  # noqa: BLE001
             print(f"Analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -248,7 +255,7 @@ class App:
             self.running = False
             return
         from core.notify import notify
-        notify("Screen Capture", "Captured — analysing...")
+        notify("Code Capture", "Captured — analysing...")
         print("  Captured the screen — analysing. The agent will notify you to scroll "
               "(press Cmd+Shift+7), and tell you when to return to the terminal. Cmd+Shift+9 to quit.")
         threading.Thread(target=self._run_owned_session, args=(self.session_dir, [first]), daemon=True).start()
@@ -518,6 +525,7 @@ def main() -> int:
     ap.add_argument("--agent", action="store_true", help="Agent analyses at stop (you still capture manually).")
     ap.add_argument("--auto", action="store_true", help="Agent-owned session: it captures and pages itself.")
     ap.add_argument("--burst", action="store_true", help="(default) Burst: auto-capture while you scroll; phash drops duplicates.")
+    ap.add_argument("--team", action="store_true", help="Analyse with the multi-agent team (Coordinator + Extractor + Analyst + Code doctor).")
     args = ap.parse_args()
     load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -544,6 +552,9 @@ def main() -> int:
     else:  # default -> burst
         app.burst_mode = True; app.agent_mode = app.auto_mode = False
         mode = "BURST (auto-capture while scrolling)"
+    app.team_mode = args.team
+    if args.team:
+        mode += " + TEAM (multi-agent)"
 
     print(
         f"Screen Capture Tool — {mode}\n"

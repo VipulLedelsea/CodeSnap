@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ledelsea — Screen Capture</title>
+  <title>Ledelsea — Code Capture</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
     <aside class="sidebar">
       <div class="brand"><span class="mark">l</span><span class="name">ledelsea</span></div>
       <div class="nav-label">Modules</div>
-      <a class="nav-item active"><span class="l">Screen capture</span></a>
+      <a class="nav-item active"><span class="l">Code capture</span></a>
       <div class="nav-item disabled"><span class="l">Documents</span><span class="pill-soon">soon</span></div>
       <div class="nav-item disabled"><span class="l">Data extract</span><span class="pill-soon">soon</span></div>
       <div class="nav-add">＋ Add module</div>
@@ -21,7 +21,7 @@
     </aside>
 
     <main class="main">
-      <h1>Screen capture</h1>
+      <h1>Code capture</h1>
       <p class="sub">Pull code or text off your screen and get a clean, verified result — the agent reads, checks, and writes it for you.</p>
 
       <div class="card">
@@ -31,6 +31,9 @@
             <p style="font-size:13px;color:var(--muted);margin:0">Capture, scroll for more, and it builds the report.</p>
           </div>
           <div style="display:flex;align-items:center;gap:12px">
+            <label class="team-toggle" title="Coordinator delegates to Extractor, Analyst, and Code doctor">
+              <input type="checkbox" id="teamToggle"> Multi-agent team
+            </label>
             <span class="status" id="status">Ready</span>
             <button class="btn-primary" id="startBtn">Start capture</button>
           </div>

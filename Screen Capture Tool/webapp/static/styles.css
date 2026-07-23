@@ -55,6 +55,10 @@ pre.code{background:#FAF7F4;border:0.5px solid var(--line);border-radius:8px;pad
 .report-actions{margin-top:10px;display:flex;gap:8px}
 .dl{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--blue-ink);text-decoration:none;border:0.5px solid var(--line);border-radius:var(--radius);padding:6px 12px}
 .dl:hover{background:var(--blue-soft)}
+button.dl{background:transparent;cursor:pointer;font-family:inherit}
+.report-actions{display:flex;gap:8px;flex-wrap:wrap}
+.dl.secondary{color:var(--muted)}
+.dl.secondary:hover{background:var(--line)}
 .btn-primary.stop{background:#8A4A2C}
 .status-feed{background:#FBF6F2;border:0.5px solid var(--line);border-radius:var(--card-radius);padding:12px 16px;margin-bottom:14px;max-height:160px;overflow:auto}
 .status-feed .ev{display:flex;align-items:center;gap:9px;font-size:13px;color:#5C534B;padding:3px 0}
@@ -113,3 +117,11 @@ pre.code{background:#FAF7F4;border:0.5px solid var(--line);border-radius:8px;pad
 .devflow{position:static;display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px;background:#FFFFFF;border:0.5px solid var(--line);border-radius:12px;padding:14px 16px}
 .devflow .node{font-size:12px;padding:5px 11px;border-radius:20px;font-weight:500}
 .devflow .node.active{background:var(--copper);color:#fff;outline:none;animation:pulse 1.2s ease-in-out infinite}
+
+/* pending (ready-to-download) report */
+.tag.ready{background:#fff3e6;color:#b5651d;border:1px solid #eccba8;}
+.report.pending{border-left:3px solid var(--copper, #b5651d);}
+
+/* multi-agent team toggle */
+.team-toggle{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer;user-select:none;}
+.team-toggle input{accent-color:var(--copper, #b5651d);cursor:pointer;}
