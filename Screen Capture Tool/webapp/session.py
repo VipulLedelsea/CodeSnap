@@ -24,7 +24,12 @@ class SessionManager:
         status.clear()
         status.publish("Launching capture session...", "start")
         # no flags -> hotkey app default mode (burst: auto-capture + phash dedup)
-        argv = [sys.executable, str(PROJECT / "hotkey_capture.py")]
+        # Frozen (bundled .app): the executable re-invokes itself with --capture.
+        # Dev: run the dispatcher via python (main.py --capture).
+        if getattr(sys, "frozen", False):
+            argv = [sys.executable, "--capture"]
+        else:
+            argv = [sys.executable, str(PROJECT / "main.py"), "--capture"]
         if single:
             argv.append("--single")   # backup: single agent instead of the default team
         self._proc = subprocess.Popen(argv, cwd=str(PROJECT))

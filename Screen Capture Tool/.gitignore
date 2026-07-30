@@ -35,3 +35,6 @@ tests/inbox/*
 !tests/inbox/README.md
 tests/real/*
 !tests/real/README.md
+build/
+dist/
+*.spec.bak

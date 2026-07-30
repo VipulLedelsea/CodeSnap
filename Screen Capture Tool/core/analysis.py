@@ -51,11 +51,30 @@ USER_PROMPT = "Analyse all these screenshots as one continuous document and retu
 
 
 def load_env() -> None:
+    """Load ANTHROPIC_API_KEY. Searches, in order: the existing environment, the
+    working directory's .env (dev), a .env next to the executable/bundle, and
+    ~/.code_capture/.env (used by the installed .app). First hit wins."""
+    import os
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return
     try:
         from dotenv import load_dotenv
-        load_dotenv()
     except ImportError:
-        pass
+        return
+    import sys
+    from pathlib import Path
+    load_dotenv()  # 1) cwd / project .env (development)
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return
+    for cand in (Path(sys.executable).resolve().parent / ".env",   # 2) next to the app binary
+                 Path.home() / ".code_capture" / ".env"):          # 3) installed-app config
+        try:
+            if cand.exists():
+                load_dotenv(cand)
+                if os.environ.get("ANTHROPIC_API_KEY"):
+                    return
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ── Spinner ────────────────────────────────────────────────────────────────────
