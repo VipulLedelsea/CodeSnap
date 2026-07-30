@@ -202,7 +202,7 @@ def main() -> int:
     ap.add_argument("--dir", default="tests/inbox", help="Folder of .png screenshots (default tests/inbox).")
     ap.add_argument("--out", default="reports", help="Where to save outputs (default reports).")
     ap.add_argument("--chat", action="store_true", help="Stay interactive for follow-up instructions.")
-    ap.add_argument("--team", action="store_true", help="Use the multi-agent team (Coordinator + Extractor + Analyst + Code doctor).")
+    ap.add_argument("--single", action="store_true", help="Backup: use the single agent instead of the multi-agent team (team is the default).")
     ap.add_argument("--max-iters", type=int, default=MAX_ITERS)
     args = ap.parse_args()
 
@@ -232,9 +232,9 @@ def main() -> int:
     goal = (f"There are {len(images)} screenshot(s) available. Produce the best verified "
             f"output of what they show, following your instructions.")
 
-    mode = "TEAM (multi-agent)" if args.team else ("CHAT" if args.chat else "single-agent")
+    mode = "SINGLE-AGENT (backup)" if args.single else ("CHAT" if args.chat else "TEAM (multi-agent, default)")
     print(f"Agent running over {len(images)} screenshot(s) from {args.dir}/  [{mode}] ...\n")
-    if args.team:
+    if not args.single and not args.chat:
         from team import run_team
         audit = []
         final, _ = run_team(ctx.client, ctx, goal=goal, audit=audit)

@@ -17,7 +17,7 @@ class SessionManager:
     def running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
-    def start(self, team: bool = False) -> bool:
+    def start(self, single: bool = False) -> bool:
         if self.running():
             return False
         from core import status
@@ -25,8 +25,8 @@ class SessionManager:
         status.publish("Launching capture session...", "start")
         # no flags -> hotkey app default mode (burst: auto-capture + phash dedup)
         argv = [sys.executable, str(PROJECT / "hotkey_capture.py")]
-        if team:
-            argv.append("--team")   # burst analysed by the multi-agent team
+        if single:
+            argv.append("--single")   # backup: single agent instead of the default team
         self._proc = subprocess.Popen(argv, cwd=str(PROJECT))
         return True
 

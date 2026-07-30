@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ledelsea — Code Capture · Architecture</title>
+<style>
+  :root{
+    --warm:#FCFAF8; --panel:#fff; --copper:#BE6E4A; --copper-soft:#F3E4DA;
+    --blue:#2E7DB0; --ink:#2b2622; --muted:#8a7f77; --line:#ece6e1;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--warm);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  header{padding:28px 32px 8px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .mark{width:30px;height:30px;border-radius:8px;background:var(--copper-soft);
+    color:var(--copper);display:grid;place-items:center;font-weight:700}
+  h1{margin:14px 0 4px;font-size:26px}
+  .sub{color:var(--muted);margin:0;font-size:14px;max-width:760px}
+  .tabs{display:flex;gap:8px;padding:20px 32px 0;flex-wrap:wrap}
+  .tab{border:1px solid var(--line);background:var(--panel);color:var(--ink);
+    padding:9px 16px;border-radius:10px;cursor:pointer;font-size:14px;font-weight:500}
+  .tab.active{background:var(--copper);color:#fff;border-color:var(--copper)}
+  .panel{display:none;padding:18px 32px 60px}
+  .panel.active{display:block}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:18px 20px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  .caption{color:var(--muted);font-size:13.5px;margin:0 0 14px;max-width:820px;line-height:1.5}
+  .mermaid{overflow-x:auto}
+  h2{font-size:19px;margin:4px 0 6px;color:var(--copper)}
+  footer{color:var(--muted);font-size:12px;padding:0 32px 40px}
+  code{background:#f4efeb;padding:1px 5px;border-radius:5px;font-size:12.5px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="mark">l</span><span style="font-weight:600">ledelsea</span></div>
+  <h1>Code Capture — Architecture &amp; Design</h1>
+  <p class="sub">System architecture, a UML class diagram, and the end-to-end data flow for the screen-capture-to-verified-report pipeline (burst pHash capture + the in-process multi-agent team).</p>
+</header>
+
+<div class="tabs">
+  <button class="tab active" data-p="arch">System architecture</button>
+  <button class="tab" data-p="uml">UML class diagram</button>
+  <button class="tab" data-p="flow">Data flow</button>
+</div>
+
+<section class="panel active" id="arch">
+  <div class="card">
+    <h2>System architecture</h2>
+    <p class="caption">Three entry points (the hotkey app, the CLI, and the web UI) share one engine (<code>core/</code>) and two analysis paths — the single-agent loop and the multi-agent team. All model calls go to the Anthropic Messages API; results are saved as report bundles and surfaced by the web UI.</p>
+    <pre class="mermaid">
+%%{init: {'flowchart': {'curve':'basis','nodeSpacing':30,'rankSpacing':55}} }%%
+flowchart TB
+  subgraph L0["1 · Entry points"]
+    direction LR
+    AG["agent.py · CLI"]
+    HK["hotkey_capture.py · App"]
+    WEB["webapp · FastAPI + UI"]
+  end
+  subgraph L1["2 · Capture"]
+    CP["capture_full_png()<br/>+ _phash dedup"]
+  end
+  subgraph L2["3 · Analysis paths"]
+    direction LR
+    RA["run_agent<br/>single-agent"]
+    TM["run_team<br/>Coordinator"]
+  end
+  subgraph L3["4 · Workers"]
+    direction LR
+    TL["tools.py<br/>run_tool"]
+    EX["Extractor<br/>Haiku"]
+    ANL["Analyst<br/>Sonnet"]
+    DEC["Decoder<br/>Sonnet"]
+  end
+  subgraph L4["5 · Engine — core/"]
+    direction LR
+    AN["analysis.py"]
+    VAL["validate.py"]
+    OUT["outputs.py"]
+  end
+  subgraph L5["6 · Model &amp; storage"]
+    direction LR
+    API["Anthropic API"]:::ext
+    RP["reports/"]
+    PEND["reports/pending/"]
+  end
+
+  WEB --> HK
+  HK --> CP
+  CP --> RA
+  CP --> TM
+  AG --> RA
+  AG --> TM
+  RA --> TL
+  TM --> EX
+  TM --> ANL
+  TM --> DEC
+  TL --> AN
+  TL --> VAL
+  TL --> OUT
+  EX --> AN
+  ANL --> AN
+  DEC --> VAL
+  AN --> API
+  OUT --> PEND
+  PEND --> RP
+  WEB --> PEND
+
+  classDef ext fill:#E7F0F7,stroke:#2E7DB0,color:#1f4a6b;
+    
+    </pre>
+  </div>
+</section>
+
+<section class="panel" id="uml">
+  <div class="card">
+    <h2>UML class diagram</h2>
+    <p class="caption">The runtime classes (<code>App</code>, <code>ToolContext</code>, <code>SessionManager</code>) and the module boundaries they depend on. Dashed arrows are "uses / calls"; solid arrows are "creates / defines".</p>
+    <pre class="mermaid">
+classDiagram
+  class App {
+    +Anthropic client
+    +bool running
+    +bool burst_mode
+    +bool team_mode
+    +Path session_dir
+    +ThreadPoolExecutor _pool
+    +toggle()
+    +_begin_burst_session()
+    +_burst_loop()
+    +_analyse_burst()
+    +_run_agent()
+    +_finish()
+  }
+  class ToolContext {
+    +Anthropic client
+    +list~Path~ images
+    +Path cache_dir
+    +Path out_dir
+    +str out_name
+    +Path session_dir
+    +bool interactive
+    +int max_captures
+    +bool confirm_saves
+  }
+  class SessionManager {
+    -Popen _proc
+    +start(team) bool
+    +stop() bool
+    +running() bool
+  }
+  class agent_py {
+    <<module>>
+    +run_agent(client, ctx, goal)
+    +run_session()
+    +converse()
+  }
+  class team_py {
+    <<module>>
+    +run_team(client, ctx, goal)
+    +agent_extract() Extractor
+    +agent_analyze() Analyst
+    +agent_decoder() Decoder
+  }
+  class tools_py {
+    <<module>>
+    +TOOL_SCHEMAS
+    +run_tool(name, ctx, input)
+    +_t_save_output()
+  }
+  class analysis {
+    <<core>>
+    +extract_one() Haiku
+    +synthesize_final() Sonnet
+    +stitch_parts()
+    +fix_source() Sonnet
+    +extract_to_cache()
+  }
+  class validate {
+    <<core>>
+    +check_source(path)
+  }
+  class outputs {
+    <<core>>
+    +save_report_bundle()
+  }
+  class capture {
+    <<core>>
+    +capture_full_png()
+    +next_png_path()
+  }
+  class status {
+    <<core>>
+    +publish()
+    +recent()
+  }
+  class server_py {
+    <<webapp>>
+    +api_session_start(team)
+    +api_pending()
+    +api_pending_download()
+  }
+  class reports_py {
+    <<webapp>>
+    +scan_reports(dir)
+  }
+
+  App --> ToolContext : builds
+  App ..> agent_py : run_agent / run_session
+  App ..> team_py : run_team
+  App ..> capture
+  App ..> status
+  tools_py --> ToolContext : defines
+  agent_py ..> tools_py : run_tool
+  tools_py ..> analysis
+  tools_py ..> validate
+  tools_py ..> outputs
+  team_py ..> analysis
+  team_py ..> validate
+  team_py ..> outputs
+  team_py ..> tools_py : _t_save_output
+  analysis ..> outputs
+  server_py --> SessionManager
+  server_py ..> reports_py : scan_reports
+  server_py ..> status
+  SessionManager ..> App : launches subprocess
+    </pre>
+  </div>
+</section>
+
+<section class="panel" id="flow">
+  <div class="card">
+    <h2>Data flow — one screenshot to a saved report</h2>
+    <p class="caption">How a frame travels from the screen through pHash de-duplication, background Haiku extraction and caching, the chosen analysis path, validation/fix, and finally the pending report bundle the web UI offers for download.</p>
+    <pre class="mermaid">
+flowchart LR
+  A["Screen"] --> B["capture_full_png()<br/>downscale ≤1568px"]
+  B --> C["PNG → session_dir"]
+  C --> D{"_phash distance<br/>≥ 6 vs last kept?"}
+  D -->|no| X["drop<br/>near-duplicate"]
+  D -->|yes| E["keep frame"]
+  E --> F["ThreadPool · _safe_extract<br/>extract_to_cache (Haiku)<br/>SHA-256 cache"]
+  F --> G{"idle ≥ 3s?<br/>(scrolling stopped)"}
+  G -->|no| D
+  G -->|yes| H["stitch_parts<br/>merge overlaps"]
+  H --> I{"team mode?"}
+  I -->|single agent| J["run_agent"]
+  I -->|team| K["Extractor → Analyst → Decoder"]
+  J --> L["validate.check_source<br/>compile / parse only"]
+  K --> L
+  L --> M{"errors found?"}
+  M -->|yes| N["fix_source (Sonnet)<br/>minimal fix → re-check"]
+  M -->|no| O["assemble report<br/>Language · Overview · Errors · Code · Tech-stack"]
+  N --> O
+  O --> P["save_report_bundle<br/>→ reports/pending/"]
+  P --> Q["/api/pending"]
+  Q --> R["Save code&nbsp;&nbsp;/&nbsp;&nbsp;Save report"]
+  R -->|promotes| S["reports/"]
+    </pre>
+  </div>
+</section>
+
+<footer>Generated for the Ledelsea Code Capture project · diagrams render with Mermaid.</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "base",
+    themeVariables: {
+      primaryColor: "#F3E4DA", primaryBorderColor: "#BE6E4A", primaryTextColor: "#2b2622",
+      lineColor: "#2E7DB0", secondaryColor: "#E7F0F7", tertiaryColor: "#fbf7f4",
+      fontFamily: "-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif"
+    }
+  });
+  document.querySelectorAll(".tab").forEach(function(t){
+    t.addEventListener("click", function(){
+      document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+      document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));
+      t.classList.add("active");
+      document.getElementById(t.dataset.p).classList.add("active");
+    });
+  });
+</script>
+</body>
+</html>

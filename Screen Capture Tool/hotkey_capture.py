@@ -95,7 +95,7 @@ class App:
         self.agent_mode = False                   # set from --agent in main
         self.auto_mode = False                    # set from --auto (agent owns the session)
         self.burst_mode = False                   # set from --burst (auto-capture while scrolling)
-        self.team_mode = False                    # set from --team (multi-agent Coordinator+Extractor+Analyst+Doctor)
+        self.team_mode = True                     # DEFAULT: multi-agent team (A2A). --single flips to backup single-agent.
         self._ready_event = threading.Event()     # set by Cmd+Shift+7 to advance an owned session
         self.capture_enabled = False              # captures allowed (stays on during agent run)
         self.session_dir = None                   # current session's capture folder
@@ -525,7 +525,7 @@ def main() -> int:
     ap.add_argument("--agent", action="store_true", help="Agent analyses at stop (you still capture manually).")
     ap.add_argument("--auto", action="store_true", help="Agent-owned session: it captures and pages itself.")
     ap.add_argument("--burst", action="store_true", help="(default) Burst: auto-capture while you scroll; phash drops duplicates.")
-    ap.add_argument("--team", action="store_true", help="Analyse with the multi-agent team (Coordinator + Extractor + Analyst + Code doctor).")
+    ap.add_argument("--single", action="store_true", help="Backup: analyse with the single agent instead of the multi-agent team (team is the default).")
     args = ap.parse_args()
     load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -552,9 +552,8 @@ def main() -> int:
     else:  # default -> burst
         app.burst_mode = True; app.agent_mode = app.auto_mode = False
         mode = "BURST (auto-capture while scrolling)"
-    app.team_mode = args.team
-    if args.team:
-        mode += " + TEAM (multi-agent)"
+    app.team_mode = not args.single
+    mode += " + SINGLE-AGENT (backup)" if args.single else " + TEAM (multi-agent, default)"
 
     print(
         f"Screen Capture Tool — {mode}\n"

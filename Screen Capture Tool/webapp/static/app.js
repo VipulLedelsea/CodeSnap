@@ -207,7 +207,7 @@ async function pollStatus() {
 
 function setRunning(running) {
   sessionRunning = running;
-  const tt = $("teamToggle");
+  const tt = $("singleToggle");
   if (tt) tt.disabled = running;
   const b = $("startBtn");
   $("status").textContent = running ? "Session running" : "Ready";
@@ -222,11 +222,11 @@ $("startBtn").addEventListener("click", async () => {
     await fetch("/api/session/stop", { method: "POST" });
     toast("Session stopped.");
   } else {
-    const team = $("teamToggle") && $("teamToggle").checked;
-    await fetch("/api/session/start" + (team ? "?team=true" : ""), { method: "POST" });
-    toast(team
-      ? "Team session launched — switch to your editor and press Cmd+Shift+1."
-      : "Session launched — switch to your editor and press Cmd+Shift+1.");
+    const single = $("singleToggle") && $("singleToggle").checked;
+    await fetch("/api/session/start" + (single ? "?single=true" : ""), { method: "POST" });
+    toast(single
+      ? "Single-agent (backup) session launched — switch to your editor and press Cmd+Shift+1."
+      : "Team session launched — switch to your editor and press Cmd+Shift+1.");
   }
   pollStatus();
 });

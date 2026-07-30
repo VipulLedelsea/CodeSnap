@@ -12,7 +12,7 @@ just split by role.
                           structurally cannot 'clean up' the code.
   Analyst      (Sonnet) — classifies + writes the plain-English overview and the
                           top-5 tech-stack review.
-  Code doctor  (Sonnet) — syntax/compile-checks the code and applies minimal,
+  Decoder  (Sonnet) — syntax/compile-checks the code and applies minimal,
                           error-only fixes. Nothing else.
 
 The single-agent loop in agent.py is untouched; this is an opt-in path
@@ -104,8 +104,8 @@ def _check(code: str, extension: str) -> dict:
         tmp.unlink(missing_ok=True)
 
 
-def agent_code_doctor(client, code: str, extension: str, language: str) -> dict:
-    """Code doctor (Sonnet). Checks the code AS CAPTURED, then applies a minimal,
+def agent_decoder(client, code: str, extension: str, language: str) -> dict:
+    """Decoder (Sonnet). Checks the code AS CAPTURED, then applies a minimal,
     error-only fix if needed. Reports the REAL errors found (never invents), and
     whether the fix resolved them."""
     res = _check(code, extension)
@@ -157,7 +157,7 @@ def _tc_analyze(client, ctx, scratch, _inp):
 def _tc_repair(client, ctx, scratch, _inp):
     if not scratch.get("is_code"):
         return "Content is not code — no repair needed."
-    d = agent_code_doctor(client, scratch.get("code", ""),
+    d = agent_decoder(client, scratch.get("code", ""),
                           scratch.get("extension", "txt"), scratch.get("language", ""))
     scratch["code"] = d["code"]        # fixed code becomes what we save
     scratch["errors"] = d["errors"]
@@ -192,16 +192,16 @@ COORDINATOR_TOOLS = [
      "description": "Delegate to the Analyst: classify the content and write the plain-English overview + top-5 tech-stack review. Returns JSON {is_code, language, extension, overview, tech_stack}.",
      "input_schema": {"type": "object", "properties": {}}},
     {"name": "repair",
-     "description": "Delegate to the Code doctor: syntax/compile-check the code as-captured and apply minimal, error-only fixes. Returns the REAL errors found and whether they were resolved. Only call if the content is code.",
+     "description": "Delegate to the Decoder: syntax/compile-check the code as-captured and apply minimal, error-only fixes. Returns the REAL errors found and whether they were resolved. Only call if the content is code.",
      "input_schema": {"type": "object", "properties": {}}},
     {"name": "finalize",
-     "description": "Assemble and save the final report. Provide the prose fields; the code is taken from the Extractor/Code-doctor result automatically. Call exactly once, last.",
+     "description": "Assemble and save the final report. Provide the prose fields; the code is taken from the Extractor/Decoder result automatically. Call exactly once, last.",
      "input_schema": {"type": "object",
                       "properties": {
                           "language": {"type": "string"},
                           "extension": {"type": "string"},
                           "overview": {"type": "string", "description": "plain-English overview with inline (Screenshot N) citations"},
-                          "errors": {"type": "string", "description": "the errors the Code doctor reported, or 'None'"},
+                          "errors": {"type": "string", "description": "the errors the Decoder reported, or 'None'"},
                           "tech_stack": {"type": "string", "description": "the Analyst's top-5 review (empty for non-code)"}},
                       "required": ["overview"]}},
 ]
@@ -222,14 +222,14 @@ COORDINATOR_SYSTEM = """You are the Coordinator of a team of specialist agents. 
 Your team (each is a tool):
   get_transcription — the Extractor (faithful, verbatim). Call FIRST.
   analyze           — the Analyst. Returns JSON {is_code, language, extension, overview, tech_stack}.
-  repair            — the Code doctor. Checks the code as-captured and fixes ONLY real errors. Reports the actual errors found. Call only if is_code is true.
+  repair            — the Decoder. Checks the code as-captured and fixes ONLY real errors. Reports the actual errors found. Call only if is_code is true.
   finalize          — assemble + save the report.
 
 Workflow: get_transcription -> analyze -> (if is_code) repair -> finalize.
 
 When you call finalize:
   - overview: use the Analyst's plain-English overview, keeping the inline (Screenshot N) citations.
-  - errors: the errors the Code doctor reported (or 'None'). Never invent fixes beyond what the doctor did.
+  - errors: the errors the Decoder reported (or 'None'). Never invent fixes beyond what the Decoder did.
   - tech_stack: the Analyst's top-5 review (empty for non-code).
 Call finalize exactly once, then stop. Do not describe the content in your own words beyond passing the specialists' results through."""
 
