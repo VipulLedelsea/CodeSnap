@@ -47,11 +47,27 @@ one binary.
    It starts the local server and opens the browser UI. Click **Start capture**,
    switch to your editor, and press **Cmd+Shift+1**.
 
+## Sign the app (do this after every rebuild)
+Unsigned rebuilds change the binary, which invalidates macOS permission grants —
+so the global hotkey stops working until you re-grant. Ad-hoc sign the app right
+after building to give it a valid signature:
+
+```bash
+codesign --force --deep --sign - "dist/Code Capture.app"
+```
+
+Note: ad-hoc signing (`-`) makes the app a valid signed bundle, but the identity
+is still derived from the build, so a rebuild can still require re-granting
+permissions. Only a real Apple Developer ID signature makes grants survive every
+rebuild. For personal use, just re-grant after a rebuild (below).
+
 ## First-run permissions (one time)
 macOS will prompt, or grant these in **System Settings -> Privacy & Security**:
 - **Screen Recording** -> enable **Code Capture** (read the screen)
 - **Accessibility** -> enable **Code Capture** (global hotkey)
 - **Notifications** -> allow **Code Capture** (session banners)
+
+After any REBUILD, remove the old **Code Capture** entry in each list (select it, click **–**) and re-add `dist/Code Capture.app` (**+**), then relaunch — otherwise the hotkey silently does nothing.
 
 Because the app is unsigned, the first open may be blocked by Gatekeeper —
 **right-click the app -> Open** once to allow it (or run

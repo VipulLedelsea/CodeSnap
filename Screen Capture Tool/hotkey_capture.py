@@ -73,7 +73,7 @@ MAX_FIX_ITERS = 3                 # max auto-fix passes when a code check fails
 BURST_INTERVAL = 0.8              # seconds between burst captures
 BURST_IDLE_STOP = 3.0             # stop after this many seconds with no new frame
 BURST_KEEP_DIST = 6              # phash distance above which a frame counts as 'changed'
-BURST_MAX_FRAMES = 40            # safety cap on burst frames
+BURST_MAX_FRAMES = 80            # safety cap on burst frames (raised for longer files)
 BURST_MAX_WAIT = 20              # stop if scrolling never starts (still 1 frame)
 
 #Hashing of images for near-duplicate detection. If difference is below a threshold, the capture is skipped.
@@ -138,7 +138,7 @@ class App:
         """Client is normally built at boot; load lazily if it isn't (safe no-op otherwise)."""
         if self.client is None:
             import anthropic
-            self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+            self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=120.0)
         return self.client
 
     # --- burst mode: auto-capture while the user scrolls; phash drops near-dups ---
@@ -210,6 +210,13 @@ class App:
         imgs = sorted(session_dir.glob("*.png"))
         if not imgs:
             print("[burst] no frames captured.")
+            try:
+                from core import status
+                status.publish("No frames captured — scroll while the session runs so it can read the screen.", "info", stage="done")
+                from core.notify import notify
+                notify("Code Capture", "No frames captured — scroll during the session, then it analyses.")
+            except Exception:  # noqa: BLE001
+                pass
             self.running = False
             self.capture_enabled = False
             return
@@ -228,6 +235,13 @@ class App:
             print(f"\n{'=' * 60}\n{final}\n{'=' * 60}")
         except Exception as exc:  # noqa: BLE001
             print(f"Analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            try:
+                from core import status
+                status.publish("Analysis failed — please start a new session and try again.", "error", stage="done")
+                from core.notify import notify
+                notify("Code Capture", "Analysis failed — please try again.")
+            except Exception:  # noqa: BLE001
+                pass
         finally:
             self.running = False
             self.capture_enabled = False
@@ -539,7 +553,7 @@ def main() -> int:
         print(f"Missing dependency: {exc}.\nRun: pip install -r requirements.txt", file=sys.stderr)
         return 1
 
-    app = App(anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]))
+    app = App(anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=120.0))
     if args.classic:
         app.agent_mode = app.auto_mode = app.burst_mode = False
         mode = "CLASSIC (fixed pipeline)"

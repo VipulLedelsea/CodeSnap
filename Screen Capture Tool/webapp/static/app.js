@@ -1,4 +1,68 @@
 const $ = (id) => document.getElementById(id);
+if (window.mermaid) { try { mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" }); } catch (e) {} }
+
+const ANALYZING_MSGS = [
+  "Reading the captured frames\u2026",
+  "Transcribing the code, exactly as written\u2026",
+  "Checking it against the compiler\u2026",
+  "Repairing any real errors\u2026",
+  "Reviewing the tech stack\u2026",
+  "Drawing the class, interaction & component diagrams\u2026",
+  "Assembling your report\u2026",
+];
+let analyzingTimer = null, analyzingIdx = 0;
+function startAnalyzing() {
+  if (analyzingTimer) return;
+  const box = document.getElementById("analyzing"); if (!box) return;
+  box.style.display = "flex"; analyzingIdx = 0;
+  const msg = document.getElementById("analyzingMsg");
+  if (msg) msg.textContent = ANALYZING_MSGS[0];
+  analyzingTimer = setInterval(function () {
+    analyzingIdx = (analyzingIdx + 1) % ANALYZING_MSGS.length;
+    const m = document.getElementById("analyzingMsg");
+    if (m) m.textContent = ANALYZING_MSGS[analyzingIdx];
+  }, 2600);
+}
+function stopAnalyzing() {
+  const box = document.getElementById("analyzing"); if (box) box.style.display = "none";
+  if (analyzingTimer) { clearInterval(analyzingTimer); analyzingTimer = null; }
+}
+
+// Turn a "diagrams" markdown blob (labels + ```mermaid blocks) into rendered HTML.
+function renderMdText(t) {
+  return t.split(/\n+/).map(function (line) {
+    line = line.trim();
+    if (!line) return "";
+    var b = /^\*\*(.+?)\*\*$/.exec(line);
+    if (b) return `<div class="dlabel">${escapeHtml(b[1])}</div>`;
+    var i = /^_(.+?)_$/.exec(line);
+    if (i) return `<div class="dnote">${escapeHtml(i[1])}</div>`;
+    return `<div class="dnote">${escapeHtml(line.replace(/\*\*/g, ""))}</div>`;
+  }).join("");
+}
+
+function diagramsSection(text) {
+  if (!text || !text.trim()) return "";
+  const parts = [];
+  const re = /```mermaid\s*([\s\S]*?)```/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    const before = text.slice(last, m.index).trim();
+    if (before) parts.push(renderMdText(before));
+    parts.push(`<pre class="mermaid">${escapeHtml(m[1].trim())}</pre>`);
+    last = re.lastIndex;
+  }
+  const tail = text.slice(last).trim();
+  if (tail) parts.push(renderMdText(tail));
+  return `<div class="rsec diagrams"><span class="rsec-label">Diagrams</span><div class="rsec-body">${parts.join("")}</div></div>`;
+}
+
+function renderMermaid() {
+  if (!window.mermaid) return;
+  const nodes = document.querySelectorAll('.mermaid:not([data-processed="true"])');
+  if (!nodes.length) return;
+  try { mermaid.run({ nodes }); } catch (e) { console.error("mermaid", e); }
+}
 
 function toast(msg) {
   const t = $("toast");
@@ -112,6 +176,7 @@ function pendingCard(r) {
     ${section("Tech-stack review", r.tech_stack, "tech")}
     <div class="rsec"><span class="rsec-label">Code</span>
       <pre class="code">${escapeHtml(r.code || "")}</pre></div>
+    ${diagramsSection(r.diagrams)}
     <div class="report-actions">${acts}</div>
   </div>`;
 }
@@ -145,6 +210,7 @@ async function loadReports() {
   box.innerHTML = html.length
     ? html.join("")
     : `<div class="empty">No results yet. Start a capture session to create your first report.</div>`;
+  renderMermaid();
 }
 
 $("refreshBtn").addEventListener("click", loadReports);
@@ -179,14 +245,17 @@ function renderFlow(events) {
     let cls = "node n-" + (n.stage || "tool");
     if (i === activeIdx && sessionRunning) cls += " active";
     const arrow = i < nodes.length - 1 ? '<span class="arrow">\u2192</span>' : "";
-    return `<span class="${cls}">${escapeHtml(n.label)}</span>${arrow}`;
+    const cap = n.label && n.label.length ? n.label[0].toUpperCase() + n.label.slice(1) : n.label;
+    return `<span class="${cls}">${escapeHtml(cap)}</span>${arrow}`;
   }).join("");
 }
 
 function renderStatus(events) {
   const box = $("statusFeed");
   if (!events.length) { box.innerHTML = ""; return; }
-  box.innerHTML = events.slice(-8).map(e =>
+  const shown = events.filter(e => e.kind !== "tool").slice(-4);
+  if (!shown.length) { box.innerHTML = ""; return; }
+  box.innerHTML = shown.map(e =>
     `<div class="ev"><span class="ev-dot"></span>${escapeHtml(e.msg)}</div>`).join("");
   box.scrollTop = box.scrollHeight;
 }
@@ -198,6 +267,9 @@ async function pollStatus() {
     renderStatus(d.events || []);
     renderFlow(d.events || []);
     setRunning(d.running);
+    const evs = d.events || [];
+    const analyzing = d.running && evs.some(e => e.kind === "tool") && !evs.some(e => e.kind === "done" || e.kind === "end");
+    if (analyzing) startAnalyzing(); else stopAnalyzing();
     if ((d.events || []).length !== lastEventCount) {
       lastEventCount = (d.events || []).length;
       loadReports();
@@ -215,6 +287,7 @@ function setRunning(running) {
   b.classList.toggle("stop", running);
   $("statusFeed").style.display = running ? "block" : "none";
   $("devflow").style.display = running ? "flex" : "none";
+  const fl = $("flowLabel"); if (fl) fl.style.display = running ? "flex" : "none";
 }
 
 $("startBtn").addEventListener("click", async () => {

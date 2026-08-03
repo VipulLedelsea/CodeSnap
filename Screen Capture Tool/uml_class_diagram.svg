@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1220" height="840" viewBox="0 0 1220 840" font-family="Helvetica,Arial,sans-serif">
+<rect width="1220" height="840" fill="#FCFAF8"/>
+<defs><marker id="op" markerWidth="12" markerHeight="12" refX="9" refY="4" orient="auto"><path d="M1,1 L9,4 L1,7" fill="none" stroke="#B9A99C" stroke-width="1.4"/></marker></defs>
+<text x="40" y="46" font-size="22" font-weight="700" fill="#2B2622">Code Capture — UML Class Diagram</text>
+<path d="M290.0,137.6 L370.0,129.8" stroke="#B9A99C" stroke-width="1.5" fill="none" stroke-dasharray="5,4" marker-end="url(#op)"/>
+<rect x="298.8" y="124.7" width="62.4" height="16" rx="3" fill="#FCFAF8" opacity="0.92"/>
+<text x="330.0" y="136.7" font-size="10.5" fill="#7d7168" text-anchor="middle">launches</text>
+<path d="M580.0,130.4 L650.0,159.4" stroke="#B9A99C" stroke-width="1.5" fill="none" stroke-dasharray="5,4" marker-end="url(#op)"/>
+<rect x="580.4" y="135.9" width="69.2" height="16" rx="3" fill="#FCFAF8" opacity="0.92"/>
+<text x="615.0" y="147.9" font-size="10.5" fill="#7d7168" text-anchor="middle">--capture</text>
+<path d="M920.0,300.5 L962.0,375.0" stroke="#B9A99C" stroke-width="1.5" fill="none" marker-end="url(#op)"/>
+<rect x="916.6" y="328.7" width="48.8" height="16" rx="3" fill="#FCFAF8" opacity="0.92"/>
+<text x="941.0" y="340.7" font-size="10.5" fill="#7d7168" text-anchor="middle">builds</text>
+<path d="M650.0,275.9 L512.7,375.0" stroke="#B9A99C" stroke-width="1.5" fill="none" stroke-dasharray="5,4" marker-end="url(#op)"/>
+<rect x="546.8" y="316.4" width="69.2" height="16" rx="3" fill="#FCFAF8" opacity="0.92"/>
+<text x="581.4" y="328.4" font-size="10.5" fill="#7d7168" text-anchor="middle">run_agent</text>
+<path d="M754.1,323.0 L750.2,375.0" stroke="#B9A99C" stroke-width="1.5" fill="none" stroke-dasharray="5,4" marker-end="url(#op)"/>
+<rect x="721.0" y="340.0" width="62.4" height="16" rx="3" fill="#FCFAF8" opacity="0.92"/>
+<text x="752.2" y="352.0" font-size="10.5" fill="#7d7168" text-anchor="middle">run_team</text>
+<path d="M496.0,504.0 L573.0,650.0" stroke="#B9A99C" stroke-width="1.5" fill="none" stroke-dasharray="5,4" marker-end="url(#op)"/>
+<rect x="503.3" y="568.0" width="62.4" height="16" rx="3" fill="#FCFAF8" opacity="0.92"/>
+<text x="534.5" y="580.0" font-size="10.5" fill="#7d7168" text-anchor="middle">run_tool</text>
+<path d="M680.0,540.0 L625.2,650.0" stroke="#B9A99C" stroke-width="1.5" fill="none" stroke-dasharray="5,4" marker-end="url(#op)"/>
+<rect x="611.2" y="586.0" width="82.8" height="16" rx="3" fill="#FCFAF8" opacity="0.92"/>
+<text x="652.6" y="598.0" font-size="10.5" fill="#7d7168" text-anchor="middle">save_output</text>
+<rect x="60.0" y="95.0" width="230" height="138.0" rx="4" fill="#FFFFFF" stroke="#BE6E4A" stroke-width="1.6"/>
+<rect x="60.0" y="95.0" width="230" height="46.0" rx="4" fill="#F3E4DA" stroke="none"/>
+<rect x="60.0" y="135.0" width="230" height="6" fill="#F3E4DA"/>
+<text x="175" y="120.0" font-size="15" font-weight="700" fill="#2B2622" text-anchor="middle">SessionManager</text>
+<text x="175" y="130.0" font-size="10.5" fill="#7d7168" text-anchor="middle">(webapp/session.py)</text>
+<line x1="60.0" y1="141.0" x2="290.0" y2="141.0" stroke="#BE6E4A" stroke-width="1"/>
+<text x="72.0" y="156.0" font-size="12" fill="#2B2622">- _proc: Popen</text>
+<line x1="60.0" y1="163.0" x2="290.0" y2="163.0" stroke="#BE6E4A" stroke-width="1"/>
+<text x="72.0" y="178.0" font-size="12" fill="#2B2622">+ start(single): bool</text>
+<text x="72.0" y="196.0" font-size="12" fill="#2B2622">+ stop(): bool</text>
+<text x="72.0" y="214.0" font-size="12" fill="#2B2622">+ running(): bool</text>
+<rect x="370.0" y="95.0" width="210" height="107.0" rx="4" fill="#FFFFFF" stroke="#BE6E4A" stroke-width="1.6"/>
+<rect x="370.0" y="95.0" width="210" height="61.0" rx="4" fill="#F3E4DA" stroke="none"/>
+<rect x="370.0" y="150.0" width="210" height="6" fill="#F3E4DA"/>
+<text x="475" y="109.0" font-size="11" fill="#7d7168" text-anchor="middle" font-style="italic">«module»</text>
+<text x="475" y="135.0" font-size="15" font-weight="700" fill="#2B2622" text-anchor="middle">main</text>
+<text x="475" y="145.0" font-size="10.5" fill="#7d7168" text-anchor="middle">(main.py)</text>
+<line x1="370.0" y1="156.0" x2="580.0" y2="156.0" stroke="#BE6E4A" stroke-width="1"/>
+<line x1="370.0" y1="153.0" x2="580.0" y2="153.0" stroke="#BE6E4A" stroke-width="1"/>
+<text x="382.0" y="168.0" font-size="12" fill="#2B2622">+ main()  (web / --capture)</text>
+<rect x="650.0" y="95.0" width="270" height="228.0" rx="4" fill="#FFFFFF" stroke="#BE6E4A" stroke-width="1.6"/>
+<rect x="650.0" y="95.0" width="270" height="46.0" rx="4" fill="#F3E4DA" stroke="none"/>
+<rect x="650.0" y="135.0" width="270" height="6" fill="#F3E4DA"/>
+<text x="785" y="120.0" font-size="15" font-weight="700" fill="#2B2622" text-anchor="middle">App</text>
+<text x="785" y="130.0" font-size="10.5" fill="#7d7168" text-anchor="middle">(hotkey_capture.py)</text>
+<line x1="650.0" y1="141.0" x2="920.0" y2="141.0" stroke="#BE6E4A" stroke-width="1"/>
+<text x="662.0" y="156.0" font-size="12" fill="#2B2622">+ client: Anthropic</text>
+<text x="662.0" y="174.0" font-size="12" fill="#2B2622">+ running: bool</text>
+<text x="662.0" y="192.0" font-size="12" fill="#2B2622">+ burst_mode: bool</text>
+<text x="662.0" y="210.0" font-size="12" fill="#2B2622">+ team_mode: bool</text>
+<text x="662.0" y="228.0" font-size="12" fill="#2B2622">+ session_dir: Path</text>
+<line x1="650.0" y1="235.0" x2="920.0" y2="235.0" stroke="#BE6E4A" stroke-width="1"/>
+<text x="662.0" y="250.0" font-size="12" fill="#2B2622">+ toggle()</text>
+<text x="662.0" y="268.0" font-size="12" fill="#2B2622">+ _begin_burst_session()</text>
+<text x="662.0" y="286.0" font-size="12" fill="#2B2622">+ _burst_loop()</text>
+<text x="662.0" y="304.0" font-size="12" fill="#2B2622">+ _analyse_burst()</text>
+<rect x="905.0" y="375.0" width="250" height="215.0" rx="4" fill="#FFFFFF" stroke="#BE6E4A" stroke-width="1.6"/>
+<rect x="905.0" y="375.0" width="250" height="61.0" rx="4" fill="#F3E4DA" stroke="none"/>
+<rect x="905.0" y="430.0" width="250" height="6" fill="#F3E4DA"/>
+<text x="1030" y="389.0" font-size="11" fill="#7d7168" text-anchor="middle" font-style="italic">«dataclass»</text>
+<text x="1030" y="415.0" font-size="15" font-weight="700" fill="#2B2622" text-anchor="middle">ToolContext</text>
+<text x="1030" y="425.0" font-size="10.5" fill="#7d7168" text-anchor="middle">(defined in tools.py)</text>
+<line x1="905.0" y1="436.0" x2="1155.0" y2="436.0" stroke="#BE6E4A" stroke-width="1"/>
+<text x="917.0" y="451.0" font-size="12" fill="#2B2622">+ client</text>
+<text x="917.0" y="469.0" font-size="12" fill="#2B2622">+ images: list[Path]</text>
+<text x="917.0" y="487.0" font-size="12" fill="#2B2622">+ cache_dir: Path</text>
+<text x="917.0" y="505.0" font-size="12" fill="#2B2622">+ out_dir: Path</text>
+<text x="917.0" y="523.0" font-size="12" fill="#2B2622">+ out_name: str</text>
+<text x="917.0" y="541.0" font-size="12" fill="#2B2622">+ session_dir: Path</text>
+<text x="917.0" y="559.0" font-size="12" fill="#2B2622">+ confirm_saves: bool</text>
+<line x1="905.0" y1="566.0" x2="1155.0" y2="566.0" stroke="#BE6E4A" stroke-width="1"/>
+<rect x="325.0" y="375.0" width="250" height="129.0" rx="4" fill="#FFFFFF" stroke="#BE6E4A" stroke-width="1.6"/>
+<rect x="325.0" y="375.0" width="250" height="47.0" rx="4" fill="#F3E4DA" stroke="none"/>
+<rect x="325.0" y="416.0" width="250" height="6" fill="#F3E4DA"/>
+<text x="450" y="389.0" font-size="11" fill="#7d7168" text-anchor="middle" font-style="italic">«module»</text>
+<text x="450" y="415.0" font-size="15" font-weight="700" fill="#2B2622" text-anchor="middle">agent</text>
+<line x1="325.0" y1="422.0" x2="575.0" y2="422.0" stroke="#BE6E4A" stroke-width="1"/>
+<line x1="325.0" y1="419.0" x2="575.0" y2="419.0" stroke="#BE6E4A" stroke-width="1"/>
+<text x="337.0" y="434.0" font-size="12" fill="#2B2622">+ run_agent(client, ctx, goal)</text>
+<text x="337.0" y="452.0" font-size="12" fill="#2B2622">+ run_session()</text>
+<text x="337.0" y="470.0" font-size="12" fill="#2B2622">+ converse()</text>
+<rect x="605.0" y="375.0" width="270" height="165.0" rx="4" fill="#FFFFFF" stroke="#BE6E4A" stroke-width="1.6"/>
+<rect x="605.0" y="375.0" width="270" height="47.0" rx="4" fill="#F3E4DA" stroke="none"/>
+<rect x="605.0" y="416.0" width="270" height="6" fill="#F3E4DA"/>
+<text x="740" y="389.0" font-size="11" fill="#7d7168" text-anchor="middle" font-style="italic">«module»</text>
+<text x="740" y="415.0" font-size="15" font-weight="700" fill="#2B2622" text-anchor="middle">team</text>
+<line x1="605.0" y1="422.0" x2="875.0" y2="422.0" stroke="#BE6E4A" stroke-width="1"/>
+<line x1="605.0" y1="419.0" x2="875.0" y2="419.0" stroke="#BE6E4A" stroke-width="1"/>
+<text x="617.0" y="434.0" font-size="12" fill="#2B2622">+ run_team(client, ctx, goal)</text>
+<text x="617.0" y="452.0" font-size="12" fill="#2B2622">+ agent_extract()</text>
+<text x="617.0" y="470.0" font-size="12" fill="#2B2622">+ agent_analyze()</text>
+<text x="617.0" y="488.0" font-size="12" fill="#2B2622">+ agent_decoder()</text>
+<text x="617.0" y="506.0" font-size="12" fill="#2B2622">+ agent_diagrammer()</text>
+<rect x="465.0" y="650.0" width="270" height="121.0" rx="4" fill="#FFFFFF" stroke="#BE6E4A" stroke-width="1.6"/>
+<rect x="465.0" y="650.0" width="270" height="47.0" rx="4" fill="#F3E4DA" stroke="none"/>
+<rect x="465.0" y="691.0" width="270" height="6" fill="#F3E4DA"/>
+<text x="600" y="664.0" font-size="11" fill="#7d7168" text-anchor="middle" font-style="italic">«module»</text>
+<text x="600" y="690.0" font-size="15" font-weight="700" fill="#2B2622" text-anchor="middle">tools</text>
+<line x1="465.0" y1="697.0" x2="735.0" y2="697.0" stroke="#BE6E4A" stroke-width="1"/>
+<text x="477.0" y="712.0" font-size="12" fill="#2B2622">+ TOOL_SCHEMAS</text>
+<line x1="465.0" y1="719.0" x2="735.0" y2="719.0" stroke="#BE6E4A" stroke-width="1"/>
+<text x="477.0" y="734.0" font-size="12" fill="#2B2622">+ run_tool(name, ctx, input)</text>
+<text x="477.0" y="752.0" font-size="12" fill="#2B2622">+ _t_save_output()</text>
+</svg>

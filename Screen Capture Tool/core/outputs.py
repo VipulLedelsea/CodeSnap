@@ -70,6 +70,7 @@ def save_report_bundle(report: dict, dest_dir, name: str):
         "overview": report.get("overview", ""),
         "errors": report.get("errors", ""),
         "tech_stack": report.get("tech_stack", ""),
+        "diagrams": report.get("diagrams", ""),
         "extension": ext,
         "code": code,
         "code_file": code_path.name,

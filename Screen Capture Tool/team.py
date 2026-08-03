@@ -61,6 +61,9 @@ Return ONLY a JSON object (no prose, no code fences) with these keys:
   overview   (string)  — a clear, plain-English summary a non-expert can follow. One sentence on what it does overall, then one short paragraph per main part in everyday language (briefly explain any technical term). Logical order, short sentences. Weave INLINE citations like "(Screenshot 1)" into the sentences using the markers.
   tech_stack (string)  — AT MOST the 5 most important issues, most critical first. State whether the code is up to date overall, then up to 5 concrete points on obsolete/deprecated patterns, APIs, or libraries and the modern replacement. If fully current, say so in one line. Empty string if not code.
 
+EXAMPLE — format only. Do NOT reuse this wording; describe the ACTUAL content you receive:
+{"is_code": true, "language": "Python", "extension": "py", "overview": "This script reads a whole number and prints whether it is even or odd (Screenshot 1).", "tech_stack": "Current for its size. 1) Add a __main__ guard if it grows into a module."}
+
 Return JSON only."""
 
 
@@ -123,15 +126,75 @@ def agent_decoder(client, code: str, extension: str, language: str) -> dict:
             "remaining": None if res2.get("ok") else res2.get("errors", "")}
 
 
+DIAGRAMMER_SYSTEM = """You are the Diagrammer. You receive source code that was transcribed from a screen. Produce diagrams in Mermaid syntax based ONLY on what is actually present in the code. Never invent classes, methods, calls, or relationships that are not in the code. If the code is partial or cut off, diagram only what is visible and add a short Mermaid %% comment noting it is incomplete.
+
+Return EXACTLY these three sections, in order, each a bold label on its own line followed by one fenced ```mermaid block:
+
+**Class diagram**
+A Mermaid `classDiagram` of the classes actually defined (their attributes, methods, and relationships). If the code defines NO classes, output this single line instead of a code block: _No classes defined in the captured code._
+
+**Interaction diagram**
+A Mermaid `sequenceDiagram` of the main runtime flow visible in the code (which function or object calls which, in order). Keep it to the primary path.
+
+**Component / module diagram**
+A Mermaid `flowchart TD` of the modules / files / functions and their imports or calls as visible in the code.
+
+Keep each diagram small and readable. Emit VALID Mermaid only. Output nothing except the three labeled sections.
+
+EXAMPLE — this shows ONLY the required format and valid Mermaid syntax. Do NOT copy these names or structure; produce diagrams for the ACTUAL code you receive.
+
+**Class diagram**
+```mermaid
+classDiagram
+  class Timer {
+    +start()
+    +stop()
+  }
+```
+
+**Interaction diagram**
+```mermaid
+sequenceDiagram
+  Caller->>Timer: start()
+  Caller->>Timer: stop()
+```
+
+**Component / module diagram**
+```mermaid
+flowchart TD
+  main --> Timer
+```
+"""
+
+
+def agent_diagrammer(client, code: str, language: str) -> str:
+    """Diagrammer (Sonnet). Returns markdown with three fenced Mermaid diagrams
+    (class, interaction, component) derived ONLY from the captured code. Empty
+    string if there is no code."""
+    if not code.strip():
+        return ""
+    try:
+        msg = client.messages.create(
+            model=MODEL, max_tokens=2000, system=DIAGRAMMER_SYSTEM,
+            messages=[{"role": "user", "content": f"Language: {language or 'unknown'}\n\n{code}"}],
+        )
+        return "".join(getattr(b, "text", "") for b in msg.content).strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 # ── report assembly ──────────────────────────────────────────────────────────
 
-def _assemble(language, overview, errors, code, tech_stack, extension, is_code) -> str:
+def _assemble(language, overview, errors, code, tech_stack, extension, is_code, diagrams="") -> str:
     if is_code:
-        return (f"**Language:** {language}\n"
-                f"**Overview:** {overview}\n"
-                f"**Errors found:** {errors or 'None'}\n"
-                f"**Code:**\n```{extension or 'txt'}\n{code}\n```\n"
-                f"**Tech-stack review:** {tech_stack or 'n/a'}")
+        out = (f"**Language:** {language}\n"
+               f"**Overview:** {overview}\n"
+               f"**Errors found:** {errors or 'None'}\n"
+               f"**Code:**\n```{extension or 'txt'}\n{code}\n```\n"
+               f"**Tech-stack review:** {tech_stack or 'n/a'}")
+        if diagrams:
+            out += f"\n**Diagrams:**\n{diagrams}"
+        return out
     return (f"**Type:** {language or 'Document'}\n"
             f"**Overview:** {overview}\n\n{code}")
 
@@ -165,19 +228,35 @@ def _tc_repair(client, ctx, scratch, _inp):
     return json.dumps(summary)
 
 
+def _tc_diagram(client, ctx, scratch, _inp):
+    if not scratch.get("is_code"):
+        return "Content is not code — no diagrams needed."
+    code = scratch.get("code", "")
+    if not code.strip():
+        return "No code available to diagram."
+    d = agent_diagrammer(client, code, scratch.get("language", ""))
+    scratch["diagrams"] = d
+    n = d.count("```mermaid")
+    return f"Diagrammer produced {n} diagram(s): class, interaction, component/module."
+
+
 def _tc_finalize(client, ctx, scratch, inp):
     language = inp.get("language") or scratch.get("language", "")
     extension = inp.get("extension") or scratch.get("extension", "txt")
     overview = inp.get("overview", "")
-    errors = inp.get("errors") or scratch.get("errors", "None")
+    # Faithfulness: the Errors section reflects ONLY the Decoder's real compiler
+    # check (scratch['errors']), never anything the model typed into finalize.
+    errors = scratch.get("errors") or "None"
     tech = inp.get("tech_stack", "")
     is_code = bool(scratch.get("is_code", True))
     code = scratch.get("code", "")
-    scratch["report_md"] = _assemble(language, overview, errors, code, tech, extension, is_code)
+    diagrams = scratch.get("diagrams", "")
+    scratch["report_md"] = _assemble(language, overview, errors, code, tech, extension, is_code, diagrams)
     if is_code:
         saved = tools._t_save_output(ctx, {
             "format": "source", "content": code, "extension": extension,
-            "language": language, "overview": overview, "errors": errors, "tech_stack": tech})
+            "language": language, "overview": overview, "errors": errors, "tech_stack": tech,
+            "diagrams": diagrams})
     else:
         fmt = "docx" if extension in ("docx", "doc") else "text"
         saved = tools._t_save_output(ctx, {"format": fmt, "content": code or overview})
@@ -193,6 +272,9 @@ COORDINATOR_TOOLS = [
      "input_schema": {"type": "object", "properties": {}}},
     {"name": "repair",
      "description": "Delegate to the Decoder: syntax/compile-check the code as-captured and apply minimal, error-only fixes. Returns the REAL errors found and whether they were resolved. Only call if the content is code.",
+     "input_schema": {"type": "object", "properties": {}}},
+    {"name": "diagram",
+     "description": "Delegate to the Diagrammer: from the captured code, produce a Class diagram, an Interaction (sequence) diagram, and a Component/module diagram as Mermaid — using ONLY what is actually in the code. Call after repair, and only if the content is code.",
      "input_schema": {"type": "object", "properties": {}}},
     {"name": "finalize",
      "description": "Assemble and save the final report. Provide the prose fields; the code is taken from the Extractor/Decoder result automatically. Call exactly once, last.",
@@ -210,11 +292,12 @@ _TC_DISPATCH = {
     "get_transcription": _tc_get_transcription,
     "analyze": _tc_analyze,
     "repair": _tc_repair,
+    "diagram": _tc_diagram,
     "finalize": _tc_finalize,
 }
 
 _TC_STAGE = {"get_transcription": "read", "analyze": "classify",
-             "repair": "fix", "finalize": "save"}
+             "repair": "fix", "diagram": "save", "finalize": "save"}
 
 
 COORDINATOR_SYSTEM = """You are the Coordinator of a team of specialist agents. You never read the screenshots yourself — you delegate to your team, then assemble their results into one report. Core rule: NEVER invent, complete, or guess content; report only what your specialists return.
@@ -223,9 +306,10 @@ Your team (each is a tool):
   get_transcription — the Extractor (faithful, verbatim). Call FIRST.
   analyze           — the Analyst. Returns JSON {is_code, language, extension, overview, tech_stack}.
   repair            — the Decoder. Checks the code as-captured and fixes ONLY real errors. Reports the actual errors found. Call only if is_code is true.
+  diagram           — the Diagrammer. Produces Mermaid class, interaction, and component/module diagrams from the code. Call after repair, only if is_code is true.
   finalize          — assemble + save the report.
 
-Workflow: get_transcription -> analyze -> (if is_code) repair -> finalize.
+Workflow: get_transcription -> analyze -> (if is_code) repair -> (if is_code) diagram -> finalize.
 
 When you call finalize:
   - overview: use the Analyst's plain-English overview, keeping the inline (Screenshot N) citations.

@@ -51,6 +51,7 @@ def scan_reports(reports_dir) -> list:
             "overview": meta.get("overview", ""),
             "errors": meta.get("errors", ""),
             "tech_stack": meta.get("tech_stack", ""),
+            "diagrams": meta.get("diagrams", ""),
             "extension": meta.get("extension", ""),
             "code": meta.get("code", ""),
             "code_file": code_file,

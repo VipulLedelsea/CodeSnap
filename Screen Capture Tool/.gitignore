@@ -38,3 +38,5 @@ tests/real/*
 build/
 dist/
 *.spec.bak
+build/
+dist/

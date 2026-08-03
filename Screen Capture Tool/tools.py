@@ -29,7 +29,7 @@ class ToolContext:
     out_name: str = "agent_output"       # base filename for saved artifacts
     session_dir: Path = None             # live session folder (enables capture/ask-more)
     interactive: bool = False            # True in the live hotkey session
-    max_captures: int = 20               # safety cap on agent-driven captures
+    max_captures: int = 40               # safety cap on agent-driven captures (raised)
     region: dict = None                  # fixed capture rectangle (owned session)
     ready_event: object = None           # threading.Event set by the "next" hotkey
     confirm_saves: bool = True            # False in owned/auto mode -> save without asking
@@ -133,6 +133,7 @@ def _t_save_output(ctx, inp):
             "code": content, "extension": inp.get("extension", "txt"),
             "language": inp.get("language", ""), "overview": inp.get("overview", ""),
             "errors": inp.get("errors", ""), "tech_stack": inp.get("tech_stack", ""),
+            "diagrams": inp.get("diagrams", ""),
         }, dest, ctx.out_name)
     elif fmt == "docx":
         out = outputs.save_docx({"extracted_text": content}, dest, ctx.out_name)
@@ -316,7 +317,8 @@ TOOL_SCHEMAS = [
                                      "language": {"type": "string"},
                                      "overview": {"type": "string", "description": "the Overview text (with inline (Screenshot N) citations)"},
                                      "errors": {"type": "string", "description": "the Errors found text"},
-                                     "tech_stack": {"type": "string", "description": "the Tech-stack review text"}},
+                                     "tech_stack": {"type": "string", "description": "the Tech-stack review text"},
+                                     "diagrams": {"type": "string", "description": "optional Diagrams section: Mermaid class/interaction/component diagrams derived only from the captured code"}},
                       "required": ["content", "format"]}},
     {"name": "request_more_captures",
      "description": "Ask the user to capture more screenshots when the current ones look incomplete or cut off.",
