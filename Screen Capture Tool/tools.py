@@ -89,14 +89,14 @@ def _t_check_captured_code(ctx, inp):
     (the model cannot re-type/clean it first), so real on-screen errors surface.
     Returns the raw code + the checker result."""
     ext = outputs.safe_ext(inp.get("extension", "txt"))
-    from core.analysis import cache_path_for, stitch_parts
-    parts = []
+    from core.analysis import cache_path_for, merge_frames
+    raws = []
     for pth in sorted(ctx.images):
         if ctx.cache_dir is not None:
             cf = cache_path_for(pth, ctx.cache_dir)
             if cf.exists():
-                parts.append(cf.read_text())
-    code = stitch_parts(parts)
+                raws.append(cf.read_text())
+    code, _ = merge_frames(raws)
     if not code.strip():
         return json.dumps({"ok": None, "note": "No cached extraction yet — read the captures first."})
     tmp = Path(tempfile.mktemp(suffix=f".{ext}"))

@@ -92,3 +92,50 @@ def test_validate_js():
 def test_validate_c():
     assert _check("int main(void){return 0;}\n", "c")["ok"] is True
     assert _check("int main(void){return 0\n", "c")["ok"] is False
+
+
+# ── extraction cleaning (regression for the "markdown fed to javac" bug) ──────
+
+def test_clean_source_strips_fences_and_headers():
+    from core.analysis import clean_source
+    messy = "# Title\n\n```java\npublic class A {}\n```"
+    out = clean_source(messy)
+    assert "```" not in out
+    assert "# Title" not in out
+    assert "public class A {}" in out
+
+
+def test_clean_source_strips_line_number_gutter():
+    from core.analysis import clean_source
+    messy = "```py\n1  x = 1\n2  y = 2\n3  print(x + y)\n```"
+    out = clean_source(messy)
+    assert "1  x" not in out and "2  y" not in out
+    assert "x = 1" in out and "print(x + y)" in out
+
+
+def test_merge_frames_collapses_duplicate_screens():
+    from core.analysis import merge_frames
+    a = "```java\npublic class A {\n    void m() {}\n}\n```"
+    b = "```java\n1  public class A {\n2      void m() {}\n3  }\n```"  # same code, gutter
+    code, parts = merge_frames([a, b, a])
+    assert code.count("public class A") == 1          # collapsed to one copy
+    assert "    void m()" in code                      # kept the indented version
+    assert "```" not in code and "1  public" not in code
+
+
+def test_clean_source_strips_markdown_headers_without_fences():
+    from core.analysis import clean_source, merge_frames
+    # a screen-reader adding "# ..." headers over code (no fences) must not reach the compiler
+    a = "public class A {\n    void m() {}\n}"
+    b = "# A.java\n\n# public class A\n\n" + a
+    out = clean_source(b)
+    assert not any(l.lstrip().startswith("#") for l in out.splitlines())
+    # and duplicate frames (one plain, one header-prefixed) collapse to a single copy
+    code, _ = merge_frames([a, b, a])
+    assert code.count("public class A") == 1
+
+
+def test_clean_source_keeps_real_comments_and_directives():
+    from core.analysis import clean_source
+    assert "# note here" in clean_source("x = 1\n# note here\ny = 2")   # python comment kept
+    assert "#include <stdio.h>" in clean_source("#include <stdio.h>\nint main(){return 0;}")

@@ -40,14 +40,14 @@ def agent_extract(ctx) -> dict:
                (lets the Analyst cite which screenshot each part came from)
     Faithfulness is structural: extraction goes through the Haiku OCR path and
     the returned code is the stitched cache, never a paraphrase."""
-    parts = []
+    raws = []
     for p in sorted(ctx.images):
         if ctx.cache_dir is not None:
             analysis.extract_to_cache(ctx.client, p, ctx.cache_dir)
-            parts.append(analysis.cache_path_for(p, ctx.cache_dir).read_text())
+            raws.append(analysis.cache_path_for(p, ctx.cache_dir).read_text())
         else:
-            parts.append(analysis.extract_one(ctx.client, p))
-    code = analysis.stitch_parts(parts)
+            raws.append(analysis.extract_one(ctx.client, p))
+    code, parts = analysis.merge_frames(raws)   # clean + collapse dups + stitch
     marked = "\n\n".join(f"===== Screenshot {i + 1} =====\n{t}" for i, t in enumerate(parts))
     return {"code": code, "marked": marked, "parts": parts}
 

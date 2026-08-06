@@ -176,28 +176,22 @@ def _media_type(path: Path) -> str:
 # call for the overview. This is the Milestone 5 path used by the hotkey tool.
 
 EXTRACT_SYSTEM_PROMPT = (
-    "You are a screen-reading assistant. Extract ALL visible text from this single "
-    "screenshot, preserving the original structure, as Markdown:\n"
-    "  - Headings -> # / ## / ###\n"
-    "  - Bullet lists -> -\n"
-    "  - Numbered lists -> 1. 2. 3.\n"
-    "  - Plain paragraphs -> paragraphs separated by blank lines\n"
-    "Keep code and indentation EXACTLY as shown — character for character, space for space. "
-    "Transcribe mistakes faithfully: if a line is wrongly indented, mis-aligned, or has a typo, "
+    "You are a screen-reading assistant. Transcribe ALL visible text from this single "
+    "screenshot EXACTLY as it appears — character for character, space for space, line for line. "
+    "Output PLAIN TEXT only. Do NOT convert anything to Markdown and do NOT add any Markdown that "
+    "is not literally on screen: no # headings, no ``` code fences, no - bullets, no ** bold. "
+    "Just reproduce the raw text/code as-is. "
+    "Do NOT include the editor's line-number gutter, code-folding arrows or chevrons, breakpoint "
+    "dots, diff/git markers, minimaps, scrollbars, tab bars, or status bars — transcribe only the "
+    "actual content. Omit line numbers entirely but keep the code's own indentation. "
+    "If several windows or apps are visible, transcribe ONLY the primary code or document content "
+    "(the focused editor pane); ignore other windows, browser tabs, the dock, and menu bars. "
+    "Reproduce mistakes faithfully: if a line is wrongly indented, mis-aligned, or has a typo, "
     "reproduce it AS-IS. Do NOT correct, complete, reformat, or improve anything. "
+    "Example: if a method's def line is at the SAME indentation as its class header (not indented "
+    "under it), copy it at that same wrong indentation — do not fix it. "
     "If a line is cut off at the screen edge or unreadable, transcribe what is visible and append "
-    "the marker [CUT OFF] — never guess the missing part. "
-    "Example: if a method's def line is at the SAME indentation as its class header "
-    "(not indented under it), copy it at that same wrong indentation — do not indent it to fix it. "
-    "Ignore editor and application UI chrome that is not part of the content itself: "
-    "gutter line numbers, code-folding arrows or chevrons (such as v, >, or triangle "
-    "glyphs), breakpoint dots, diff/git markers, minimaps, scrollbars, tab bars, and "
-    "status bars. If several windows or apps are visible, transcribe ONLY the primary code or "
-    "document content (e.g. the focused editor pane); ignore other windows, browser tabs, the "
-    "dock, and menu bars. Transcribe ONLY the actual content (e.g. the code or document text). "
-    "Output ONLY the extracted Markdown text — "
-    "no commentary, no surrounding code fences. If there is no meaningful text, "
-    "output nothing."
+    "the marker [CUT OFF] — never guess. If there is no meaningful text, output nothing."
 )
 
 FINALIZE_SYSTEM_PROMPT = (
@@ -280,6 +274,96 @@ def _overlap_len(a: list, b: list, min_overlap: int = 2, max_check: int = 300) -
         if [x.rstrip() for x in a[-k:]] == [x.rstrip() for x in b[:k]]:
             return k
     return 0
+
+
+import re as _re
+
+_FENCE_RE = _re.compile(r"```[^\n`]*\n(.*?)```", _re.S)
+# leading line-number gutter: digits, an optional gutter glyph (Eclipse fold marker,
+# middot, colon), then whitespace — e.g. "12  ", "5⊖ ", "3: "
+_GUTTER_RE = _re.compile(r"^[ \t]*\d{1,4}[ \t\u00b7:.\u2296\u2299\u25cb\u2d54]?[ \t]+")
+
+
+def _strip_gutter(text: str) -> str:
+    lines = text.split("\n")
+    nonempty = [l for l in lines if l.strip()]
+    if nonempty and sum(1 for l in nonempty if _GUTTER_RE.match(l)) >= 0.6 * len(nonempty):
+        lines = [_GUTTER_RE.sub("", l, count=1) if _GUTTER_RE.match(l) else l for l in lines]
+    return "\n".join(lines)
+
+
+def _indent_score(t: str) -> int:
+    return sum(len(l) - len(l.lstrip()) for l in t.splitlines())
+
+
+def _dedup_best(items: list) -> list:
+    """Drop items that are the same code modulo whitespace; keep the best-indented
+    copy of each, in first-seen order."""
+    groups, order = {}, []
+    for c in items:
+        key = _re.sub(r"\s+", "", c)
+        if not key:
+            continue
+        if key not in groups:
+            groups[key] = c
+            order.append(key)
+        elif _indent_score(c) > _indent_score(groups[key]):
+            groups[key] = c
+    return [groups[k] for k in order]
+
+
+_CODE_KW = _re.compile(
+    r"^(public|private|protected|class|interface|abstract|import|package|def|function|"
+    r"const|let|var|int|float|double|char|bool|void|static|final|return|new|struct|enum|"
+    r"namespace|using|include|from|export|func|fn|type)\b")
+
+
+def _strip_md_headers(text: str) -> str:
+    """Drop Markdown ATX header lines a screen-reader adds over code — only when they're
+    clearly code artifacts: a bare filename, a line starting with a code keyword, or text
+    that appears in a real code line. Preserves ordinary comments and prose headers, and
+    C preprocessor directives (which have no space after '#')."""
+    lines = text.split("\n")
+    codeset = [l.strip() for l in lines if l.strip() and not l.lstrip().startswith("#")]
+    out = []
+    for l in lines:
+        m = _re.match(r"^\s*#{1,6}\s+(.+?)\s*$", l)
+        if m:
+            h = m.group(1).strip()
+            is_file = bool(_re.match(r"^[\w./-]+\.[A-Za-z0-9]{1,5}$", h))
+            is_kw = bool(_CODE_KW.match(h))
+            in_code = len(h) > 4 and any(h in c or c in h for c in codeset)
+            if is_file or is_kw or in_code:
+                continue
+        out.append(l)
+    return "\n".join(out)
+
+
+def clean_source(text: str) -> str:
+    """Turn a raw OCR'd code extraction into compiler-ready source: unwrap markdown
+    code fences (dropping ```lang, ``` and any # headers/prose outside them), remove
+    an editor line-number gutter, and drop identical duplicate blocks. Faithful — it
+    only strips transcription/formatting noise, never changes the code itself."""
+    if not text or not text.strip():
+        return text or ""
+    blocks = _FENCE_RE.findall(text)
+    if blocks:
+        cleaned = [_strip_gutter(b).strip("\n") for b in blocks]
+        text = "\n\n".join(_dedup_best(cleaned) or cleaned)
+    else:
+        text = _re.sub(r"^[ \t]*```.*$", "", text, flags=_re.M)  # stray fence lines
+        text = _strip_gutter(text)
+    text = _strip_md_headers(text)
+    return text.strip("\n")
+
+
+def merge_frames(raw_parts: list):
+    """Clean each frame (fences/gutters/dup blocks), collapse frames that are the
+    same code (keeping the best-indented copy), stitch overlapping ones. Returns
+    (merged_code, clean_parts)."""
+    cleaned = [clean_source(r) for r in raw_parts]
+    parts = _dedup_best(cleaned) or [c for c in cleaned if c.strip()]
+    return stitch_parts(parts), parts
 
 
 def stitch_parts(parts: list) -> str:
