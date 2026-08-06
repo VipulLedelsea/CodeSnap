@@ -35,9 +35,7 @@ import concurrent.futures
 import io
 import os
 import shutil
-import subprocess
 import sys
-import tempfile
 import textwrap
 import threading
 import time

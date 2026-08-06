@@ -5,6 +5,10 @@ language's own parser/compiler in a syntax-check mode and reports any errors.
 If the required toolchain isn't installed, the check is skipped (checked=False)
 and the file is still delivered, just unverified.
 
+Tools are resolved to ABSOLUTE paths (searching PATH plus common Homebrew/JDK
+locations), so checks also work inside a Finder-launched .app, whose PATH is
+stripped down and would otherwise miss /opt/homebrew/bin etc.
+
 check_source(path) -> {
     "checked": bool,   # was a check actually run?
     "ok": bool,        # did it pass? (only meaningful if checked)
@@ -15,6 +19,7 @@ check_source(path) -> {
 """
 
 import ast
+import os
 import shutil
 import subprocess
 import tempfile
@@ -22,9 +27,30 @@ from pathlib import Path
 
 TIMEOUT = 30  # seconds per check
 
+# macOS GUI apps inherit a minimal PATH (/usr/bin:/bin:...), so Homebrew- and
+# JDK-installed compilers won't be found by name. Search these too.
+_EXTRA_DIRS = [
+    "/opt/homebrew/bin", "/usr/local/bin",
+    "/opt/homebrew/opt/openjdk/bin", "/usr/local/opt/openjdk/bin",
+    "/opt/homebrew/opt/node/bin", "/usr/local/opt/node/bin",
+    "/Library/Frameworks/Mono.framework/Versions/Current/bin",
+    "/usr/local/share/dotnet", "/opt/homebrew/share/dotnet",
+    "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+]
+
+
+def _which(cmd: str):
+    """Absolute path to a tool, or None. Falls back to common install dirs when
+    the tool isn't on PATH (the .app case)."""
+    p = shutil.which(cmd)
+    if p:
+        return p
+    search = (os.environ.get("PATH", "") + os.pathsep + os.pathsep.join(_EXTRA_DIRS))
+    return shutil.which(cmd, path=search)
+
 
 def _have(cmd: str) -> bool:
-    return shutil.which(cmd) is not None
+    return _which(cmd) is not None
 
 
 def _run(args: list, timeout: int = TIMEOUT):
@@ -52,42 +78,45 @@ def _check_python(path: Path):
 
 
 def _check_js(path: Path):
-    if not _have("node"):
+    node = _which("node")
+    if not node:
         return _result(False, False, "node --check", note="node not installed")
-    rc, out = _run(["node", "--check", str(path)])
+    rc, out = _run([node, "--check", str(path)])
     return _result(True, rc == 0, "node --check", errors=out)
 
 
 def _check_c(path: Path):
-    cc = "gcc" if _have("gcc") else ("clang" if _have("clang") else None)
-    if cc is None:
+    cc = _which("gcc") or _which("clang")
+    if not cc:
         return _result(False, False, "gcc/clang", note="no C compiler installed")
     rc, out = _run([cc, "-fsyntax-only", str(path)])
-    return _result(True, rc == 0, f"{cc} -fsyntax-only", errors=out)
+    return _result(True, rc == 0, f"{Path(cc).name} -fsyntax-only", errors=out)
 
 
 def _check_cpp(path: Path):
-    cc = "g++" if _have("g++") else ("clang++" if _have("clang++") else None)
-    if cc is None:
+    cc = _which("g++") or _which("clang++")
+    if not cc:
         return _result(False, False, "g++/clang++", note="no C++ compiler installed")
     rc, out = _run([cc, "-fsyntax-only", str(path)])
-    return _result(True, rc == 0, f"{cc} -fsyntax-only", errors=out)
+    return _result(True, rc == 0, f"{Path(cc).name} -fsyntax-only", errors=out)
 
 
 def _check_csharp(path: Path):
-    if not _have("csc"):
+    csc = _which("csc")
+    if not csc:
         return _result(False, False, "csc", note="csc (.NET/Mono) not installed")
     with tempfile.TemporaryDirectory() as td:
         out_dll = Path(td) / "out.dll"
-        rc, out = _run(["csc", "-nologo", "-target:library", f"-out:{out_dll}", str(path)])
+        rc, out = _run([csc, "-nologo", "-target:library", f"-out:{out_dll}", str(path)])
     return _result(True, rc == 0, "csc", errors=out)
 
 
 def _check_java(path: Path):
-    if not _have("javac"):
+    javac = _which("javac")
+    if not javac:
         return _result(False, False, "javac", note="javac not installed")
     with tempfile.TemporaryDirectory() as td:
-        rc, out = _run(["javac", "-d", td, str(path)])
+        rc, out = _run([javac, "-d", td, str(path)])
     return _result(True, rc == 0, "javac", errors=out)
 
 
