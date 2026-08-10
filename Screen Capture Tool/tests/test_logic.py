@@ -139,3 +139,54 @@ def test_clean_source_keeps_real_comments_and_directives():
     from core.analysis import clean_source
     assert "# note here" in clean_source("x = 1\n# note here\ny = 2")   # python comment kept
     assert "#include <stdio.h>" in clean_source("#include <stdio.h>\nint main(){return 0;}")
+
+
+def test_looks_truncated_distinguishes_capture_cutoff_from_real_errors():
+    from core.validate import looks_truncated
+    assert looks_truncated("unterminated triple-quoted string literal (detected at line 99)")
+    assert looks_truncated("SyntaxError: '(' was never closed")
+    assert looks_truncated("reached end of file while parsing")
+    assert not looks_truncated("IndentationError: expected an indented block")
+    assert not looks_truncated("error: ';' expected")
+
+
+def test_merge_frames_handles_ocr_variance_and_duplicate_recaptures():
+    from core.analysis import merge_frames
+    full = [
+        "class Book:", "    title = ''", "    author = ''",
+        "class Library:", "    def __init__(self):", "        self.books = []",
+        "    def add(self, b):", "        self.books.append(b)",
+    ]
+    b = lambda i, j: "\n".join(full[i:j])
+    f1 = b(0, 5)                                                  # top: through def __init__
+    f2 = b(3, 8).replace("class Library:", "class Library :")     # overlaps 2 lines + OCR wobble
+    f3 = b(0, 5).replace("class Book:", "class Book :")           # duplicate re-capture of the top
+    code, _ = merge_frames([f1, f2, f3])
+    assert code.count("class Book") == 1        # no duplicated class
+    assert code.count("class Library") == 1
+    assert "def add" in code                    # bottom content preserved
+    assert len(code.splitlines()) <= 12         # not a concatenated mess
+
+
+def test_merge_frames_top_stays_visible_each_frame():
+    # the real failure: short-ish file where every frame re-shows the top and just
+    # reveals a bit more at the bottom (top never scrolls off). Must not duplicate.
+    from core.analysis import merge_frames
+    full = [f"a{i} = {i}" for i in range(1, 16)]
+    full[2] = "class Book:"; full[9] = "class Library:"
+    w = lambda t: t.replace("class Book:", "class Book :")  # OCR wobble
+    b = lambda i, j: w("\n".join(full[i:j]))
+    code, _ = merge_frames([b(0, 8), b(0, 12), b(0, 15)])   # top stays, grows downward
+    assert code.count("class Book") == 1
+    assert code.count("class Library") == 1
+    assert "a15 = 15" in code                                # last line captured
+    assert len([l for l in code.splitlines() if l.strip()]) <= 17
+
+
+def test_merge_frames_falls_back_when_stitch_would_duplicate():
+    # even if stitching fails on messy frames, the result must not duplicate a class.
+    from core.analysis import merge_frames
+    whole = "class A:\n    def m(self):\n        return 1\n\nclass B:\n    def n(self):\n        return 2\n"
+    frames = [whole, whole.replace("return 1", "return 1 "), whole.replace("class A:", "class A: ")]
+    code, _ = merge_frames(frames)
+    assert code.count("class A") == 1 and code.count("class B") == 1

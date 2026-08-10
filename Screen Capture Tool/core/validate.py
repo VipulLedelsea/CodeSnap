@@ -115,8 +115,15 @@ def _check_java(path: Path):
     javac = _which("javac")
     if not javac:
         return _result(False, False, "javac", note="javac not installed")
+    src = path.read_text()
+    import re
+    m = re.search(r"\bpublic\s+(?:final\s+|abstract\s+)?class\s+([A-Za-z_]\w*)", src)
     with tempfile.TemporaryDirectory() as td:
-        rc, out = _run([javac, "-d", td, str(path)])
+        # javac requires a public class to live in <ClassName>.java — name it to match
+        # so we don't report a false "should be declared in a file named X.java" error.
+        target = Path(td) / (f"{m.group(1)}.java" if m else path.name)
+        target.write_text(src)
+        rc, out = _run([javac, "-d", td, str(target)])
     return _result(True, rc == 0, "javac", errors=out)
 
 
@@ -128,6 +135,21 @@ _CHECKERS = {
     "cs": _check_csharp,
     "java": _check_java,
 }
+
+
+_TRUNCATION_MARKERS = (
+    "unterminated", "was never closed", "unexpected eof", "unexpected end of input",
+    "eof while parsing", "reached end of file while parsing", "at end of input",
+    "expected declaration", "premature end", "unexpected end of file",
+)
+
+
+def looks_truncated(errors: str) -> bool:
+    """True if the compiler error smells like the capture was cut off (an open
+    string/brace never closed, EOF reached mid-statement) rather than a real code
+    bug — i.e. the closing part probably wasn't captured."""
+    e = (errors or "").lower()
+    return any(m in e for m in _TRUNCATION_MARKERS)
 
 
 def check_source(path) -> dict:

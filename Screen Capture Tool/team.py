@@ -49,20 +49,21 @@ def agent_extract(ctx) -> dict:
             raws.append(analysis.extract_one(ctx.client, p))
     code, parts = analysis.merge_frames(raws)   # clean + collapse dups + stitch
     marked = "\n\n".join(f"===== Screenshot {i + 1} =====\n{t}" for i, t in enumerate(parts))
-    return {"code": code, "marked": marked, "parts": parts}
+    numbered = "\n".join(f"{i + 1:>4}  {line}" for i, line in enumerate(code.splitlines()))
+    return {"code": code, "marked": marked, "numbered": numbered, "parts": parts}
 
 
-ANALYST_SYSTEM = """You are the Analyst on a team. You receive a faithful transcription of on-screen content, split by '===== Screenshot N =====' markers. You do NOT edit the content — you describe it.
+ANALYST_SYSTEM = """You are the Analyst on a team. You receive the source code with a line number prefixed to every line. You do NOT edit the content — you describe it.
 
 Return ONLY a JSON object (no prose, no code fences) with these keys:
   is_code    (boolean) — is the primary content source code?
   language   (string)  — e.g. "Python", "JavaScript", "C++" (empty if not code)
   extension  (string)  — file extension without a dot, e.g. "py", "js", "cpp" (empty if not code)
-  overview   (string)  — a clear, plain-English summary a non-expert can follow. One sentence on what it does overall, then one short paragraph per main part in everyday language (briefly explain any technical term). Logical order, short sentences. Weave INLINE citations like "(Screenshot 1)" into the sentences using the markers.
-  tech_stack (string)  — AT MOST the 5 most important issues, most critical first. State whether the code is up to date overall, then up to 5 concrete points on obsolete/deprecated patterns, APIs, or libraries and the modern replacement. If fully current, say so in one line. Empty string if not code.
+  overview   (string)  — a clear, plain-English summary a non-expert can follow. One sentence on what it does overall, then one short paragraph per main part in everyday language (briefly explain any technical term). Logical order, short sentences. Weave INLINE LINE-NUMBER citations into the sentences, e.g. "(lines 5-11)" or "(line 27)", using the numbers shown. Do NOT mention screenshots.
+  tech_stack (string)  — an honest, brief review. If the code is current and well written, SAY SO in one line and stop — do NOT invent nitpicks or filler to make a list. Only when there are genuine, worthwhile improvements, list them (at most 5, most important first). Put EACH point on its OWN line, numbered "1. ", "2. ", ... with a real newline (\n) between items. Empty string if not code.
 
 EXAMPLE — format only. Do NOT reuse this wording; describe the ACTUAL content you receive:
-{"is_code": true, "language": "Python", "extension": "py", "overview": "This script reads a whole number and prints whether it is even or odd (Screenshot 1).", "tech_stack": "Current for its size. 1) Add a __main__ guard if it grows into a module."}
+{"is_code": true, "language": "Python", "extension": "py", "overview": "This script reads a whole number and prints whether it is even or odd (lines 1-4).", "tech_stack": "Up to date and idiomatic for its size; no significant changes needed."}
 
 Return JSON only."""
 
@@ -119,6 +120,15 @@ def agent_decoder(client, code: str, extension: str, language: str) -> dict:
         return {"errors": "None", "code": code, "checked": True,
                 "tool": res.get("tool", ""), "resolved": True}
     errors = res.get("errors", "")
+    if validate.looks_truncated(errors):
+        # The capture was likely cut off (an open quote/brace/statement never closed),
+        # so this is probably NOT a real code bug. Do NOT "fix" it by inventing the
+        # missing part — flag it as an incomplete capture instead.
+        note = ("Possible incomplete capture — the code may have been cut off before its end "
+                "(e.g. a closing quote or brace was not captured), so this may not be a real "
+                "error. If the code is complete on screen, re-capture and scroll to the end.")
+        return {"errors": f"{note}\n(checker output: {errors})", "code": code, "checked": True,
+                "tool": res.get("tool", ""), "resolved": None, "truncated": True}
     fixed = outputs.strip_code_fences(analysis.fix_source(client, code, language, errors))
     res2 = _check(fixed, extension)
     return {"errors": errors, "code": fixed, "checked": True, "tool": res.get("tool", ""),
@@ -205,11 +215,12 @@ def _tc_get_transcription(client, ctx, scratch, _inp):
     ex = agent_extract(ctx)
     scratch["code"] = ex["code"]
     scratch["marked"] = ex["marked"]
+    scratch["numbered"] = ex.get("numbered", "")
     return ex["marked"] or "(no text found in the captures)"
 
 
 def _tc_analyze(client, ctx, scratch, _inp):
-    a = agent_analyze(client, scratch.get("marked") or scratch.get("code", ""))
+    a = agent_analyze(client, scratch.get("numbered") or scratch.get("code", ""))
     scratch["analysis"] = a
     scratch["is_code"] = a["is_code"]
     scratch["language"] = a["language"]
@@ -241,13 +252,15 @@ def _tc_diagram(client, ctx, scratch, _inp):
 
 
 def _tc_finalize(client, ctx, scratch, inp):
-    language = inp.get("language") or scratch.get("language", "")
-    extension = inp.get("extension") or scratch.get("extension", "txt")
-    overview = inp.get("overview", "")
-    # Faithfulness: the Errors section reflects ONLY the Decoder's real compiler
-    # check (scratch['errors']), never anything the model typed into finalize.
+    a = scratch.get("analysis", {}) or {}
+    language = a.get("language") or inp.get("language") or scratch.get("language", "")
+    extension = a.get("extension") or inp.get("extension") or scratch.get("extension", "txt")
+    # Overview + tech-stack come straight from the Analyst so its line-number
+    # citations and per-line formatting are preserved (the Coordinator can't reword them).
+    overview = a.get("overview") or inp.get("overview", "")
+    tech = a.get("tech_stack", inp.get("tech_stack", "")) if a else inp.get("tech_stack", "")
+    # Errors reflect ONLY the Decoder's real compiler check — never model-typed.
     errors = scratch.get("errors") or "None"
-    tech = inp.get("tech_stack", "")
     is_code = bool(scratch.get("is_code", True))
     code = scratch.get("code", "")
     diagrams = scratch.get("diagrams", "")
@@ -312,7 +325,7 @@ Your team (each is a tool):
 Workflow: get_transcription -> analyze -> (if is_code) repair -> (if is_code) diagram -> finalize.
 
 When you call finalize:
-  - overview: use the Analyst's plain-English overview, keeping the inline (Screenshot N) citations.
+  - overview: use the Analyst's plain-English overview, keeping its inline line-number citations.
   - errors: the errors the Decoder reported (or 'None'). Never invent fixes beyond what the Decoder did.
   - tech_stack: the Analyst's top-5 review (empty for non-code).
 Call finalize exactly once, then stop. Do not describe the content in your own words beyond passing the specialists' results through."""

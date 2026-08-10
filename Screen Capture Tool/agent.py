@@ -33,16 +33,16 @@ Workflow:
   3. If it is CODE: call check_code on the code EXACTLY as captured (do not pre-fix it). The errors it returns are the REAL errors in the captured code — these are what you report.
   4. Present your final answer in EXACTLY this format (Markdown):
         **Language:** <language>
-        **Overview:** <A clear, plain-English summary that a non-expert can follow. Start with one sentence saying what the whole thing does overall. Then walk through it in a logical order, one short paragraph per main part, explaining what each part does in everyday language (avoid jargon; if you must use a technical term, briefly say what it means). Weave INLINE source citations into the sentences — after each part you describe, note the screenshot it came from in parentheses. Keep sentences short and easy to read. Example: "This app answers questions by looking up relevant documents before responding — a retrieval-augmented (RAG) system (Screenshot 1). It first pulls candidate documents using two search methods and merges them (Screenshot 2)...">
+        **Overview:** <A clear, plain-English summary that a non-expert can follow. Start with one sentence saying what the whole thing does overall. Then walk through it in a logical order, one short paragraph per main part, explaining what each part does in everyday language (avoid jargon; if you must use a technical term, briefly say what it means). Weave INLINE line-number citations into the sentences — after each part you describe, note the line(s) it comes from in parentheses, e.g. "(lines 5-11)" or "(line 27)". Do NOT mention screenshots. Keep sentences short and easy to read. Example: "This app answers questions by looking up relevant documents before responding — a retrieval-augmented (RAG) system (lines 1-20). It first pulls candidate documents using two search methods and merges them (lines 22-40)...">
         **Errors found:** <the actual errors check_code reported on the as-captured code, e.g. an IndentationError with its line; or 'None' only if it genuinely passed. List blank/cut-off captures here too.>
         **Code:**
         ```<ext>
         <the code — corrected ONLY for the specific errors you reported (e.g. fix the bad indent). Do NOT change anything else, and do NOT invent content for missing/cut-off parts; leave a clear  # [missing — recapture]  marker instead.>
         ```
-        **Tech-stack review:** <List AT MOST the 5 most important issues, most critical first. State clearly whether the code is up to date overall, then give at most 5 concrete points covering obsolete/deprecated patterns, APIs, or libraries and the newer idioms/APIs, better practices, or updated dependencies to use instead. If there are more than 5, keep only the 5 that matter most and omit the rest. If it is fully current, say so in one line.>
+        **Tech-stack review:** <An honest, brief review. If the code is current and well written, say so in one line and stop — do NOT invent nitpicks or filler. Only when there are genuine, worthwhile improvements, list them (at most 5, most important first), putting EACH point on its own line.>
   5. In that SAME turn, also call save_output (format 'source', extension, content = the code you displayed, AND language + overview + errors + tech_stack = the exact sections you just presented) so the full report is saved with the code. Never save before presenting.
 
-For non-code content: give **Language/Type** and **Overview** (with the same inline (Screenshot N) citations), show the text, then call save_output ('docx' for documents, else 'text').
+For non-code content: give **Language/Type** and **Overview** (with the same inline line-number citations), show the text, then call save_output ('docx' for documents, else 'text').
 Never execute the captured code (check_code only compiles/parses). Do not re-read a screenshot you already read.
 """
 
@@ -153,15 +153,15 @@ Workflow:
   4. If it is CODE: call check_captured_code (with the extension) — it checks the raw on-screen text and returns {code, errors}. Those errors ARE what you report; do not fix the code before checking.
   5. Present your final answer in EXACTLY this format (Markdown):
         **Language:** <language>
-        **Overview:** <A clear, plain-English summary a non-expert can follow. One sentence on what it does overall, then one short paragraph per main part in everyday language (explain any technical term briefly), in a logical order. Weave INLINE source citations into the sentences, e.g. "...a main pipeline (Screenshot 1), then it merges two search methods (Screenshot 2)...". Keep sentences short.>
+        **Overview:** <A clear, plain-English summary a non-expert can follow. One sentence on what it does overall, then one short paragraph per main part in everyday language (explain any technical term briefly), in a logical order. Weave INLINE line-number citations into the sentences, e.g. "...a main pipeline (lines 1-20), then it merges two search methods (lines 22-40)...". Do NOT mention screenshots. Keep sentences short.>
         **Errors found:** <the actual errors check_code reported, e.g. an IndentationError with its line; or 'None'>
         **Code:**
         ```<ext>
         <the exact code returned by check_captured_code, corrected ONLY for the reported errors; never invent missing parts — leave  # [missing — recapture]  instead>
         ```
-        **Tech-stack review:** <List AT MOST the 5 most important issues, most critical first. State clearly whether the code is up to date overall, then give at most 5 concrete points covering obsolete/deprecated patterns, APIs, or libraries and the newer idioms/APIs, better practices, or updated dependencies to use instead. If there are more than 5, keep only the 5 that matter most and omit the rest. If it is fully current, say so in one line.>
+        **Tech-stack review:** <An honest, brief review. If the code is current and well written, say so in one line and stop — do NOT invent nitpicks or filler. Only when there are genuine, worthwhile improvements, list them (at most 5, most important first), putting EACH point on its own line.>
   6. In that SAME turn, also call save_output (format 'source', extension, content = the code, AND language + overview + errors + tech_stack = the sections you presented) so the full report is saved with the code. It saves automatically and notifies the user.
-For non-code: give **Language/Type** + **Overview** (with inline (Screenshot N) citations), show the text, then save_output ('docx' or 'text').
+For non-code: give **Language/Type** + **Overview** (with inline line-number citations), show the text, then save_output ('docx' or 'text').
 Never execute captured code (check_code only compiles/parses). Do not re-read a screenshot you already read.
 """
 

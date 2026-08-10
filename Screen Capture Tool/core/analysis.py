@@ -23,7 +23,7 @@ from pathlib import Path
 MODEL = "claude-sonnet-4-6"
 # Per-image extraction is an OCR-like task — use a cheaper/faster model to cut cost.
 # Reasoning steps (classify, fix) keep MODEL. Change if this model isn't available.
-EXTRACT_MODEL = "claude-haiku-4-5-20251001"
+EXTRACT_MODEL = MODEL  # Sonnet for extraction: follows the verbatim/no-correct rule far better than Haiku (higher cost)
 
 # Strict JSON response keeps explanation and extracted text cleanly separated.
 SYSTEM_PROMPT = (
@@ -176,22 +176,25 @@ def _media_type(path: Path) -> str:
 # call for the overview. This is the Milestone 5 path used by the hotkey tool.
 
 EXTRACT_SYSTEM_PROMPT = (
-    "You are a screen-reading assistant. Transcribe ALL visible text from this single "
-    "screenshot EXACTLY as it appears — character for character, space for space, line for line. "
-    "Output PLAIN TEXT only. Do NOT convert anything to Markdown and do NOT add any Markdown that "
-    "is not literally on screen: no # headings, no ``` code fences, no - bullets, no ** bold. "
-    "Just reproduce the raw text/code as-is. "
-    "Do NOT include the editor's line-number gutter, code-folding arrows or chevrons, breakpoint "
-    "dots, diff/git markers, minimaps, scrollbars, tab bars, or status bars — transcribe only the "
-    "actual content. Omit line numbers entirely but keep the code's own indentation. "
-    "If several windows or apps are visible, transcribe ONLY the primary code or document content "
-    "(the focused editor pane); ignore other windows, browser tabs, the dock, and menu bars. "
-    "Reproduce mistakes faithfully: if a line is wrongly indented, mis-aligned, or has a typo, "
-    "reproduce it AS-IS. Do NOT correct, complete, reformat, or improve anything. "
-    "Example: if a method's def line is at the SAME indentation as its class header (not indented "
-    "under it), copy it at that same wrong indentation — do not fix it. "
-    "If a line is cut off at the screen edge or unreadable, transcribe what is visible and append "
-    "the marker [CUT OFF] — never guess. If there is no meaningful text, output nothing."
+    "You are a LITERAL OCR engine, not a programmer. Your ONLY job is to copy the exact "
+    "characters visible on screen into text — like a photocopier. You do NOT understand or "
+    "improve code; you transcribe it verbatim, mistakes included.\n"
+    "CRITICAL — reproduce errors EXACTLY as shown, never fix them:\n"
+    "  - If a line is missing a colon (e.g. `def add(a, b)` with no `:`), copy it WITHOUT the "
+    "colon. Do NOT add one.\n"
+    "  - If indentation is wrong or inconsistent, copy the exact wrong indentation "
+    "space-for-space. Do NOT re-align it.\n"
+    "  - If a bracket, quote, keyword, or name is misspelled or missing, copy it as-is.\n"
+    "  - It is CORRECT and REQUIRED to output invalid, non-runnable code if that is what is "
+    "on screen. Producing clean code from broken input is a FAILURE.\n"
+    "Output PLAIN TEXT only — no Markdown: no # headings, no ``` code fences, no - bullets. "
+    "Do NOT include the editor's line-number gutter, fold arrows, breakpoint dots, minimaps, "
+    "scrollbars, tab bars, or status bars — only the content itself, keeping its own indentation. "
+    "If several windows are visible, transcribe ONLY the primary code/document (the focused "
+    "editor pane); ignore other windows, the dock, and menu bars. "
+    "If a line is cut off at the screen edge or truly unreadable, transcribe what is visible and "
+    "append the marker [CUT OFF] — never guess the hidden part. "
+    "If there is no meaningful text, output nothing."
 )
 
 FINALIZE_SYSTEM_PROMPT = (
@@ -265,15 +268,38 @@ def synthesize_final(client, full_text: str) -> dict:
     }
 
 
-def _overlap_len(a: list, b: list, min_overlap: int = 2, max_check: int = 300) -> int:
-    """Largest k such that the last k lines of a equal the first k lines of b
-    (compared with trailing whitespace ignored). 0 if no run of >= min_overlap.
-    Used to drop the duplicated region where two scrolled screenshots overlap."""
+import difflib as _difflib
+
+
+def _sim(x: str, y: str) -> float:
+    return _difflib.SequenceMatcher(None, x.strip(), y.strip()).ratio()
+
+
+def _overlap_len(a: list, b: list, min_overlap: int = 2, max_check: int = 400,
+                 thresh: float = 0.82) -> int:
+    """Largest k such that the last k lines of a match the first k lines of b —
+    FUZZILY, so minor OCR differences between two scrolled captures still line up.
+    Returns 0 if no run of >= min_overlap lines is similar enough."""
     limit = min(len(a), len(b), max_check)
     for k in range(limit, min_overlap - 1, -1):
-        if [x.rstrip() for x in a[-k:]] == [x.rstrip() for x in b[:k]]:
+        atail, bhead = a[-k:], b[:k]
+        sims = [_sim(x, y) for x, y in zip(atail, bhead)]
+        if sims and sum(sims) / len(sims) >= thresh:
             return k
     return 0
+
+
+def _mostly_contained(b: list, merged: list, thresh: float = 0.92) -> bool:
+    """True if almost every non-blank line of b already appears (fuzzily) in merged —
+    i.e. b is a re-capture of content we already have, so it adds nothing."""
+    bl = [l.strip() for l in b if l.strip()]
+    if not bl:
+        return True
+    ms = [l.strip() for l in merged if l.strip()]
+    if not ms:
+        return False
+    hits = sum(1 for line in bl if any(_sim(line, m) >= 0.9 for m in ms))
+    return hits / len(bl) >= thresh
 
 
 import re as _re
@@ -357,13 +383,48 @@ def clean_source(text: str) -> str:
     return text.strip("\n")
 
 
+def _has_dup_headers(text: str) -> bool:
+    """True if the text repeats a class name or a top-level function name — a strong
+    signal that frame-stitching mis-merged and duplicated a block."""
+    classes, funcs = [], []
+    for l in text.splitlines():
+        mc = _re.match(r"^\s*(?:public\s+|static\s+|final\s+|abstract\s+)*class\s+(\w+)", l)
+        if mc:
+            classes.append(mc.group(1))
+        mf = _re.match(r"^(?:def|function|func|fn)\s+(\w+)", l)  # module-level only (no indent)
+        if mf:
+            funcs.append(mf.group(1))
+    return len(classes) != len(set(classes)) or len(funcs) != len(set(funcs))
+
+
 def merge_frames(raw_parts: list):
     """Clean each frame (fences/gutters/dup blocks), collapse frames that are the
     same code (keeping the best-indented copy), stitch overlapping ones. Returns
-    (merged_code, clean_parts)."""
+    (merged_code, clean_parts). Safety net: if stitching duplicated a class/function
+    (a mis-merge on messy OCR), fall back to the longest single frame with no such
+    duplication — one clean copy beats tripled garbage."""
     cleaned = [clean_source(r) for r in raw_parts]
     parts = _dedup_best(cleaned) or [c for c in cleaned if c.strip()]
-    return stitch_parts(parts), parts
+    stitched = stitch_parts(parts)
+    candidates = [stitched] + parts
+    clean = [c for c in candidates if c.strip() and not _has_dup_headers(c)]
+    best = max(clean or candidates, key=lambda c: len(c.splitlines())) if candidates else stitched
+    return best, parts
+
+
+def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8) -> "list | None":
+    """Merge frame b onto merged. Finds where the TAIL of merged reappears *inside* b
+    (frames often re-show earlier lines), then appends only what follows. Returns the
+    merged list, or None if no overlap is found."""
+    max_k = min(len(merged), 60)
+    for k in range(max_k, min_overlap - 1, -1):
+        tail = merged[-k:]
+        for o in range(0, len(b) - k + 1):
+            window = b[o:o + k]
+            sims = [_sim(x, y) for x, y in zip(tail, window)]
+            if sims and sum(sims) / len(sims) >= thresh:
+                return merged + b[o + k:]
+    return None
 
 
 def stitch_parts(parts: list) -> str:
@@ -381,8 +442,10 @@ def stitch_parts(parts: list) -> str:
         if not merged:
             merged = lines
             continue
-        k = _overlap_len(merged, lines)
-        merged += lines[k:] if k else [""] + lines
+        if _mostly_contained(lines, merged):
+            continue  # a re-capture of content we already have — don't duplicate it
+        stitched = _stitch_two(merged, lines)
+        merged = stitched if stitched is not None else merged + [""] + lines
     return "\n".join(merged)
 
 
