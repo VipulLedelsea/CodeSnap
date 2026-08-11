@@ -69,12 +69,17 @@ def _result(checked, ok, tool, errors="", note=""):
 
 def _check_python(path: Path):
     # Python's own parser, in-process — always available, no external toolchain.
+    src = path.read_text()
     try:
-        ast.parse(path.read_text(), filename=str(path))
+        ast.parse(src, filename=str(path))
         return _result(True, True, "python ast.parse")
     except SyntaxError as e:
+        lines = src.splitlines()
+        snippet = lines[e.lineno - 1].strip() if e.lineno and 1 <= e.lineno <= len(lines) else ""
+        loc = f"line {e.lineno}" + (f", col {e.offset}" if e.offset else "")
+        detail = f' -> "{snippet}"' if snippet else ""
         return _result(True, False, "python ast.parse",
-                       errors=f"{type(e).__name__}: {e.msg} (line {e.lineno}, col {e.offset})")
+                       errors=f"{type(e).__name__}: {e.msg} ({loc}){detail}")
 
 
 def _check_js(path: Path):

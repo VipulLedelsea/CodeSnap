@@ -153,9 +153,14 @@ def agent_decoder(client, code: str, extension: str, language: str) -> dict:
                 "tool": res.get("tool", ""), "resolved": None, "truncated": True}
     fixed = outputs.strip_code_fences(analysis.fix_source(client, code, language, errors))
     res2 = _check(fixed, extension)
-    return {"errors": errors, "code": fixed, "checked": True, "tool": res.get("tool", ""),
-            "resolved": bool(res2.get("ok")),
-            "remaining": None if res2.get("ok") else res2.get("errors", "")}
+    if res2.get("ok"):
+        # fix compiles: ship the corrected code (errors describe what was wrong, now resolved)
+        return {"errors": errors, "code": fixed, "checked": True,
+                "tool": res.get("tool", ""), "resolved": True}
+    # fix didn't resolve: ship the code AS CAPTURED so the error's line numbers
+    # point at the code the report actually shows (no display/line-number drift).
+    return {"errors": errors, "code": code, "checked": True, "tool": res.get("tool", ""),
+            "resolved": False, "remaining": res2.get("errors", "")}
 
 
 DIAGRAMMER_SYSTEM = """You are the Diagrammer. You receive source code that was transcribed from a screen. Produce diagrams in Mermaid syntax based ONLY on what is actually present in the code. Never invent classes, methods, calls, or relationships that are not in the code. If the code is partial or cut off, diagram only what is visible and add a short Mermaid %% comment noting it is incomplete.

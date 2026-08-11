@@ -443,12 +443,33 @@ _FENCE_RE = _re.compile(r"```[^\n`]*\n(.*?)```", _re.S)
 _GUTTER_RE = _re.compile(r"^[ \t]*\d{1,4}[ \t\u00b7:.\u2296\u2299\u25cb\u2d54]?[ \t]+")
 
 
+# capturing form: leading ws (group1) + line number (group2) + optional gutter glyph (group3)
+_GUTTER_CAP = _re.compile(r"^([ \t]*)(\d{1,4})([ \t\u00b7:.\u2296\u2299\u25cb\u2d54]?)")
+
+
 def _strip_gutter(text: str) -> str:
+    """Remove an editor's line-number gutter WITHOUT destroying the code's own
+    indentation. The old approach greedily ate the number and every space after
+    it, which flattened nesting (turning '5    def' into 'def') and left bare
+    numbers on blank lines. Instead we blank the gutter field in place (preserving
+    column positions) and then dedent, so the gutter width falls away uniformly
+    while each line's real indentation survives. Only fires when most non-blank
+    lines look gutter-numbered, so ordinary code is untouched."""
+    import textwrap
     lines = text.split("\n")
+    matches = [_GUTTER_CAP.match(l) for l in lines]
     nonempty = [l for l in lines if l.strip()]
-    if nonempty and sum(1 for l in nonempty if _GUTTER_RE.match(l)) >= 0.6 * len(nonempty):
-        lines = [_GUTTER_RE.sub("", l, count=1) if _GUTTER_RE.match(l) else l for l in lines]
-    return "\n".join(lines)
+    hits = sum(1 for l, m in zip(lines, matches) if l.strip() and m)
+    if not nonempty or hits < 0.6 * len(nonempty):
+        return text
+    out = []
+    for l, m in zip(lines, matches):
+        if m:
+            end = m.end()                      # blank leading ws + number + glyph, keep width
+            out.append(" " * end + l[end:])
+        else:
+            out.append(l)
+    return textwrap.dedent("\n".join(out))
 
 
 def _indent_score(t: str) -> int:
@@ -530,6 +551,22 @@ def _has_dup_headers(text: str) -> bool:
     return len(classes) != len(set(classes)) or len(funcs) != len(set(funcs))
 
 
+def _fix_leading_indent(code: str) -> str:
+    """A source file's first logical line can never be indented (Python raises
+    'unexpected indent' at line 1). OCR sometimes adds a spurious leading indent
+    to the top line \u2014 e.g. a module docstring picking up the editor's left
+    margin. Strip it. Safe: no valid file starts indented, so this only removes a
+    transcription artifact, never real structure."""
+    lines = code.split("\n")
+    for i, ln in enumerate(lines):
+        if ln.strip() == "":
+            continue
+        if ln[:1] in (" ", "\t"):
+            lines[i] = ln.lstrip()
+        break
+    return "\n".join(lines)
+
+
 def merge_frames(raw_parts: list):
     """Clean each frame (fences/gutters/dup blocks), collapse frames that are the
     same code (keeping the best-indented copy), stitch overlapping ones. Returns
@@ -542,7 +579,7 @@ def merge_frames(raw_parts: list):
     candidates = [stitched] + parts
     clean = [c for c in candidates if c.strip() and not _has_dup_headers(c)]
     best = max(clean or candidates, key=lambda c: len(c.splitlines())) if candidates else stitched
-    return best, parts
+    return _fix_leading_indent(best), parts
 
 
 def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8) -> "list | None":

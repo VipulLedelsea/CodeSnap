@@ -259,3 +259,64 @@ def test_indent_caveat_only_flags_indentation_errors():
     other = _indent_caveat("SyntaxError: invalid syntax (line 2)")
     assert "Lower confidence" not in other
     assert _indent_caveat("None") == "None"
+
+
+def test_python_error_quotes_offending_line_with_correct_number():
+    # the checker must point at the RIGHT line and quote it (self-locating)
+    import tempfile
+    from pathlib import Path
+    from core import validate
+    src = ('class C:\n'
+           '    def add(self, a, b):\n'
+           '        r = a + b\n'
+           '      self.h.append(r)\n'      # bad indent, line 4
+           '        return r\n')
+    f = Path(tempfile.mktemp(suffix=".py")); f.write_text(src)
+    res = validate.check_source(f)
+    assert res["checked"] and not res["ok"]
+    assert "line 4" in res["errors"]                       # correct line, not line 1
+    assert "self.h.append(r)" in res["errors"]             # quotes the offending line
+
+
+def test_fix_leading_indent_strips_spurious_top_indent():
+    from core.analysis import _fix_leading_indent
+    # a module docstring that OCR indented -> must be de-indented
+    bad = '    """A tiny calculator."""\n\n\nclass C:\n    pass\n'
+    fixed = _fix_leading_indent(bad)
+    assert fixed.startswith('"""A tiny calculator."""')
+    # a correct file is untouched
+    good = 'import os\n\n\ndef f():\n    return 1\n'
+    assert _fix_leading_indent(good) == good
+    # interior indentation is NOT touched (only line 1 is the safe case)
+    interior = 'def f():\n        over = 1\n'
+    assert _fix_leading_indent(interior) == interior
+
+
+def test_merge_frames_deindents_top_docstring():
+    from core.analysis import merge_frames
+    frame = '    """Doc."""\n\n\nclass Calculator:\n    def add(self, a, b):\n        return a + b\n'
+    code, _ = merge_frames([frame])
+    import ast
+    ast.parse(code)   # must now compile (was: unexpected indent line 1)
+
+
+def test_gutter_strip_preserves_indentation():
+    # a captured line-number gutter must NOT eat the code's real indentation,
+    # and bare-number (blank editor) lines must not leave stray digits
+    from core.analysis import _strip_gutter
+    import ast
+    g = ('1  """Doc."""\n2\n3  class C:\n4      def m(self):\n'
+         '5          return 1\n')
+    out = _strip_gutter(g)
+    lines = out.splitlines()
+    assert lines[0] == '"""Doc."""'          # top de-guttered, col 0
+    assert lines[1] == ''                      # bare "2" -> blank, not "2"
+    assert lines[3] == '    def m(self):'      # 4-space indent preserved
+    assert lines[4] == '        return 1'      # 8-space indent preserved
+    ast.parse(out)                             # and it compiles
+
+
+def test_strip_gutter_leaves_plain_code_alone():
+    from core.analysis import _strip_gutter
+    code = "import os\n\ndef f(x):\n    return x + 1\n"
+    assert _strip_gutter(code) == code

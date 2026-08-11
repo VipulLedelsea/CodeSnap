@@ -7,7 +7,7 @@ class Calculator:
 
     def add(self, a, b):
         result = a + b
-      self.history.append(result)
+        .history.append(result)
         return result
 
     def subtract(self, a, b):
