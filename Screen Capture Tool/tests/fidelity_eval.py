@@ -72,16 +72,22 @@ def gen_files():
     print(f"wrote {len(SPECS)} seeded files -> {SEED_DIR}")
 
 def classify(raw, spec):
-    """faithful | silently_fixed | line_missing, using exact-line matching."""
-    lines = [l.rstrip() for l in raw.splitlines()]
-    broke = broken_line(spec).rstrip()
-    fixed = spec["fixed"].rstrip()
+    """faithful | silently_fixed | line_missing.
+
+    bad_indent files are matched EXACTLY (indentation IS the defect). For all
+    other defect types we normalise leading whitespace, so a stray-space indent
+    drift can't masquerade as a token failure (the token \u2014 colon, paren,
+    keyword \u2014 is what we're scoring there).
+    """
+    exact = spec["defect"] == "bad_indent"
+    norm = (lambda l: l.rstrip()) if exact else (lambda l: l.strip())
+    lines = [norm(l) for l in raw.splitlines()]
+    broke = norm(broken_line(spec))
+    fixed = norm(spec["fixed"])
     if fixed in lines and broke not in lines:
         return "silently_fixed"
-    if broke in lines and fixed not in lines:
-        return "faithful"
-    if broke in lines and fixed in lines:
-        return "faithful"       # defect still present somewhere -> not a clean fix
+    if broke in lines:
+        return "faithful"        # defect still present -> not a clean fix
     return "line_missing"
 
 def flagged(corrections, spec):
@@ -104,7 +110,7 @@ def selftest():
     print(f"selftest: {ok}/{len(SPECS)} probes correctly detect the planted defect in source")
     return ok == len(SPECS)
 
-def run_eval(keep, label="", legacy=False):
+def run_eval(keep, label="", legacy=False, indent=False):
     import render
     from core import analysis
     analysis.load_env()
@@ -127,6 +133,8 @@ def run_eval(keep, label="", legacy=False):
         render.render_code(code_of(sp), png, line_numbers=False)
         if legacy:
             raw = analysis.extract_legacy(client, png); corrections = []
+        elif indent:
+            r = analysis.extract_structured_indent(client, png); raw = r["raw"]; corrections = r["corrections"]
         else:
             r = analysis.extract_structured(client, png); raw = r["raw"]; corrections = r["corrections"]
         verdict = classify(raw, sp)
@@ -155,10 +163,11 @@ def run_eval(keep, label="", legacy=False):
     print("=" * 52)
     return faithful
 
-def run_many(keep, runs, legacy=False):
+def run_many(keep, runs, legacy=False, indent=False):
     rates = []
     for k in range(1, runs + 1):
-        f = run_eval(keep and runs == 1, label=f"[{'baseline' if legacy else '#2'} run {k}/{runs}] ", legacy=legacy)
+        tag = 'baseline' if legacy else ('#2b-indent' if indent else '#2')
+        f = run_eval(keep and runs == 1, label=f"[{tag} run {k}/{runs}] ", legacy=legacy, indent=indent)
         if f is None:
             return
         rates.append(f)
@@ -171,6 +180,30 @@ def run_many(keep, runs, legacy=False):
         print(f"  per-run faithful counts: {rates}")
         print("#" * 52)
 
+def dump_one(name, indent=False):
+    import render, os
+    from core import analysis
+    analysis.load_env()
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print("ANTHROPIC_API_KEY not set."); return
+    import anthropic, tempfile
+    spec = next((x for x in SPECS if x["name"] == name), None)
+    if not spec:
+        print(f"no sample named {name!r}. options: {[s['name'] for s in SPECS]}"); return
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    png = Path(tempfile.mktemp(suffix=".png"))
+    render.render_code(code_of(spec), png, line_numbers=False)
+    r = (analysis.extract_structured_indent if indent else analysis.extract_structured)(client, png)
+    print(f"--- {name} ({spec['defect']}) ---")
+    print("broken_line :", repr(broken_line(spec)))
+    print("fixed_line  :", repr(spec["fixed"]))
+    print("verdict     :", classify(r["raw"], spec))
+    print("corrections :", r["corrections"])
+    print("--- raw ---")
+    for ln in r["raw"].splitlines():
+        print(repr(ln))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gen", action="store_true")
@@ -178,12 +211,16 @@ def main():
     ap.add_argument("--keep", action="store_true", help="keep rendered PNGs next to the samples")
     ap.add_argument("--runs", type=int, default=1, help="repeat the whole set N times and average (guards against a lucky run)")
     ap.add_argument("--baseline", action="store_true", help="use the OLD pre-#2 text prompt (for before/after)")
+    ap.add_argument("--indent", action="store_true", help="use the experimental indent-aware extractor (#2b)")
+    ap.add_argument("--dump", metavar="NAME", help="render+extract one sample and print its raw output + verdict")
     a = ap.parse_args()
     if a.gen:
         gen_files(); return
     if a.selftest:
         gen_files(); sys.exit(0 if selftest() else 1)
-    run_many(a.keep, a.runs, a.baseline)
+    if a.dump:
+        dump_one(a.dump, a.indent); return
+    run_many(a.keep, a.runs, a.baseline, a.indent)
 
 if __name__ == "__main__":
     main()

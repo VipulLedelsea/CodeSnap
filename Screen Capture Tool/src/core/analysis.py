@@ -250,6 +250,68 @@ def _normalize_extract(text: str) -> dict:
     return {"raw": raw.strip("\n"), "corrections": corr}
 
 
+EXTRACT_INDENT_SYSTEM_PROMPT = (
+    "You are a LITERAL OCR engine, not a programmer. Copy the exact characters visible on "
+    "screen \u2014 like a photocopier. You do NOT understand or improve code.\n"
+    "Return ONLY a JSON object with these two keys:\n"
+    '  "raw_transcription": an array with ONE object per visible line: '
+    '{"indent": <the EXACT number of leading space characters on that line, COUNTED off the '
+    'screen \u2014 not what you think it should be>, "text": <the rest of the line after the '
+    "leading spaces, copied verbatim, mistakes included>}. Count indentation like counting dots; "
+    "do NOT round it to a 'correct' value. If a line is blank, use indent 0 and text \"\".\n"
+    '  "corrections_applied": an array of {"line": <1-based index>, "saw": <exact text>, '
+    '"suggested": <what you think it should be>} for anything that looked wrong \u2014 your outlet; '
+    "do NOT change raw_transcription. Empty array if nothing looked off.\n"
+    "Ignore the editor's line-number gutter, fold arrows, minimaps, scrollbars, tabs, and status "
+    "bars. Transcribe ONLY the primary focused editor pane. For a line cut off at the edge, end its "
+    "text with [CUT OFF]. If there is no meaningful text, return "
+    '{"raw_transcription": [], "corrections_applied": []}.'
+)
+
+
+def _normalize_extract_indent(text: str) -> dict:
+    """Reconstruct raw from the indent-aware shape [{indent:int, text:str}, ...].
+
+    Rebuilds each line as (indent spaces) + text. Falls back to the plain
+    line-array normaliser, then to raw text, so it never hard-fails.
+    """
+    data = _parse_json(text)
+    if not isinstance(data, dict) or "raw_transcription" not in data:
+        return {"raw": text.strip(), "corrections": []}
+    rt = data.get("raw_transcription", [])
+    lines = []
+    for item in rt if isinstance(rt, list) else [rt]:
+        if isinstance(item, dict):
+            try:
+                n = max(0, int(item.get("indent", 0) or 0))
+            except (TypeError, ValueError):
+                n = 0
+            lines.append(" " * n + str(item.get("text", "")))
+        else:
+            lines.append(str(item))
+    corr = data.get("corrections_applied", [])
+    corr = [c for c in corr if isinstance(c, dict)] if isinstance(corr, list) else []
+    return {"raw": "\n".join(lines).strip("\n"), "corrections": corr}
+
+
+def extract_structured_indent(client, path: Path) -> dict:
+    """Experimental (#2b): indent-aware extraction \u2014 the model reports leading-space
+    COUNTS per line instead of reproducing indentation by feel. A/B this against
+    extract_structured() on the fidelity eval before adopting."""
+    b64 = base64.standard_b64encode(path.read_bytes()).decode()
+    msg = client.messages.create(
+        model=EXTRACT_MODEL,
+        max_tokens=4096,
+        system=EXTRACT_INDENT_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": _media_type(path), "data": b64}},
+            {"type": "text", "text": "Transcribe this screenshot. Return only the JSON object."},
+        ]}],
+    )
+    text = "".join(getattr(b, "text", "") for b in msg.content).strip()
+    return _normalize_extract_indent(text)
+
+
 def extract_structured(client, path: Path) -> dict:
     """Send ONE image; return {'raw': verbatim text, 'corrections': [ {line, saw, suggested} ]}.
 

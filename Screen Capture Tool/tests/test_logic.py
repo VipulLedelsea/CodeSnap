@@ -230,3 +230,23 @@ def test_fmt_corrections_renders_note_and_empty():
     assert _fmt_corrections(None) == ""
     note = _fmt_corrections([{"line": 1, "saw": "def f()", "suggested": "def f():"}])
     assert "def f()" in note and "def f():" in note
+
+
+def test_normalize_extract_indent_rebuilds_leading_spaces():
+    # indent-aware shape: {indent:int, text:str} -> exact leading whitespace
+    from core.analysis import _normalize_extract_indent
+    payload = ('{"raw_transcription": ['
+               '{"indent": 0, "text": "def f(x):"},'
+               '{"indent": 4, "text": "y = x + 1"},'
+               '{"indent": 3, "text": "return y"}],'
+               ' "corrections_applied": [{"line": 3, "saw": "   return y", "suggested": "    return y"}]}')
+    out = _normalize_extract_indent(payload)
+    # the 3-space (broken) indent is preserved exactly, not rounded to 4
+    assert out["raw"] == "def f(x):\n    y = x + 1\n   return y"
+    assert out["corrections"][0]["suggested"] == "    return y"
+
+
+def test_normalize_extract_indent_falls_back():
+    from core.analysis import _normalize_extract_indent
+    out = _normalize_extract_indent("not json at all")
+    assert out["raw"] == "not json at all" and out["corrections"] == []
