@@ -211,8 +211,70 @@ FINALIZE_SYSTEM_PROMPT = (
 )
 
 
-def extract_one(client, path: Path) -> str:
-    """Send ONE image to the API and return its visible text as Markdown."""
+EXTRACT_JSON_SYSTEM_PROMPT = (
+    "You are a LITERAL OCR engine, not a programmer. Copy the exact characters visible on "
+    "screen \u2014 like a photocopier. You do NOT understand or improve code; you transcribe it "
+    "verbatim, mistakes included.\n"
+    "Return ONLY a JSON object with these two keys:\n"
+    '  "raw_transcription": an array of strings, ONE per visible line, each copied EXACTLY as '
+    "shown \u2014 preserve wrong indentation space-for-space, keep missing colons/brackets/quotes, "
+    "keep misspellings. Never add, remove, or re-align anything. Producing clean, runnable code "
+    "from broken input is a FAILURE.\n"
+    '  "corrections_applied": an array noting anything that looked WRONG or suspicious \u2014 one '
+    'object per item: {"line": <1-based index into raw_transcription>, "saw": <the exact text as '
+    'written>, "suggested": <what you think it should be>}. This is where your instinct to fix '
+    "things goes: note it HERE, but do NOT change raw_transcription. Empty array if nothing looked "
+    "off.\n"
+    "Do NOT include the editor's line-number gutter, fold arrows, breakpoint dots, minimaps, "
+    "scrollbars, tab bars, or status bars \u2014 only the content itself. If several windows are "
+    "visible, transcribe ONLY the primary focused editor pane; ignore other windows, the dock, and "
+    "menu bars. If a line is cut off at the screen edge or truly unreadable, transcribe what is "
+    "visible and end that line's string with the marker [CUT OFF] \u2014 never guess the hidden part. "
+    'If there is no meaningful text, return {"raw_transcription": [], "corrections_applied": []}.'
+)
+
+
+def _normalize_extract(text: str) -> dict:
+    """Turn the model's reply into {'raw': <verbatim text>, 'corrections': [ ... ]}.
+
+    Accepts the structured JSON (raw_transcription line-array + corrections_applied[]).
+    Falls back to treating the whole reply as raw text so extraction never hard-fails.
+    """
+    data = _parse_json(text)
+    if not isinstance(data, dict) or "raw_transcription" not in data:
+        return {"raw": text.strip(), "corrections": []}
+    rt = data.get("raw_transcription", "")
+    raw = "\n".join(str(x) for x in rt) if isinstance(rt, list) else str(rt)
+    corr = data.get("corrections_applied", [])
+    corr = [c for c in corr if isinstance(c, dict)] if isinstance(corr, list) else []
+    return {"raw": raw.strip("\n"), "corrections": corr}
+
+
+def extract_structured(client, path: Path) -> dict:
+    """Send ONE image; return {'raw': verbatim text, 'corrections': [ {line, saw, suggested} ]}.
+
+    Asking for the transcription as a JSON array of line strings nudges the model into
+    copy-strings mode (not write-code mode), and the corrections_applied[] list gives its
+    urge to 'fix' broken code somewhere to go \u2014 so raw stays faithful. raw is what the
+    compiler checks; corrections is an advisory second signal for the report.
+    """
+    b64 = base64.standard_b64encode(path.read_bytes()).decode()
+    msg = client.messages.create(
+        model=EXTRACT_MODEL,
+        max_tokens=4096,
+        system=EXTRACT_JSON_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": _media_type(path), "data": b64}},
+            {"type": "text", "text": "Transcribe this screenshot. Return only the JSON object."},
+        ]}],
+    )
+    text = "".join(getattr(b, "text", "") for b in msg.content).strip()
+    return _normalize_extract(text)
+
+
+def extract_legacy(client, path: Path) -> str:
+    """Pre-#2 extraction: the old text-only prompt (no JSON, no corrections outlet).
+    Kept ONLY so the fidelity eval can measure a true before/after against #2."""
     b64 = base64.standard_b64encode(path.read_bytes()).decode()
     msg = client.messages.create(
         model=EXTRACT_MODEL,
@@ -224,6 +286,15 @@ def extract_one(client, path: Path) -> str:
         ]}],
     )
     return "".join(getattr(b, "text", "") for b in msg.content).strip()
+
+
+def extract_one(client, path: Path) -> str:
+    """Return just the verbatim text of ONE image (thin wrapper over extract_structured).
+
+    For callers that only need the text (single-agent path, background cache). The
+    structured prompt still improves fidelity here even though corrections are dropped.
+    """
+    return extract_structured(client, path)["raw"]
 
 
 def _parse_json(raw: str) -> dict:
@@ -513,12 +584,28 @@ def extract_to_cache(client, path: Path, cache_dir: Path) -> None:
     cf = cache_path_for(path, cache_dir)
     if cf.exists():
         return
-    text = extract_one(client, path)
+    res = extract_structured(client, path)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cf.write_text(text)
+    cf.write_text(res["raw"])
+    try:
+        cf.with_suffix(".corr.json").write_text(json.dumps(res["corrections"]))
+    except Exception:  # noqa: BLE001 - corrections are advisory; never fail the cache write
+        pass
 
 
 # ── Code fix loop (Milestone 7, Layer C) ─────────────────────────────────────────
+
+def corrections_for(path: Path, cache_dir: Path) -> list:
+    """Read the corrections_applied[] cached next to an image's raw text (or [])."""
+    cf = cache_path_for(path, cache_dir).with_suffix(".corr.json")
+    if cf.exists():
+        try:
+            data = json.loads(cf.read_text())
+            return data if isinstance(data, list) else []
+        except Exception:  # noqa: BLE001
+            return []
+    return []
+
 
 FIX_SYSTEM_PROMPT = (
     "You are correcting a source file that was transcribed from screenshots and "

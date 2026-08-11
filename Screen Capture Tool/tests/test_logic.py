@@ -190,3 +190,43 @@ def test_merge_frames_falls_back_when_stitch_would_duplicate():
     frames = [whole, whole.replace("return 1", "return 1 "), whole.replace("class A:", "class A: ")]
     code, _ = merge_frames(frames)
     assert code.count("class A") == 1 and code.count("class B") == 1
+
+
+def test_normalize_extract_parses_line_array_and_corrections():
+    # structured JSON: raw_transcription (line array) + corrections_applied[]
+    from core.analysis import _normalize_extract
+    payload = (
+        '{"raw_transcription": ["def add(a, b)", "    return a + b"],'
+        ' "corrections_applied": [{"line": 1, "saw": "def add(a, b)",'
+        ' "suggested": "def add(a, b):"}]}'
+    )
+    out = _normalize_extract(payload)
+    # raw is joined verbatim — the missing colon is PRESERVED, not fixed
+    assert out["raw"] == "def add(a, b)\n    return a + b"
+    assert "def add(a, b):" not in out["raw"]
+    assert len(out["corrections"]) == 1
+    assert out["corrections"][0]["saw"] == "def add(a, b)"
+
+
+def test_normalize_extract_falls_back_on_non_json():
+    # if the model doesn't return JSON, treat the whole reply as raw text (never crash)
+    from core.analysis import _normalize_extract
+    out = _normalize_extract("x = 1\ny = 2")
+    assert out["raw"] == "x = 1\ny = 2"
+    assert out["corrections"] == []
+
+
+def test_normalize_extract_tolerates_json_in_prose():
+    # extracts the embedded object even with stray text around it
+    from core.analysis import _normalize_extract
+    out = _normalize_extract('here:\n{"raw_transcription": ["a=1"], "corrections_applied": []}\ndone')
+    assert out["raw"] == "a=1"
+    assert out["corrections"] == []
+
+
+def test_fmt_corrections_renders_note_and_empty():
+    from team import _fmt_corrections
+    assert _fmt_corrections([]) == ""
+    assert _fmt_corrections(None) == ""
+    note = _fmt_corrections([{"line": 1, "saw": "def f()", "suggested": "def f():"}])
+    assert "def f()" in note and "def f():" in note

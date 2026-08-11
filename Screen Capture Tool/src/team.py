@@ -41,16 +41,21 @@ def agent_extract(ctx) -> dict:
     Faithfulness is structural: extraction goes through the Haiku OCR path and
     the returned code is the stitched cache, never a paraphrase."""
     raws = []
+    corrections = []
     for p in sorted(ctx.images):
         if ctx.cache_dir is not None:
             analysis.extract_to_cache(ctx.client, p, ctx.cache_dir)
             raws.append(analysis.cache_path_for(p, ctx.cache_dir).read_text())
+            corrections.extend(analysis.corrections_for(p, ctx.cache_dir))
         else:
-            raws.append(analysis.extract_one(ctx.client, p))
+            r = analysis.extract_structured(ctx.client, p)
+            raws.append(r["raw"])
+            corrections.extend(r["corrections"])
     code, parts = analysis.merge_frames(raws)   # clean + collapse dups + stitch
     marked = "\n\n".join(f"===== Screenshot {i + 1} =====\n{t}" for i, t in enumerate(parts))
     numbered = "\n".join(f"{i + 1:>4}  {line}" for i, line in enumerate(code.splitlines()))
-    return {"code": code, "marked": marked, "numbered": numbered, "parts": parts}
+    return {"code": code, "marked": marked, "numbered": numbered, "parts": parts,
+            "corrections": corrections}
 
 
 ANALYST_SYSTEM = """You are the Analyst on a team. You receive the source code with a line number prefixed to every line. You do NOT edit the content — you describe it.
@@ -195,13 +200,37 @@ def agent_diagrammer(client, code: str, language: str) -> str:
 
 # ── report assembly ──────────────────────────────────────────────────────────
 
-def _assemble(language, overview, errors, code, tech_stack, extension, is_code, diagrams="") -> str:
+def _fmt_corrections(corrections) -> str:
+    """Render the Extractor's corrections_applied[] as an advisory note (or "").
+
+    These are things that looked wrong on screen but were kept VERBATIM in the code
+    above \u2014 an outlet that keeps raw transcription faithful. Purely informational.
+    """
+    if not corrections:
+        return ""
+    lines = []
+    for c in corrections[:12]:
+        saw = str(c.get("saw", "")).strip()
+        sug = str(c.get("suggested", c.get("changed_to", ""))).strip()
+        if not saw:
+            continue
+        lines.append(f'- "{saw}" \u2014 looks like: "{sug}"' if sug else f'- "{saw}" looked off')
+    if not lines:
+        return ""
+    return ("text the transcriber flagged as suspicious but kept exactly as shown "
+            "(the code above is unmodified):\n" + "\n".join(lines))
+
+
+def _assemble(language, overview, errors, code, tech_stack, extension, is_code, diagrams="", corrections=None) -> str:
     if is_code:
         out = (f"**Language:** {language}\n"
                f"**Overview:** {overview}\n"
                f"**Errors found:** {errors or 'None'}\n"
                f"**Code:**\n```{extension or 'txt'}\n{code}\n```\n"
                f"**Tech-stack review:** {tech_stack or 'n/a'}")
+        note = _fmt_corrections(corrections)
+        if note:
+            out += f"\n**Transcription notes:** {note}"
         if diagrams:
             out += f"\n**Diagrams:**\n{diagrams}"
         return out
@@ -216,6 +245,7 @@ def _tc_get_transcription(client, ctx, scratch, _inp):
     scratch["code"] = ex["code"]
     scratch["marked"] = ex["marked"]
     scratch["numbered"] = ex.get("numbered", "")
+    scratch["corrections"] = ex.get("corrections", [])
     return ex["marked"] or "(no text found in the captures)"
 
 
@@ -264,7 +294,8 @@ def _tc_finalize(client, ctx, scratch, inp):
     is_code = bool(scratch.get("is_code", True))
     code = scratch.get("code", "")
     diagrams = scratch.get("diagrams", "")
-    scratch["report_md"] = _assemble(language, overview, errors, code, tech, extension, is_code, diagrams)
+    scratch["report_md"] = _assemble(language, overview, errors, code, tech, extension, is_code,
+                                     diagrams, scratch.get("corrections"))
     if is_code:
         saved = tools._t_save_output(ctx, {
             "format": "source", "content": code, "extension": extension,
