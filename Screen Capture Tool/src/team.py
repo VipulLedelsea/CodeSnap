@@ -20,6 +20,7 @@ The single-agent loop in agent.py is untouched; this is an opt-in path
 """
 
 import json
+import re
 import tempfile
 from pathlib import Path
 
@@ -113,6 +114,22 @@ def _check(code: str, extension: str) -> dict:
         tmp.unlink(missing_ok=True)
 
 
+_INDENT_ERR = re.compile(
+    r"IndentationError|TabError|unexpected indent|unindent does not match|expected an indented block",
+    re.I)
+
+
+def _indent_caveat(errors: str) -> str:
+    """If the compiler error is about indentation, flag it as lower-confidence \u2014
+    indentation is read approximately from a screenshot and can drift a space,
+    so an indentation error may be a transcription artifact, not a real bug."""
+    if errors and _INDENT_ERR.search(errors):
+        return (errors + "\n(Lower confidence: indentation is transcribed approximately from the "
+                "screenshot and can drift by a space \u2014 verify against the original before treating "
+                "this as a real indentation error.)")
+    return errors
+
+
 def agent_decoder(client, code: str, extension: str, language: str) -> dict:
     """Decoder (Sonnet). Checks the code AS CAPTURED, then applies a minimal,
     error-only fix if needed. Reports the REAL errors found (never invents), and
@@ -124,7 +141,7 @@ def agent_decoder(client, code: str, extension: str, language: str) -> dict:
     if res.get("ok"):
         return {"errors": "None", "code": code, "checked": True,
                 "tool": res.get("tool", ""), "resolved": True}
-    errors = res.get("errors", "")
+    errors = _indent_caveat(res.get("errors", ""))
     if validate.looks_truncated(errors):
         # The capture was likely cut off (an open quote/brace/statement never closed),
         # so this is probably NOT a real code bug. Do NOT "fix" it by inventing the

@@ -250,3 +250,12 @@ def test_normalize_extract_indent_falls_back():
     from core.analysis import _normalize_extract_indent
     out = _normalize_extract_indent("not json at all")
     assert out["raw"] == "not json at all" and out["corrections"] == []
+
+
+def test_indent_caveat_only_flags_indentation_errors():
+    from team import _indent_caveat
+    ind = _indent_caveat("IndentationError: unexpected indent (line 3)")
+    assert "Lower confidence" in ind
+    other = _indent_caveat("SyntaxError: invalid syntax (line 2)")
+    assert "Lower confidence" not in other
+    assert _indent_caveat("None") == "None"
