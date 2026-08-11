@@ -5,10 +5,10 @@
 block_cipher = None
 
 a = Analysis(
-    ['main.py'],
-    pathex=[],
+    ['../src/main.py'],
+    pathex=['../src'],
     binaries=[],
-    datas=[('webapp/static', 'webapp/static')],   # ship the UI files
+    datas=[('../src/webapp/static', 'webapp/static')],   # ship the UI files
     hiddenimports=[
         # uvicorn loads these dynamically — PyInstaller can't see them without help
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',

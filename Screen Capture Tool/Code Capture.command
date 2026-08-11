@@ -22,7 +22,7 @@ fi
 python -c "import fastapi, uvicorn" 2>/dev/null || python -m pip install -q -r requirements.txt
 
 # Launch the web app (opens the browser itself)
-python -m webapp.server
+python src/main.py
 
 # Keep the window open if the server exits so errors are visible
 echo ""

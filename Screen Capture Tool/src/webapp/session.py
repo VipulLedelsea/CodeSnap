@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-PROJECT = HERE.parent
+PROJECT = HERE.parent.parent
 
 
 class SessionManager:
@@ -29,7 +29,7 @@ class SessionManager:
         if getattr(sys, "frozen", False):
             argv = [sys.executable, "--capture"]
         else:
-            argv = [sys.executable, str(PROJECT / "main.py"), "--capture"]
+            argv = [sys.executable, str(PROJECT / "src" / "main.py"), "--capture"]
         if single:
             argv.append("--single")   # backup: single agent instead of the default team
         self._proc = subprocess.Popen(argv, cwd=str(PROJECT))

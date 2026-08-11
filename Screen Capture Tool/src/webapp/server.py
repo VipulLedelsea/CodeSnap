@@ -17,7 +17,7 @@ from webapp.session import SessionManager
 from core import status
 
 HERE = Path(__file__).resolve().parent
-PROJECT = HERE.parent
+PROJECT = HERE.parent.parent
 REPORTS = PROJECT / "reports"
 PENDING = REPORTS / "pending"
 STATIC = HERE / "static"

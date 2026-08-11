@@ -101,7 +101,7 @@ echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env
 
 **Web app (recommended):**
 ```bash
-python -m webapp.server
+python src/main.py
 ```
 Opens the browser UI → **Start capture** → switch to your editor → press
 **Cmd+Shift+1** → scroll. The report appears under *Recent results*.
@@ -169,15 +169,30 @@ Full pre-demo results are in **[TEST_REPORT.md](TEST_REPORT.md)**.
 ## Project structure
 
 ```
-main.py             single entry point (web app / --capture worker)
-hotkey_capture.py   the capture App (hotkeys, burst mode)
-agent.py            single-agent tool-use loop
-team.py             multi-agent team (Coordinator + Extractor/Analyst/Decoder/Diagrammer)
-tools.py            tool registry + ToolContext
-core/               engine: analysis, validate, outputs, capture, notify, status
-webapp/             FastAPI server + browser UI (static/)
-tests/              pytest suite + accuracy harness
-CodeCapture.spec    PyInstaller build config      DEPLOY.md   build & run guide
+Code Capture.command   double-click launcher (starts the web app)
+requirements.txt       Python dependencies
+src/                   all application code
+  main.py                single entry point (web app / --capture worker)
+  hotkey_capture.py      the capture App (hotkeys, burst mode)
+  agent.py               single-agent tool-use loop
+  team.py                multi-agent team (Coordinator + Extractor/Analyst/Decoder/Diagrammer)
+  tools.py               tool registry + ToolContext
+  core/                  engine: analysis, validate, outputs, capture, notify, status
+  webapp/                FastAPI server + browser UI (static/)
+docs/                  README, DEPLOY, DEMO_GUIDE, TEST_REPORT, REQUIREMENTS
+deliverables/          slide deck, Q&A prep, internship report, architecture html
+packaging/             CodeCapture.spec + build_app.command (build the .app)
+assets/                images used by docs/deliverables
+demo_samples/          sample code files for demos
+tests/                 pytest suite + accuracy harness
+captures/  reports/    runtime output (gitignored)
+```
+
+Run it from the project root:
+
+```
+python src/main.py            # web app (default)
+python src/main.py --capture  # capture worker (the web app launches this itself)
 ```
 
 ## How it stays faithful

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Double-click (or run) to rebuild Code Capture.app with the latest code.
 # Builds -> strips extended attributes -> ad-hoc signs, so the hotkey works.
-cd "$(dirname "$0")" || exit 1
+cd "$(dirname "$0")/.." || exit 1
 echo "==> Rebuilding Code Capture.app ..."
 
 # use the off-iCloud venv if present (much faster), else the local one
@@ -11,7 +11,7 @@ fi
 
 python -c "import PyInstaller" 2>/dev/null || pip install -q pyinstaller
 
-pyinstaller --noconfirm CodeCapture.spec || { echo "BUILD FAILED"; read -r -p "Press Return to close."; exit 1; }
+pyinstaller --noconfirm packaging/CodeCapture.spec || { echo "BUILD FAILED"; read -r -p "Press Return to close."; exit 1; }
 
 echo "==> Cleaning attributes + signing ..."
 xattr -cr "dist/Code Capture.app"

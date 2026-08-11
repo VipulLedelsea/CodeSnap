@@ -29,7 +29,7 @@ one binary.
 2. Build from the project folder:
    ```bash
    cd "/path/to/Screen Capture Tool"
-   pyinstaller CodeCapture.spec
+   pyinstaller packaging/CodeCapture.spec
    ```
    The app appears at `dist/Code Capture.app`.
 
@@ -78,4 +78,4 @@ Because the app is unsigned, the first open may be blocked by Gatekeeper —
 - Unsigned build is fine for personal use. To distribute it, sign and notarize
   with an Apple Developer ID (`codesign` + `notarytool`).
 - To install: drag `Code Capture.app` into `/Applications`.
-- Rebuild after code changes: re-run `pyinstaller CodeCapture.spec`.
+- Rebuild after code changes: re-run `pyinstaller packaging/CodeCapture.spec`.
