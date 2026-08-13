@@ -40,3 +40,14 @@ dist/
 *.spec.bak
 build/
 dist/
+
+# ── Not shipped publicly: testing, demo, portfolio, and internal docs ──
+tests/
+demo_samples/
+deliverables/
+Previous Versions/
+assets/
+docs/DEMO_GUIDE.md
+docs/TEST_REPORT.md
+docs/DEEP_DIVE.md
+docs/REQUIREMENTS.md
