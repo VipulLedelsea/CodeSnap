@@ -12,6 +12,7 @@ Built by Ledelsea · macOS · Python.
 
 ## Contents
 
+- [Getting started](#getting-started)
 - [How it works](#how-it-works)
 - [Features](#features)
 - [The multi-agent team](#the-multi-agent-team)
@@ -29,6 +30,56 @@ Built by Ledelsea · macOS · Python.
 - [Roadmap](#roadmap)
 
 ---
+
+## Getting started
+
+### For Mac users
+
+One command sets everything up and launches the app:
+
+```bash
+git clone https://github.com/Vipuld14/ScreenCaptureInterpreter.git
+cd "ScreenCaptureInterpreter/Screen Capture Tool"
+python3 run.py
+```
+
+`run.py` creates a virtual environment, installs the dependencies, asks for your
+Anthropic API key the first time (saved locally to `.env`, never committed), and
+opens the app in your browser. Then: **Start capture** -> switch to your editor ->
+**Cmd+Shift+1** -> scroll -> the report appears under *Recent results*.
+
+Build the double-click macOS app instead of running from the terminal:
+
+```bash
+python3 run.py --build
+```
+
+That produces `dist/Code Capture.app` -- drag it to `/Applications`. First run
+needs the macOS permissions in **Privacy & Security** (Screen Recording,
+Accessibility, Input Monitoring) -- see [macOS permissions](#macos-permissions).
+
+### For Windows users
+
+Windows runs the app **from source** (the double-click `.app` is macOS-only).
+Same repo, use `python` instead of `python3`:
+
+```bash
+git clone https://github.com/Vipuld14/ScreenCaptureInterpreter.git
+cd "ScreenCaptureInterpreter\Screen Capture Tool"
+python run.py
+```
+
+That sets up the environment and opens the browser UI the same way. What differs
+on Windows:
+
+- The start/capture hotkey is **Win+Shift+1** (the `Cmd` key maps to the Windows key). If it clashes with a system shortcut, keep the terminal window focused.
+- You may need to run the terminal **as Administrator** for the global hotkey to register.
+- Desktop notifications are macOS-only and are silently skipped -- watch the browser's live status instead.
+- Region capture (Win+Shift+8) is macOS-only; use the default **burst** mode, which captures the full screen.
+- No packaged `.exe` -- run from source with `python run.py`.
+
+> Code Capture was built and tested primarily on macOS; Windows support is
+> run-from-source and less battle-tested.
 
 ## How it works
 
@@ -108,9 +159,8 @@ Opens the browser UI → **Start capture** → switch to your editor → press
 
 **Command line:**
 ```bash
-python hotkey_capture.py            # multi-agent team (default)
-python hotkey_capture.py --single   # single-agent backup
-python agent.py --dir tests/inbox   # analyse a folder of screenshots (offline)
+python src/main.py --capture            # capture worker, multi-agent team (default)
+python src/main.py --capture --single   # capture worker, single-agent backup
 ```
 
 ## Hotkeys
@@ -149,7 +199,7 @@ is transcribed and reported, just not compiler-verified.
 See **[DEPLOY.md](DEPLOY.md)**. In short:
 
 ```bash
-pyinstaller --noconfirm CodeCapture.spec
+pyinstaller --noconfirm packaging/CodeCapture.spec
 xattr -cr "dist/Code Capture.app"
 codesign --force --deep --sign - "dist/Code Capture.app"
 ```
