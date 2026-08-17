@@ -43,6 +43,31 @@
           <input type="range" id="toleranceSlider" min="3" max="61" step="1" value="3">
           <span class="tolerance-hint">how long a still screen waits before wrapping up</span>
         </div>
+        <div class="region-row">
+          <button class="btn-secondary" id="pickAreaBtn" type="button">Pick code area</button>
+          <span class="region-status" id="regionStatus">Capturing the full screen</span>
+          <button class="btn-link" id="clearAreaBtn" type="button" style="display:none">use full screen</button>
+        </div>
+      </div>
+
+      <div class="region-modal" id="regionModal" style="display:none">
+        <div class="region-modal-inner">
+          <div class="region-modal-head">
+            <strong id="regionModalTitle">Drag a box around the code</strong>
+            <span id="regionModalHint">On a screen-share, box just the shared code — this excludes webcams and side panels so scrolling is detected.</span>
+          </div>
+          <div class="region-stage" id="regionStage">
+            <img id="regionShot" alt="screen" draggable="false">
+            <div class="region-sel" id="regionSel" style="display:none"></div>
+            <div class="region-overlay-msg" id="regionOverlayMsg"></div>
+          </div>
+          <div class="region-modal-actions">
+            <button class="btn-link" id="regionRetake" type="button">Re-take screenshot (3s delay)</button>
+            <span style="flex:1"></span>
+            <button class="btn-link" id="regionCancel" type="button">Cancel</button>
+            <button class="btn-primary" id="regionUse" type="button" disabled>Use this area</button>
+          </div>
+        </div>
       </div>
 
       <div class="flow-label" id="flowLabel" style="display:none"><span class="flow-live">LIVE</span> Processing pipeline</div>

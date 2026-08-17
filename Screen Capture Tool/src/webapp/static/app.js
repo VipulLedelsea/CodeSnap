@@ -314,6 +314,7 @@ $("startBtn").addEventListener("click", async () => {
     const params = new URLSearchParams();
     if (single) params.set("single", "true");
     if (idle !== null) params.set("idle_stop", String(idle));
+    if (pickedRegion) params.set("region", pickedRegion);
     const qs = params.toString();
     await fetch("/api/session/start" + (qs ? "?" + qs : ""), { method: "POST" });
     const manual = idle === 0;
@@ -331,3 +332,85 @@ pollStatus();
 window.addEventListener("resize", () => { if (sessionRunning) renderFlow(lastFlowEvents); });
 window.downloadCode = downloadCode;
 window.downloadReport = downloadReport;
+
+
+// ── Pick code area (drag-select over a screenshot) ───────────────────────────
+let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
+
+(function () {
+  const modal = $("regionModal"), stage = $("regionStage"), shot = $("regionShot");
+  const sel = $("regionSel"), msg = $("regionOverlayMsg");
+  const useBtn = $("regionUse"), statusEl = $("regionStatus"), clearBtn = $("clearAreaBtn");
+  if (!modal) return;
+
+  let box = null, active = false;   // box = selection coords; active = mouse button held
+
+  function openModal() { modal.style.display = "flex"; }
+  function closeModal() { modal.style.display = "none"; box = null; active = false; }
+
+  async function loadShot(delay) {
+    shot.style.opacity = ".3";
+    msg.textContent = delay ? "Bring your code to the front… snapping in " + delay + "s" : "Loading screenshot…";
+    msg.style.display = "block";
+    if (delay) { for (let s = delay; s > 0; s--) { msg.textContent = "Bring your code to the front… " + s; await new Promise(r => setTimeout(r, 1000)); } }
+    try {
+      const res = await fetch("/api/screen.png?notify=1&t=" + Date.now());
+      if (!res.ok) throw new Error("screenshot failed");
+      const blob = await res.blob();
+      shot.src = URL.createObjectURL(blob);
+      shot.onload = () => { shot.style.opacity = "1"; msg.style.display = "none"; };
+    } catch (e) {
+      msg.textContent = "Couldn't grab the screen — grant Screen Recording permission and retry.";
+    }
+    sel.style.display = "none"; useBtn.disabled = true; box = null; active = false;
+  }
+
+  function imgRect() { return shot.getBoundingClientRect(); }
+
+  function drawSel() {
+    if (!box) { sel.style.display = "none"; return; }
+    const x = Math.min(box.x0, box.x1), y = Math.min(box.y0, box.y1);
+    const w = Math.abs(box.x1 - box.x0), h = Math.abs(box.y1 - box.y0);
+    const sr = stage.getBoundingClientRect();
+    sel.style.display = "block";
+    sel.style.left = (x - sr.left) + "px"; sel.style.top = (y - sr.top) + "px";
+    sel.style.width = w + "px"; sel.style.height = h + "px";
+    useBtn.disabled = (w < 8 || h < 8);
+  }
+
+  stage.addEventListener("mousedown", (e) => {
+    active = true;
+    box = { x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY };
+    drawSel(); e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => { if (active && box) { box.x1 = e.clientX; box.y1 = e.clientY; drawSel(); } });
+  window.addEventListener("mouseup", () => { active = false; });   // box stays put after release
+
+  function fractions() {
+    const r = imgRect();
+    const x = Math.min(box.x0, box.x1), y = Math.min(box.y0, box.y1);
+    const w = Math.abs(box.x1 - box.x0), h = Math.abs(box.y1 - box.y0);
+    const L = clamp01((x - r.left) / r.width), T = clamp01((y - r.top) / r.height);
+    const W = clamp01(w / r.width), H = clamp01(h / r.height);
+    return [L, T, Math.min(W, 1 - L), Math.min(H, 1 - T)];
+  }
+  function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+
+  $("pickAreaBtn").addEventListener("click", () => { openModal(); loadShot(3); });
+  $("regionRetake").addEventListener("click", () => loadShot(3));
+  $("regionCancel").addEventListener("click", closeModal);
+  $("regionUse").addEventListener("click", () => {
+    if (!box) return;
+    const f = fractions().map(v => v.toFixed(4));
+    pickedRegion = f.join(",");
+    statusEl.textContent = "Capturing a selected area only";
+    clearBtn.style.display = "";
+    closeModal();
+    toast("Code area set — burst will capture just that box.");
+  });
+  clearBtn.addEventListener("click", () => {
+    pickedRegion = null;
+    statusEl.textContent = "Capturing the full screen";
+    clearBtn.style.display = "none";
+  });
+})();

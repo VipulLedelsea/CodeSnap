@@ -9,12 +9,13 @@ Run:  python -m webapp        (or: python webapp/server.py)
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from webapp.reports import scan_reports
 from webapp.session import SessionManager
 from core import status
+from core.capture import capture_full_png
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent.parent
@@ -101,9 +102,30 @@ def api_pending_download(name: str):
 
 
 @app.post("/api/session/start")
-def api_session_start(single: bool = False, idle_stop: float | None = None):
-    started = _session.start(single=single, idle_stop=idle_stop)
-    return {"running": _session.running(), "started": started, "single": single, "idle_stop": idle_stop}
+def api_session_start(single: bool = False, idle_stop: float | None = None, region: str | None = None):
+    started = _session.start(single=single, idle_stop=idle_stop, region=region)
+    return {"running": _session.running(), "started": started, "single": single,
+            "idle_stop": idle_stop, "region": region}
+
+
+@app.get("/api/screen.png")
+def api_screen(delay: float = 0.0, notify: bool = False):
+    """One full screenshot, for the 'pick code area' picker. Optional delay lets the
+    user bring their code to the front first; notify pings the desktop when done."""
+    import time as _t
+    if delay > 0:
+        _t.sleep(min(delay, 10.0))
+    try:
+        png = capture_full_png()
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    if notify:
+        try:
+            from core.notify import notify as _notify
+            _notify("Code Capture", "Screenshot taken — switch back to draw the code box.")
+        except Exception:  # noqa: BLE001 - notification is optional
+            pass
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/session/stop")

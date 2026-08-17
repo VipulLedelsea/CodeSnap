@@ -63,6 +63,29 @@ def capture_region_png() -> "bytes | None":
             pass
 
 
+def capture_region_fixed(fracs) -> bytes:
+    """Grab a fixed sub-rectangle of the primary screen, given as fractions
+    (left, top, width, height) in 0..1 of the screen. Used by region-locked burst
+    so scrolling code registers as change and off-code chrome (Zoom tiles, side
+    panels) is excluded. Fractions keep it resolution-independent."""
+    import mss
+    from PIL import Image
+    left, top, width, height = fracs
+    with mss.mss() as sct:
+        mon = sct.monitors[1]
+        box = {
+            "left": mon["left"] + int(left * mon["width"]),
+            "top": mon["top"] + int(top * mon["height"]),
+            "width": max(1, int(width * mon["width"])),
+            "height": max(1, int(height * mon["height"])),
+        }
+        raw = sct.grab(box)
+    img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return _downscale_png(buf.getvalue())
+
+
 def next_png_path(session_dir):
     """Next free NNN.png in session_dir (so concurrent capturers don't collide)."""
     from pathlib import Path

@@ -94,6 +94,7 @@ class App:
         self.auto_mode = False                    # set from --auto (agent owns the session)
         self.burst_mode = False                   # set from --burst (auto-capture while scrolling)
         self.idle_stop = BURST_IDLE_STOP          # secs of no on-screen change before auto-stop; <=0 = manual (end with Cmd+Shift+1)
+        self.region = None                        # (L,T,W,H) fractions to capture only the code area; None = full screen
         self.team_mode = True                     # DEFAULT: multi-agent team (A2A). --single flips to backup single-agent.
         self._ready_event = threading.Event()     # set by Cmd+Shift+7 to advance an owned session
         self.capture_enabled = False              # captures allowed (stays on during agent run)
@@ -169,7 +170,7 @@ class App:
             pass
 
     def _burst_loop(self, session_dir):
-        from core.capture import capture_full_png, next_png_path
+        from core.capture import capture_full_png, capture_region_fixed, next_png_path
         from core import status
         cache = session_dir / ".cache"
         last_hash = None
@@ -178,7 +179,7 @@ class App:
         started = time.monotonic()
         while self.running and kept < BURST_MAX_FRAMES:
             try:
-                data = capture_full_png()
+                data = capture_region_fixed(self.region) if self.region else capture_full_png()
             except Exception as exc:  # noqa: BLE001
                 print(f"Capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
                 break
@@ -542,6 +543,7 @@ def main() -> int:
     ap.add_argument("--burst", action="store_true", help="(default) Burst: auto-capture while you scroll; phash drops duplicates.")
     ap.add_argument("--single", action="store_true", help="Backup: analyse with the single agent instead of the multi-agent team (team is the default).")
     ap.add_argument("--idle-stop", type=float, default=BURST_IDLE_STOP, dest="idle_stop", help="Seconds of no on-screen change before a burst auto-stops; 0 = manual (end with Cmd+Shift+1).")
+    ap.add_argument("--region", default=None, help="Capture only a screen sub-rectangle: \"L,T,W,H\" as fractions 0-1 (left,top,width,height).")
     args = ap.parse_args()
     load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -570,6 +572,13 @@ def main() -> int:
         mode = "BURST (auto-capture while scrolling)"
     app.team_mode = not args.single
     app.idle_stop = args.idle_stop
+    if args.region:
+        try:
+            app.region = tuple(float(x) for x in args.region.split(","))
+            assert len(app.region) == 4
+        except Exception:
+            print(f"Ignoring bad --region {args.region!r}", file=sys.stderr)
+            app.region = None
     mode += " + SINGLE-AGENT (backup)" if args.single else " + TEAM (multi-agent, default)"
 
     print(
