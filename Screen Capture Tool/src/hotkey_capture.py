@@ -93,6 +93,7 @@ class App:
         self.agent_mode = False                   # set from --agent in main
         self.auto_mode = False                    # set from --auto (agent owns the session)
         self.burst_mode = False                   # set from --burst (auto-capture while scrolling)
+        self.idle_stop = BURST_IDLE_STOP          # secs of no on-screen change before auto-stop; <=0 = manual (end with Cmd+Shift+1)
         self.team_mode = True                     # DEFAULT: multi-agent team (A2A). --single flips to backup single-agent.
         self._ready_event = threading.Event()     # set by Cmd+Shift+7 to advance an owned session
         self.capture_enabled = False              # captures allowed (stays on during agent run)
@@ -192,11 +193,13 @@ class App:
                 status.publish(f"Captured frame {kept}")
                 print(f"  burst frame {kept}: {out.name}")
                 self._pool.submit(self._safe_extract, out, cache)
-            idle = time.monotonic() - last_change
-            if kept >= 2 and idle >= BURST_IDLE_STOP:
-                break
-            if kept < 2 and (time.monotonic() - started) >= BURST_MAX_WAIT:
-                break
+            if self.idle_stop > 0:
+                idle = time.monotonic() - last_change
+                if kept >= 2 and idle >= self.idle_stop:
+                    break
+                if kept < 2 and (time.monotonic() - started) >= BURST_MAX_WAIT:
+                    break
+            # manual mode (idle_stop <= 0): never auto-stop — ends via Cmd+Shift+1 or the frame cap
             time.sleep(BURST_INTERVAL)
         status.publish(f"Scrolling stopped — {kept} unique frame(s), analysing", "info")
         from core.notify import notify
@@ -538,6 +541,7 @@ def main() -> int:
     ap.add_argument("--auto", action="store_true", help="Agent-owned session: it captures and pages itself.")
     ap.add_argument("--burst", action="store_true", help="(default) Burst: auto-capture while you scroll; phash drops duplicates.")
     ap.add_argument("--single", action="store_true", help="Backup: analyse with the single agent instead of the multi-agent team (team is the default).")
+    ap.add_argument("--idle-stop", type=float, default=BURST_IDLE_STOP, dest="idle_stop", help="Seconds of no on-screen change before a burst auto-stops; 0 = manual (end with Cmd+Shift+1).")
     args = ap.parse_args()
     load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -565,6 +569,7 @@ def main() -> int:
         app.burst_mode = True; app.agent_mode = app.auto_mode = False
         mode = "BURST (auto-capture while scrolling)"
     app.team_mode = not args.single
+    app.idle_stop = args.idle_stop
     mode += " + SINGLE-AGENT (backup)" if args.single else " + TEAM (multi-agent, default)"
 
     print(

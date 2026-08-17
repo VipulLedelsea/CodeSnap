@@ -38,6 +38,11 @@
             <button class="btn-primary" id="startBtn">Start capture</button>
           </div>
         </div>
+        <div class="tolerance-row">
+          <label for="toleranceSlider" title="How long the screen can sit still — e.g. a presenter talking over the code — before the capture wraps up. Slide to the end for Manual, then end it yourself with Cmd+Shift+1.">Pause tolerance: <strong id="toleranceLabel">3s</strong></label>
+          <input type="range" id="toleranceSlider" min="3" max="61" step="1" value="3">
+          <span class="tolerance-hint">how long a still screen waits before wrapping up</span>
+        </div>
       </div>
 
       <div class="flow-label" id="flowLabel" style="display:none"><span class="flow-live">LIVE</span> Processing pipeline</div>

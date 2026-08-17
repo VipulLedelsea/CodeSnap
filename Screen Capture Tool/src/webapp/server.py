@@ -101,9 +101,9 @@ def api_pending_download(name: str):
 
 
 @app.post("/api/session/start")
-def api_session_start(single: bool = False):
-    started = _session.start(single=single)
-    return {"running": _session.running(), "started": started, "single": single}
+def api_session_start(single: bool = False, idle_stop: float | None = None):
+    started = _session.start(single=single, idle_stop=idle_stop)
+    return {"running": _session.running(), "started": started, "single": single, "idle_stop": idle_stop}
 
 
 @app.post("/api/session/stop")

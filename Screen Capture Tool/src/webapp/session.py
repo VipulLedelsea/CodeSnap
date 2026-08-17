@@ -17,7 +17,7 @@ class SessionManager:
     def running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
-    def start(self, single: bool = False) -> bool:
+    def start(self, single: bool = False, idle_stop=None) -> bool:
         if self.running():
             return False
         from core import status
@@ -30,6 +30,8 @@ class SessionManager:
             argv = [sys.executable, "--capture"]
         else:
             argv = [sys.executable, str(PROJECT / "src" / "main.py"), "--capture"]
+        if idle_stop is not None:
+            argv += ["--idle-stop", str(idle_stop)]   # pause tolerance from the slider (0 = manual)
         if single:
             argv.append("--single")   # backup: single agent instead of the default team
         self._proc = subprocess.Popen(argv, cwd=str(PROJECT))

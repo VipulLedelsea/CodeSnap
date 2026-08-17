@@ -290,16 +290,35 @@ function setRunning(running) {
   const fl = $("flowLabel"); if (fl) fl.style.display = running ? "flex" : "none";
 }
 
+// Pause-tolerance slider: max position (61) = Manual (never auto-stop -> idle_stop 0)
+(function () {
+  const tol = $("toleranceSlider"), lbl = $("toleranceLabel");
+  if (!tol || !lbl) return;
+  const upd = () => { lbl.textContent = (parseInt(tol.value, 10) >= 61) ? "Manual" : tol.value + "s"; };
+  tol.addEventListener("input", upd); upd();
+})();
+function idleStopValue() {
+  const tol = $("toleranceSlider");
+  if (!tol) return null;
+  const v = parseInt(tol.value, 10);
+  return v >= 61 ? 0 : v;          // 0 = manual / never auto-stop
+}
+
 $("startBtn").addEventListener("click", async () => {
   if (sessionRunning) {
     await fetch("/api/session/stop", { method: "POST" });
     toast("Session stopped.");
   } else {
     const single = $("singleToggle") && $("singleToggle").checked;
-    await fetch("/api/session/start" + (single ? "?single=true" : ""), { method: "POST" });
-    toast(single
-      ? "Single-agent (backup) session launched — switch to your editor and press Cmd+Shift+1."
-      : "Team session launched — switch to your editor and press Cmd+Shift+1.");
+    const idle = idleStopValue();
+    const params = new URLSearchParams();
+    if (single) params.set("single", "true");
+    if (idle !== null) params.set("idle_stop", String(idle));
+    const qs = params.toString();
+    await fetch("/api/session/start" + (qs ? "?" + qs : ""), { method: "POST" });
+    const manual = idle === 0;
+    toast((single ? "Single-agent (backup)" : "Team") + " session launched — switch to your editor and press Cmd+Shift+1"
+      + (manual ? ". Manual mode: it won't auto-stop, press Cmd+Shift+1 again to finish." : "."));
   }
   pollStatus();
 });

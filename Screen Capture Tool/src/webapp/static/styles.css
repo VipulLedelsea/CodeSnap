@@ -255,3 +255,11 @@ pre.code::-webkit-scrollbar-thumb:hover,.status-feed::-webkit-scrollbar-thumb:ho
   font-size:13.5px;color:var(--copper-ink);box-shadow:var(--shadow-sm)}
 .analyzing-spin{width:15px;height:15px;border-radius:50%;border:2px solid var(--copper-soft);
   border-top-color:var(--copper);animation:ghspin .8s linear infinite;flex:none}
+
+
+/* Pause-tolerance slider (burst auto-stop) */
+.tolerance-row { display:flex; align-items:center; gap:12px; margin-top:14px; font-size:13px; color:var(--muted); flex-wrap:wrap; }
+.tolerance-row label { white-space:nowrap; }
+.tolerance-row strong { color:var(--ink, #2B2622); }
+.tolerance-row input[type="range"] { flex:0 0 200px; max-width:200px; accent-color:#BE6E4A; cursor:pointer; }
+.tolerance-hint { color:var(--muted); opacity:.8; }
