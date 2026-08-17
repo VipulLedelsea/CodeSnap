@@ -414,3 +414,16 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
     clearBtn.style.display = "none";
   });
 })();
+
+
+// ── Liquid Glass theme toggle (persisted) ────────────────────────────────────
+(function () {
+  const KEY = "cc-glass";
+  if (localStorage.getItem(KEY) === "0") document.body.classList.remove("glass");
+  const t = document.getElementById("glassToggle");
+  if (t) t.addEventListener("click", () => {
+    const on = document.body.classList.toggle("glass");
+    localStorage.setItem(KEY, on ? "1" : "0");
+    toast(on ? "Liquid Glass on." : "Flat look on.");
+  });
+})();

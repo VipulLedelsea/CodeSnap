@@ -6,16 +6,17 @@
   <title>Ledelsea — Code Capture</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
+<body class="glass">
   <div class="app">
     <aside class="sidebar">
-      <div class="brand"><img src="/static/ledelsea_logo.png" alt="Ledelsea — our team, your success" class="brand-logo"></div>
+      <div class="brand"><img src="/static/ledelsea_logo_t.png" alt="Ledelsea — our team, your success" class="brand-logo"></div>
       <div class="nav-label">Modules</div>
       <a class="nav-item active"><span class="l">Code Capture</span></a>
       <div class="nav-item disabled"><span class="l">Documents</span><span class="pill-soon">soon</span></div>
       <div class="nav-item disabled"><span class="l">Data extract</span><span class="pill-soon">soon</span></div>
       <div class="nav-add">＋ Add module</div>
       <div class="spacer"></div>
+      <div class="footer-item glass-toggle" id="glassToggle" title="Toggle the Liquid Glass look">Liquid glass<span class="gdot"></span></div>
       <div class="footer-item">Settings</div>
       <div class="footer-item"><span class="avatar">V</span><span>Vipul</span></div>
     </aside>
@@ -81,8 +82,8 @@
         <span class="step">3 · Report</span>
       </div>
 
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <p class="section-label">Recent results</p>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin:22px 4px 12px">
+        <p class="section-label" style="margin:0">Recent results</p>
         <button class="btn-primary" id="refreshBtn" style="background:transparent;color:var(--muted);border:0.5px solid var(--line);padding:6px 12px">Refresh</button>
       </div>
       <div id="reports"></div>

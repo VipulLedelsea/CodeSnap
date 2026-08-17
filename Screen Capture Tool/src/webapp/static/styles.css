@@ -281,3 +281,151 @@ pre.code::-webkit-scrollbar-thumb:hover,.status-feed::-webkit-scrollbar-thumb:ho
 .region-sel { position:absolute; border:2px solid #BE6E4A; background:rgba(190,110,74,.16); pointer-events:none; }
 .region-overlay-msg { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#2B2622; font-size:14px; text-align:center; padding:20px; }
 .region-modal-actions { display:flex; align-items:center; gap:10px; }
+
+/* ============================================================
+   Apple / macOS look (light) — cool canvas, white cards,
+   soft shadows, SF weights. Keeps the Ledelsea copper accent.
+   ============================================================ */
+:root{
+  --bg:#F5F5F7;                       /* Apple light-gray canvas */
+  --panel:#FFFFFF;
+  --line:#E4E4E7; --line-soft:#ECECEF;
+  --text:#1D1D1F; --muted:#6E6E73; --faint:#A1A1A6;
+  --card-radius:16px; --radius:10px;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.05);
+  --shadow-md:0 6px 22px rgba(0,0,0,.08);
+}
+body{ letter-spacing:-.01em; }
+
+/* flat white surfaces with a soft neutral shadow (no warm gradient) */
+.sidebar{ background:#fff; box-shadow:1px 0 0 rgba(0,0,0,.04); }
+.card{ background:#fff; border:0.5px solid var(--line);
+       box-shadow:0 1px 3px rgba(0,0,0,.06), 0 10px 28px rgba(0,0,0,.04); }
+.report{ background:#fff; border:0.5px solid var(--line); box-shadow:var(--shadow-sm); }
+.report:hover{ box-shadow:var(--shadow-md); transform:translateY(-2px); }
+.report.pending{ border-left:3px solid var(--copper); }
+
+/* headings: SF semibold, tight tracking */
+h1{ font-weight:600; letter-spacing:-.022em; font-size:24px; }
+.brand .name{ letter-spacing:-.012em; }
+
+/* primary button: solid copper, rounded, subtle depth */
+.btn-primary{ border-radius:10px; font-weight:590; letter-spacing:0;
+              box-shadow:0 1px 2px rgba(0,0,0,.14); }
+.btn-primary:hover{ filter:brightness(1.04); transform:none;
+                    box-shadow:0 2px 10px rgba(190,110,74,.28); }
+.btn-primary:active{ transform:scale(.97); }
+
+/* secondary + neutral controls */
+.btn-secondary{ border:0.5px solid var(--line); border-radius:10px; box-shadow:var(--shadow-sm); }
+.tag.file,.tag.text{ background:#EFEFF2; color:#6E6E73; }
+.pill-soon{ background:#EFEFF2; color:#6E6E73; }
+
+/* Apple-style focus ring */
+button:focus-visible, input:focus-visible, a:focus-visible{
+  outline:none; box-shadow:0 0 0 3px rgba(190,110,74,.35);
+}
+
+/* iOS-style switch for the single-agent toggle */
+.team-toggle input[type="checkbox"]{
+  -webkit-appearance:none; appearance:none; margin:0; flex:none; cursor:pointer;
+  width:38px; height:22px; border-radius:22px; background:#E4E4E7; position:relative;
+  transition:background .2s var(--ease);
+}
+.team-toggle input[type="checkbox"]::after{
+  content:""; position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%;
+  background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.28); transition:transform .2s var(--ease);
+}
+.team-toggle input[type="checkbox"]:checked{ background:var(--copper); }
+.team-toggle input[type="checkbox"]:checked::after{ transform:translateX(16px); }
+
+/* keep the sliders' copper accent (native, crisp) */
+.tolerance-row input[type="range"]{ accent-color:var(--copper); height:4px; }
+
+/* region modal as a clean Apple sheet */
+.region-modal{ background:rgba(0,0,0,.42); backdrop-filter:blur(3px); }
+.region-modal-inner{ border-radius:18px; box-shadow:0 24px 70px rgba(0,0,0,.42); }
+
+/* ============================================================
+   Liquid Glass (body.glass) — translucent frosted material over
+   a soft ambient backdrop. Copper stays the accent.
+   ============================================================ */
+body.glass{
+  background-color:#EDEDF1;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(120,116,128,.15) 1px, transparent 1.7px),   /* dot grid */
+    radial-gradient(340px 340px at 5% 3%, rgba(190,110,74,.32), transparent 62%),        /* lighthouse lamp */
+    linear-gradient(116deg, rgba(255,241,226,.60) 0%, rgba(255,241,226,.14) 30%, transparent 52%), /* beam sweep */
+    radial-gradient(760px 560px at 106% 110%, rgba(46,125,176,.16), transparent 60%);    /* teal corner */
+  background-size:34px 34px, auto, auto, auto;
+  background-repeat:repeat, no-repeat, no-repeat, no-repeat;
+  background-attachment:fixed;
+}
+body.glass .main{ background:transparent; }
+
+/* frosted panels — blur what's behind for real glass depth */
+body.glass .card,
+body.glass .report,
+body.glass .status-feed,
+body.glass .devflow{
+  background:rgba(255,255,255,.55);
+  -webkit-backdrop-filter:blur(24px) saturate(180%);
+  backdrop-filter:blur(24px) saturate(180%);
+  border:0.5px solid rgba(255,255,255,.65);
+  box-shadow:0 10px 34px rgba(31,26,22,.12), inset 0 1px 0 rgba(255,255,255,.65);
+}
+body.glass .sidebar{
+  background:rgba(255,255,255,.5);
+  -webkit-backdrop-filter:blur(24px) saturate(180%);
+  backdrop-filter:blur(24px) saturate(180%);
+  border-right:0.5px solid rgba(255,255,255,.55);
+  box-shadow:none;
+}
+
+/* glassy primary button with a top specular sheen */
+body.glass .btn-primary{
+  background:linear-gradient(180deg, rgba(203,126,90,.97), rgba(176,96,62,.97));
+  box-shadow:0 8px 20px rgba(190,110,74,.30), inset 0 1px 0 rgba(255,255,255,.45);
+}
+body.glass .btn-secondary{
+  background:rgba(255,255,255,.5);
+  -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
+  border:0.5px solid rgba(255,255,255,.65);
+}
+
+/* translucent accents */
+body.glass .step, body.glass .nav-item.active, body.glass .tag,
+body.glass .pill-soon, body.glass .region-status{
+  -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+}
+
+/* glass modal + toast */
+body.glass .region-modal-inner{
+  background:rgba(255,255,255,.72);
+  -webkit-backdrop-filter:blur(30px) saturate(180%); backdrop-filter:blur(30px) saturate(180%);
+  border:0.5px solid rgba(255,255,255,.65);
+}
+body.glass .toast{
+  background:rgba(29,29,31,.72);
+  -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px);
+}
+
+/* the toggle switch in the sidebar footer */
+.glass-toggle{ cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.glass-toggle .gdot{ width:30px; height:18px; border-radius:18px; background:#D9D4CE; position:relative; transition:background .2s var(--ease); flex:none; }
+.glass-toggle .gdot::after{ content:""; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.28); transition:transform .2s var(--ease); }
+body.glass .glass-toggle .gdot{ background:var(--copper); }
+body.glass .glass-toggle .gdot::after{ transform:translateX(12px); }
+
+/* --- fixes: logo blends into the sidebar, steps become glass --- */
+.brand-logo{ mix-blend-mode:normal; }
+
+body.glass .step{
+  background:rgba(255,255,255,.5);
+  -webkit-backdrop-filter:blur(12px) saturate(160%);
+  backdrop-filter:blur(12px) saturate(160%);
+  border:0.5px solid rgba(255,255,255,.6);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55);
+  color:var(--copper-ink);
+}
+body.glass .step .n, body.glass .step b{ color:var(--copper); }
