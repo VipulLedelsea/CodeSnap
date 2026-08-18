@@ -269,6 +269,22 @@ sending, and each frame is transcribed once and cached. More captured frames mea
 more transcription cost, so scroll steadily rather than capturing far more than you
 need.
 
+## Known limitations
+
+**Indentation can drift.** The tool reliably captures the code's text — keywords,
+colons, brackets — but it can misjudge indentation by a space or two, because a
+single space is below what the vision model can resolve from a screenshot. Any
+indentation-based error in the report is flagged as *lower-confidence* for this
+reason, so verify those against the original.
+
+**Very long, multi-screen files are the least reliable case.** Capturing a file
+that takes many scrolls is harder than a one- or two-screen file. Keep line
+numbers off and scroll slowly for best results, and use **Pick code area**
+(region capture) on cluttered or shared screens.
+
+**Windows and Linux aren't packaged yet** — run from source (see
+[Getting started](#getting-started)).
+
 ## Roadmap
 
 The web UI shows two upcoming modules marked *soon*: **Documents** (summarise
