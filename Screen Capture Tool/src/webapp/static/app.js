@@ -427,3 +427,25 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
     toast(on ? "Liquid Glass on." : "Flat look on.");
   });
 })();
+
+
+// ── First-run API key onboarding ─────────────────────────────────────────────
+async function checkApiKey() {
+  const banner = $("keyBanner"); if (!banner) return;
+  try {
+    const r = await fetch("/api/key/status");
+    const j = await r.json();
+    banner.style.display = j.has_key ? "none" : "flex";
+  } catch (e) { /* leave hidden on error */ }
+}
+if ($("keySave")) $("keySave").addEventListener("click", async () => {
+  const v = ($("keyInput").value || "").trim();
+  if (!v) { toast("Paste your key first."); return; }
+  try {
+    const r = await fetch("/api/key?value=" + encodeURIComponent(v), { method: "POST" });
+    const j = await r.json();
+    if (j.ok) { $("keyBanner").style.display = "none"; $("keyInput").value = ""; toast("API key saved — you're ready to capture."); }
+    else toast(j.error || "Couldn't save that key.");
+  } catch (e) { toast("Couldn't reach the server."); }
+});
+checkApiKey();

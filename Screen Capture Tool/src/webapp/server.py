@@ -108,6 +108,33 @@ def api_session_start(single: bool = False, idle_stop: float | None = None, regi
             "idle_stop": idle_stop, "region": region}
 
 
+@app.get("/api/key/status")
+def api_key_status():
+    """Does the app have an Anthropic API key yet? (drives the first-run banner)"""
+    import os
+    from core import analysis
+    analysis.load_env()
+    return {"has_key": bool(os.environ.get("ANTHROPIC_API_KEY"))}
+
+
+@app.post("/api/key")
+def api_key_set(value: str = ""):
+    """Save the user's Anthropic key to ~/.code_capture/.env (found by the capture
+    worker on launch) and this process's env. Local-only server, so this is fine."""
+    import os
+    key = (value or "").strip()
+    if not (key.startswith("sk-ant") and len(key) > 20):
+        return JSONResponse({"ok": False, "error": "That doesn't look like an Anthropic key (it should start with 'sk-ant')."}, status_code=400)
+    cfg = Path.home() / ".code_capture"
+    try:
+        cfg.mkdir(parents=True, exist_ok=True)
+        (cfg / ".env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": f"Couldn't save: {exc}"}, status_code=500)
+    os.environ["ANTHROPIC_API_KEY"] = key
+    return {"ok": True}
+
+
 @app.get("/api/screen.png")
 def api_screen(delay: float = 0.0, notify: bool = False):
     """One full screenshot, for the 'pick code area' picker. Optional delay lets the

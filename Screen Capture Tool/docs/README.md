@@ -33,7 +33,16 @@ Built by Ledelsea · macOS · Python.
 
 ## Getting started
 
-### For Mac users
+### Download the app (macOS) — easiest
+
+1. Go to the [**Releases**](https://github.com/Vipuld14/ScreenCaptureInterpreter/releases) page and download **Code-Capture-macOS.zip**, then unzip it.
+2. The app is not signed by Apple, so the first time: **right-click** (or Control-click) **Code Capture.app → Open**, then confirm **Open** in the dialog. (Double-clicking shows an "unidentified developer" warning — right-click → Open bypasses it. You only do this once.)
+3. When prompted, grant **Screen Recording**, **Accessibility**, and **Input Monitoring** in System Settings → Privacy & Security, then reopen the app.
+4. In the app, paste your **Anthropic API key** (from [console.anthropic.com](https://console.anthropic.com/)) into the one-time setup banner. It's saved only on your Mac.
+
+That's it — click **Start capture** and press **Cmd+Shift+1**.
+
+### For Mac users (run from source)
 
 One command sets everything up and launches the app:
 

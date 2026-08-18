@@ -25,6 +25,17 @@
       <h1>Code Capture</h1>
       <p class="sub">Capture code from your screen and a team of AI agents transcribes it faithfully, checks it against a real compiler, fixes errors, and builds a verified report — overview, tech-stack review, and diagrams.</p>
 
+      <div class="key-banner" id="keyBanner" style="display:none">
+        <div class="key-text">
+          <strong>One-time setup — add your Anthropic API key</strong>
+          <span>Get one at <a href="https://console.anthropic.com/" target="_blank" rel="noopener">console.anthropic.com</a>. It starts with <code>sk-ant-</code> and is saved only on your Mac.</span>
+        </div>
+        <div class="key-row">
+          <input type="password" id="keyInput" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+          <button class="btn-primary" id="keySave" type="button">Save key</button>
+        </div>
+      </div>
+
       <div class="card">
         <div class="start-row">
           <div>
