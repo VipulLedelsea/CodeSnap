@@ -23,3 +23,6 @@ pytest
 # Web UI (Milestone 6)
 fastapi
 uvicorn
+
+# Native app window (packaged .app renders the UI in a real window, not a browser tab)
+pywebview

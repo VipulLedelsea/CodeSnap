@@ -166,14 +166,69 @@ def api_session_status():
     return {"running": _session.running(), "events": status.recent()}
 
 
-def main():
+def _serve_in_thread(host="127.0.0.1", port=8000):
+    """Run uvicorn in a background daemon thread (signal handlers off, since those
+    only work on the main thread). Returns once the thread is started."""
     import threading
-    import webbrowser
     import uvicorn
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    server.install_signal_handlers = lambda: None
+    threading.Thread(target=server.run, daemon=True).start()
+    return server
+
+
+def _wait_until_up(url, timeout=15.0):
+    import time
+    import urllib.request
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            urllib.request.urlopen(url, timeout=1)
+            return True
+        except Exception:  # noqa: BLE001
+            time.sleep(0.1)
+    return False
+
+
+def main():
+    """Boot the local server, then show the UI. In the packaged .app this opens a
+    NATIVE window (pywebview); in dev it opens your browser. Flags: --native forces
+    the window, --browser forces the browser."""
+    import sys
     url = "http://127.0.0.1:8000"
-    threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    _serve_in_thread()
+    if not _wait_until_up(url):
+        print("Server failed to start.", file=sys.stderr)
+        return 1
+
+    frozen = getattr(sys, "frozen", False)
+    want_native = ("--native" in sys.argv) or (frozen and "--browser" not in sys.argv)
+    if want_native:
+        try:
+            import webview
+            print(f"Code Capture running (native window) at {url}")
+            win = webview.create_window("Code Capture", url, width=1200, height=840,
+                                        min_size=(940, 620))
+            try:
+                win.events.closed += lambda: _session.stop()   # tidy up a running capture
+            except Exception:  # noqa: BLE001
+                pass
+            webview.start()      # blocks on the main thread until the window is closed
+            return 0
+        except Exception as exc:  # noqa: BLE001 - fall back to the browser
+            print(f"(native window unavailable: {exc}; opening browser instead)", file=sys.stderr)
+
+    import webbrowser
+    webbrowser.open(url)
     print(f"Ledelsea UI running at {url}  (Ctrl+C to stop)")
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+    try:
+        import time
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    return 0
 
 
 if __name__ == "__main__":

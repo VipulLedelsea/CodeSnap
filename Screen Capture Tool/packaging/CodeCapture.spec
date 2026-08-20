@@ -19,6 +19,7 @@ a = Analysis(
         'anthropic', 'pynput', 'pynput.keyboard', 'pynput.mouse',
         'mss', 'PIL', 'PIL.Image', 'imagehash', 'fastapi', 'starlette',
         'docx', 'dotenv',
+        'webview', 'webview.platforms.cocoa',
         # this project's own modules (imported lazily inside functions)
         'hotkey_capture', 'agent', 'team', 'tools',
         'core.analysis', 'core.capture', 'core.validate',
