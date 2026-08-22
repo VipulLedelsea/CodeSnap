@@ -140,7 +140,39 @@ def _indent_caveat(errors: str) -> str:
     return errors
 
 
-def agent_decoder(client, code: str, extension: str, language: str) -> dict:
+
+_INDENT_SENSITIVE_LANGS = {"python", "py", "yaml", "yml", "coffeescript", "coffee",
+                           "haskell", "hs", "fsharp", "f#", "nim", "cython", "pyx"}
+
+
+def _indent_sensitive(language, extension=None):
+    """True only for languages where indentation can be a real compile error."""
+    l = (language or "").strip().lower()
+    e = (extension or "").strip().lower().lstrip(".")
+    return l in _INDENT_SENSITIVE_LANGS or e in {"py", "pyx", "yaml", "yml", "coffee", "hs", "nim", "fs"}
+
+
+def _make_reread(client, ctx):
+    """Return a callable giving an INDEPENDENT (uncached) re-transcription of the
+    screenshots — used to confirm a suspected indentation error against a second read."""
+    def _reread():
+        imgs = sorted(getattr(ctx, "images", []) or [])
+        if not imgs:
+            return None
+        raws = []
+        for p in imgs:
+            try:
+                raws.append(analysis.extract_structured(client, p)["raw"])
+            except Exception:  # noqa: BLE001
+                pass
+        if not raws:
+            return None
+        code, _ = analysis.merge_frames(raws)
+        return code
+    return _reread
+
+
+def agent_decoder(client, code: str, extension: str, language: str, reread=None) -> dict:
     """Decoder (Sonnet). Checks the code AS CAPTURED, then applies a minimal,
     error-only fix if needed. Reports the REAL errors found (never invents), and
     whether the fix resolved them."""
@@ -151,7 +183,33 @@ def agent_decoder(client, code: str, extension: str, language: str) -> dict:
     if res.get("ok"):
         return {"errors": "None", "code": code, "checked": True,
                 "tool": res.get("tool", ""), "resolved": True}
-    errors = _indent_caveat(res.get("errors", ""))
+    raw_errors = res.get("errors", "")
+
+    # Confirm-on-error for indentation: a screenshot reads indentation only
+    # approximately, so before trusting an IndentationError we get a SECOND
+    # independent read of the same screenshots and compare.
+    if reread and _indent_sensitive(language, extension) and _INDENT_ERR.search(raw_errors or ""):
+        try:
+            code2 = reread()
+        except Exception:  # noqa: BLE001
+            code2 = None
+        if code2 and code2.strip() and code2 != code:
+            r2 = _check(code2, extension)
+            if r2.get("ok"):
+                # second independent read compiles cleanly -> the indent error was a
+                # scan artifact, not a real bug. Trust the clean read.
+                return {"errors": "None", "code": code2, "checked": True,
+                        "tool": r2.get("tool", ""), "resolved": True, "indent_reread": "resolved"}
+            if _INDENT_ERR.search(r2.get("errors", "") or ""):
+                # both reads show the indentation error -> it is real; report firmly.
+                errors = (raw_errors + "\n(Confirmed by a second independent read of the "
+                          "screenshot: this indentation error is in the code, not a scan artifact.)")
+            else:
+                errors = _indent_caveat(raw_errors)
+        else:
+            errors = _indent_caveat(raw_errors)
+    else:
+        errors = _indent_caveat(raw_errors)
     if validate.looks_truncated(errors):
         # The capture was likely cut off (an open quote/brace/statement never closed),
         # so this is probably NOT a real code bug. Do NOT "fix" it by inventing the
@@ -294,7 +352,8 @@ def _tc_repair(client, ctx, scratch, _inp):
     if not scratch.get("is_code"):
         return "Content is not code — no repair needed."
     d = agent_decoder(client, scratch.get("code", ""),
-                          scratch.get("extension", "txt"), scratch.get("language", ""))
+                          scratch.get("extension", "txt"), scratch.get("language", ""),
+                          _make_reread(client, ctx))
     scratch["code"] = d["code"]        # fixed code becomes what we save
     scratch["errors"] = d["errors"]
     summary = {k: v for k, v in d.items() if k != "code"}
@@ -533,7 +592,7 @@ def run_team_fast(client, ctx, goal=None, verbose=True, audit=None, max_iters=No
     audit.append("repair"); _pub("repair", stage="fix")
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_an = pool.submit(_analyst_enrich, client, numbered, base)
-        f_de = pool.submit(agent_decoder, client, code0, extension, language)
+        f_de = pool.submit(agent_decoder, client, code0, extension, language, _make_reread(client, ctx))
         an = f_an.result(); de = f_de.result()
 
     code = de.get("code", code0)          # Decoder ships the fixed code if the error-only fix compiled
