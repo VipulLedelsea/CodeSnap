@@ -8,7 +8,7 @@ Run:  python -m webapp        (or: python webapp/server.py)
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Body
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -16,6 +16,8 @@ from webapp.reports import scan_reports
 from webapp.session import SessionManager
 from core import status
 from core.capture import capture_full_png
+from core.outputs import save_report_bundle
+from core.project import analyze_project
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent.parent
@@ -102,10 +104,10 @@ def api_pending_download(name: str):
 
 
 @app.post("/api/session/start")
-def api_session_start(single: bool = False, idle_stop: float | None = None, region: str | None = None):
-    started = _session.start(single=single, idle_stop=idle_stop, region=region)
+def api_session_start(single: bool = False, idle_stop: float | None = None, region: str | None = None, project_mode: bool = False):
+    started = _session.start(single=single, idle_stop=idle_stop, region=region, project_mode=project_mode)
     return {"running": _session.running(), "started": started, "single": single,
-            "idle_stop": idle_stop, "region": region}
+            "idle_stop": idle_stop, "region": region, "project_mode": project_mode}
 
 
 @app.get("/api/key/status")
@@ -133,6 +135,144 @@ def api_key_set(value: str = ""):
         return JSONResponse({"ok": False, "error": f"Couldn't save: {exc}"}, status_code=500)
     os.environ["ANTHROPIC_API_KEY"] = key
     return {"ok": True}
+
+
+@app.post("/api/reports/clear")
+def api_reports_clear():
+    """Delete all staged (pending) and saved reports from disk. Keeps the folders."""
+    import time as _t
+    def _unlink_retry(f, tries=8):
+        for _ in range(tries):
+            try:
+                f.unlink(); return True
+            except FileNotFoundError:
+                return True
+            except OSError:                 # iCloud "Resource deadlock avoided" — retry briefly
+                _t.sleep(0.15)
+        return False
+    removed, failed = 0, 0
+    for d in (PENDING, REPORTS):
+        if d.exists():
+            for f in list(d.iterdir()):
+                if f.is_file() and not f.name.startswith("."):
+                    if _unlink_retry(f): removed += 1
+                    else: failed += 1
+    return {"ok": failed == 0, "removed": removed, "failed": failed}
+
+
+@app.post("/api/project/analyze")
+def api_project_analyze(payload: dict = Body(...)):
+    """Cross-file dependency analysis over selected captured files (project mode)."""
+    import os
+    from datetime import datetime
+    items = payload.get("items", []) if isinstance(payload, dict) else []
+    if len(items) < 2:
+        return JSONResponse({"error": "Pick at least 2 captured files to build a project map."}, status_code=400)
+    lookup = {}
+    for r in scan_reports(REPORTS) + scan_reports(PENDING):
+        if r.get("kind") == "report" and r.get("code"):
+            lookup[r["name"]] = r
+    import re
+    def _slug(x, default="File"):
+        b = re.sub(r"[^A-Za-z0-9_]+", "_", (x or "").strip()).strip("_")
+        return b or default
+    def _unique(dirp, stem):
+        cand, i = stem, 2
+        while (dirp / f"{cand}.json").exists():
+            cand = f"{stem}_{i}"; i += 1
+        return cand
+
+    files, picked = [], []
+    for it in items:
+        r = lookup.get((it or {}).get("report"))
+        if r:
+            fname = ((it.get("filename") or r.get("code_file") or r["name"]) or "").strip()
+            files.append({"name": fname, "code": r["code"]})
+            picked.append((r, fname))
+    if len(files) < 2:
+        return JSONResponse({"error": "Couldn't find code for the selected captures."}, status_code=400)
+
+    from core import analysis
+    analysis.load_env()
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return JSONResponse({"error": "No API key set — add it in the app first."}, status_code=400)
+    import anthropic
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=120.0)
+    try:
+        report = analyze_project(client, files)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"Project analysis failed: {exc}"}, status_code=500)
+
+    # Rename each member's bundle on disk to its detected filename (e.g. calc.py),
+    # so the file downloads/displays with a real name instead of report_<timestamp>.
+    members = []
+    for r, fname in picked:
+        if "." in fname:
+            base, ext = fname.rsplit(".", 1)
+        else:
+            base, ext = fname, (r.get("extension") or "txt")
+        stem = _unique(REPORTS, _slug(base))
+        new_name = r["name"]
+        try:
+            save_report_bundle({
+                "language": r.get("language", ""), "overview": r.get("overview", ""),
+                "errors": r.get("errors", ""), "tech_stack": r.get("tech_stack", ""),
+                "diagrams": r.get("diagrams", ""), "extension": ext, "code": r.get("code", ""),
+            }, REPORTS, stem)
+            for base_dir in (REPORTS, PENDING):          # remove the old report_<ts> bundle
+                for fp in (base_dir / f"{r['name']}.json", base_dir / (r.get("code_file") or "_")):
+                    try:
+                        if fp.name and fp.name != "_" and fp.exists():
+                            fp.unlink()
+                    except Exception:  # noqa: BLE001
+                        pass
+            new_name = stem
+        except Exception:  # noqa: BLE001
+            pass
+        members.append({"name": new_name, "filename": fname})
+    report["members"] = members
+
+    # Name the project report after what it is, e.g. ProjectReport_Calculator.
+    pname = _slug(report.get("project_name", ""), "")
+    base_name = "ProjectReport_" + pname if pname else "ProjectReport_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = _unique(REPORTS, base_name)
+    try:
+        save_report_bundle(report, REPORTS, name)   # finished deliverable -> Recent results
+    except Exception:  # noqa: BLE001 - still return it even if the save hiccups
+        pass
+    return {"ok": True, "name": name, "report": report}
+
+
+@app.post("/api/report/docx")
+def api_report_docx_post(payload: dict = Body(...)):
+    """Build a Word report including rendered diagram images (dev browser path)."""
+    name = (payload or {}).get("name", "")
+    images = (payload or {}).get("images") or []
+    rep = next((r for r in scan_reports(REPORTS) + scan_reports(PENDING)
+                if r.get("kind") == "report" and r.get("name") == name), None)
+    if not rep:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    import tempfile
+    from core.outputs import report_docx
+    tmp = Path(tempfile.mkdtemp()) / f"{name}.docx"
+    report_docx(rep, tmp, images)
+    return FileResponse(str(tmp), filename=f"{name}.docx")
+
+
+@app.get("/api/report/docx/{name}")
+def api_report_docx(name: str):
+    """Build a Word (.docx) report for a saved/pending report and serve it (dev browser)."""
+    if "/" in name or "\\" in name or name.startswith("."):
+        return JSONResponse({"error": "bad name"}, status_code=400)
+    rep = next((r for r in scan_reports(REPORTS) + scan_reports(PENDING)
+                if r.get("kind") == "report" and r.get("name") == name), None)
+    if not rep:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    import tempfile
+    from core.outputs import report_docx
+    tmp = Path(tempfile.mkdtemp()) / f"{name}.docx"
+    report_docx(rep, tmp)
+    return FileResponse(str(tmp), filename=f"{name}.docx")
 
 
 @app.get("/api/screen.png")
@@ -208,8 +348,49 @@ def main():
         try:
             import webview
             print(f"Code Capture running (native window) at {url}")
+
+            class _JsApi:
+                def __init__(self):
+                    self.window = None
+
+                def save_report_docx(self, name, images=None):
+                    """Build a Word report and save it via the native dialog (real download)."""
+                    try:
+                        rep = next((r for r in scan_reports(REPORTS) + scan_reports(PENDING)
+                                    if r.get("kind") == "report" and r.get("name") == name), None)
+                        if not rep:
+                            return False
+                        import tempfile, shutil
+                        from core.outputs import report_docx
+                        tmp = Path(tempfile.mkdtemp()) / (name + ".docx")
+                        report_docx(rep, tmp, images)
+                        dest = self.window.create_file_dialog(getattr(getattr(webview, "FileDialog", None), "SAVE", None) or webview.SAVE_DIALOG, save_filename=name + ".docx")
+                        if not dest:
+                            return False
+                        dest = dest if isinstance(dest, str) else dest[0]
+                        shutil.copy(str(tmp), dest)
+                        return True
+                    except Exception:  # noqa: BLE001
+                        return False
+
+                def save_text(self, filename, content):
+                    """Native Save dialog + write — real 'download' inside the app window."""
+                    try:
+                        dest = self.window.create_file_dialog(
+                            getattr(getattr(webview, "FileDialog", None), "SAVE", None) or webview.SAVE_DIALOG, save_filename=filename or "download.txt")
+                        if not dest:
+                            return False
+                        path = dest if isinstance(dest, str) else dest[0]
+                        with open(path, "w", encoding="utf-8") as f:
+                            f.write(content or "")
+                        return True
+                    except Exception:  # noqa: BLE001
+                        return False
+
+            _api = _JsApi()
             win = webview.create_window("Code Capture", url, width=1200, height=840,
-                                        min_size=(940, 620))
+                                        min_size=(940, 620), js_api=_api)
+            _api.window = win
             try:
                 win.events.closed += lambda: _session.stop()   # tidy up a running capture
             except Exception:  # noqa: BLE001

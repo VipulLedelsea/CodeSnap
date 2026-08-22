@@ -65,31 +65,34 @@ Return ONLY a JSON object (no prose, no code fences) with these keys:
   is_code    (boolean) — is the primary content source code?
   language   (string)  — e.g. "Python", "JavaScript", "C++" (empty if not code)
   extension  (string)  — file extension without a dot, e.g. "py", "js", "cpp" (empty if not code)
+  name       (string)  — a short filename-safe base name (letters/digits/underscore only, NO extension, NO spaces) describing the file's main content, e.g. "Calculator", "quicksort", "UserModel". Empty if not code.
   overview   (string)  — a clear, plain-English summary a non-expert can follow. One sentence on what it does overall, then one short paragraph per main part in everyday language (briefly explain any technical term). Logical order, short sentences. Weave INLINE LINE-NUMBER citations into the sentences, e.g. "(lines 5-11)" or "(line 27)", using the numbers shown. Do NOT mention screenshots.
   tech_stack (string)  — an honest, brief review. If the code is current and well written, SAY SO in one line and stop — do NOT invent nitpicks or filler to make a list. Only when there are genuine, worthwhile improvements, list them (at most 5, most important first). Put EACH point on its OWN line, numbered "1. ", "2. ", ... with a real newline (\n) between items. Empty string if not code.
 
 EXAMPLE — format only. Do NOT reuse this wording; describe the ACTUAL content you receive:
-{"is_code": true, "language": "Python", "extension": "py", "overview": "This script reads a whole number and prints whether it is even or odd (lines 1-4).", "tech_stack": "Up to date and idiomatic for its size; no significant changes needed."}
+{"is_code": true, "language": "Python", "extension": "py", "name": "even_odd", "overview": "This script reads a whole number and prints whether it is even or odd (lines 1-4).", "tech_stack": "Up to date and idiomatic for its size; no significant changes needed."}
 
 Return JSON only."""
 
 
-def agent_analyze(client, marked_text: str) -> dict:
-    """Analyst (Sonnet). Classifies and writes the overview + tech-stack review."""
-    base = analysis.synthesize_final(client, marked_text)  # reliable is_code/lang/ext/overview baseline
+def _analyst_enrich(client, text: str, base: dict) -> dict:
+    """Analyst enrichment given a precomputed classify `base` — adds the rich
+    overview + tech-stack review WITHOUT a second classify call (used by the
+    parallel pipeline so the classify runs once, up front)."""
     out = {
         "is_code": base.get("is_code", False),
         "language": base.get("language", ""),
         "extension": base.get("extension", ""),
         "overview": base.get("overview", ""),
         "tech_stack": "",
+        "name": "",
     }
-    if not marked_text.strip():
+    if not (text or "").strip():
         return out
     try:
         msg = client.messages.create(
             model=MODEL, max_tokens=2048, system=ANALYST_SYSTEM,
-            messages=[{"role": "user", "content": marked_text}],
+            messages=[{"role": "user", "content": text}],
         )
         raw = "".join(getattr(b, "text", "") for b in msg.content).strip()
         data = analysis._parse_json(raw)
@@ -101,7 +104,14 @@ def agent_analyze(client, marked_text: str) -> dict:
         out["extension"] = str(data.get("extension") or out["extension"]).strip().lstrip(".").lower()
         out["overview"] = str(data.get("overview") or out["overview"]).strip()
         out["tech_stack"] = str(data.get("tech_stack") or "").strip()
+        out["name"] = str(data.get("name") or "").strip()
     return out
+
+
+def agent_analyze(client, marked_text: str) -> dict:
+    """Analyst (Sonnet). Classifies and writes the overview + tech-stack review."""
+    base = analysis.synthesize_final(client, marked_text)  # reliable is_code/lang/ext/overview baseline
+    return _analyst_enrich(client, marked_text, base)
 
 
 def _check(code: str, extension: str) -> dict:
@@ -318,6 +328,7 @@ def _tc_finalize(client, ctx, scratch, inp):
     diagrams = scratch.get("diagrams", "")
     scratch["report_md"] = _assemble(language, overview, errors, code, tech, extension, is_code,
                                      diagrams, scratch.get("corrections"))
+    _apply_content_name(ctx, (a or {}).get("name"))
     if is_code:
         saved = tools._t_save_output(ctx, {
             "format": "source", "content": code, "extension": extension,
@@ -447,3 +458,105 @@ def run_team(client, ctx, goal=None, verbose=True, audit=None, max_iters=MAX_ITE
     final = "".join(getattr(b, "text", "") for b in _blocks(resp)
                     if getattr(b, "type", None) == "text").strip()
     return final or "(team finished without producing a report)", messages
+
+
+def _apply_content_name(ctx, name):
+    """Rename the output to a content-derived filename (e.g. Calculator) instead of
+    report_<timestamp>, kept unique across reports/ and reports/pending/."""
+    import re
+    from pathlib import Path
+    slug = re.sub(r"[^A-Za-z0-9_]+", "_", (name or "").strip()).strip("_")
+    if not slug:
+        return
+    root = Path(ctx.out_dir)
+    dirs = [root, root / "pending"]
+    cand, i = slug, 2
+    while any((d / f"Report_{cand}.json").exists() for d in dirs):
+        cand = f"{slug}_{i}"; i += 1
+    ctx.out_name = "Report_" + cand      # bundle -> Report_Calculator.json
+    ctx.code_name = "Code_" + cand       # code file -> Code_Calculator.py
+
+
+def run_team_fast(client, ctx, goal=None, verbose=True, audit=None, max_iters=None):
+    """Parallel team pipeline — same report as run_team(), lower wall-clock time.
+
+    extract -> quick classify -> (Analyst || Decoder || Diagrammer) -> assemble + save.
+    The three post-extraction specialists don't depend on each other (only on the
+    transcription + a language/extension classify), so they run concurrently. Total
+    The Analyst and Decoder are independent and run together; the Diagrammer then
+    runs on the Decoder's REPAIRED code (the report's goal is verified code), so its
+    diagrams reflect the corrected program. Total time drops from the SUM of the
+    three calls to roughly max(Analyst, Decoder) + Diagrammer.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    if audit is None:
+        audit = []
+
+    def _pub(msg, kind="tool", stage=None):
+        try:
+            from core import status
+            status.publish(msg, kind=kind, stage=stage)
+        except Exception:  # noqa: BLE001
+            pass
+
+    _pub("Coordinator started", kind="start", stage="start")
+
+    # Stage 1 — faithful transcription (must run first) + one quick classify
+    audit.append("get_transcription"); _pub("get_transcription", stage="read")
+    ex = agent_extract(ctx)
+    code0 = ex["code"]
+    numbered = ex.get("numbered", "") or code0
+    corrections = ex.get("corrections", [])
+    base = analysis.synthesize_final(client, numbered)      # is_code / language / extension for the fan-out
+    is_code = bool(base.get("is_code", False))
+    language = base.get("language", "") or ""
+    extension = base.get("extension", "") or "txt"
+
+    # Non-code -> overview only (document/text path)
+    if not (is_code and code0.strip()):
+        audit.append("analyze"); _pub("analyze", stage="classify")
+        an = _analyst_enrich(client, numbered, base)
+        overview = an.get("overview") or base.get("overview", "")
+        report_md = _assemble(language or "Document", overview, "None", code0,
+                              an.get("tech_stack", ""), extension, False, "", corrections)
+        fmt = "docx" if extension in ("docx", "doc") else "text"
+        _apply_content_name(ctx, an.get("name"))
+        audit.append("finalize"); _pub("finalize", stage="save")
+        saved = tools._t_save_output(ctx, {"format": fmt, "content": code0 or overview})
+        _pub("Report ready", kind="done", stage="done")
+        if verbose:
+            print(f"[team-fast] {saved}")
+        return report_md, []
+
+    # Stage 2 — Analyst || Decoder run together (independent)
+    audit.append("analyze"); _pub("analyze", stage="classify")
+    audit.append("repair"); _pub("repair", stage="fix")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_an = pool.submit(_analyst_enrich, client, numbered, base)
+        f_de = pool.submit(agent_decoder, client, code0, extension, language)
+        an = f_an.result(); de = f_de.result()
+
+    code = de.get("code", code0)          # Decoder ships the fixed code if the error-only fix compiled
+    # Stage 3 — Diagrammer draws the REPAIRED code (waits for the Decoder on purpose)
+    audit.append("diagram"); _pub("diagram", stage="save")
+    di = agent_diagrammer(client, code, language)
+
+    overview = an.get("overview") or base.get("overview", "")
+    tech = an.get("tech_stack", "")
+    language = language or an.get("language", "")
+    extension = extension or an.get("extension", "") or "txt"
+    errors = de.get("errors") or "None"
+    diagrams = di or ""
+
+    report_md = _assemble(language, overview, errors, code, tech, extension, True,
+                          diagrams, corrections)
+    _apply_content_name(ctx, an.get("name"))
+    audit.append("finalize"); _pub("finalize", stage="save")
+    saved = tools._t_save_output(ctx, {
+        "format": "source", "content": code, "extension": extension,
+        "language": language, "overview": overview, "errors": errors,
+        "tech_stack": tech, "diagrams": diagrams})
+    _pub("Report ready", kind="done", stage="done")
+    if verbose:
+        print(f"[team-fast] {saved}")
+    return report_md, []

@@ -89,25 +89,30 @@ function section(label, text, cls) {
 function reportCard(r) {
   const time = (r.modified || "").replace("T", " ");
   if (r.kind === "report") {
-    const dl = r.code_file
-      ? `<a class="dl" href="/api/download/${encodeURIComponent(r.code_file)}" download>Download code</a>` : "";
+    const isProj = String(r.language || "").toLowerCase() === "project";
+    const dlCode = (!isProj && r.code_file)
+      ? `<button class="dl" onclick="downloadSaved(this.dataset.f)" data-f="${escapeHtml(r.code_file)}">Download code</button>` : "";
+    const dlReport = `<button class="dl secondary" onclick="downloadReport('${r.name}')">Download report</button>`;
+    const codeSec = isProj
+      ? `<div class="rsec"><span class="rsec-label">Files</span><div class="rsec-body" style="color:var(--muted)">Get the code for each file from the <b>Files</b> section below.</div></div>`
+      : `<div class="rsec"><span class="rsec-label">Code</span><pre class="code">${escapeHtml(r.code || "")}</pre></div>`;
     return `<div class="report">
       <div class="report-head">
-        <span class="tag code">${escapeHtml(r.language || r.extension || "code")}</span>
+        <span class="tag code">${escapeHtml(isProj ? "Project" : (r.language || r.extension || "code"))}</span>
         <span class="report-name">${escapeHtml(r.code_file || r.name)}</span>
         <span class="report-time">${time}</span>
       </div>
       ${section("Overview", r.overview, "overview")}
-      ${section("Errors found", r.errors, "errors")}
-      ${section("Tech-stack review", r.tech_stack, "tech")}
-      <div class="rsec"><span class="rsec-label">Code</span>
-        <pre class="code">${escapeHtml(r.code || "")}</pre></div>
-      <div class="report-actions">${acts}</div>
+      ${isProj ? "" : section("Errors found", r.errors, "errors")}
+      ${section(isProj ? "Dependencies" : "Tech-stack review", r.tech_stack, "tech")}
+      ${codeSec}
+      ${diagramsSection(r.diagrams)}
+      <div class="report-actions">${dlCode}${dlReport}</div>
     </div>`;
   }
   const body = r.content
     ? `<pre class="code">${escapeHtml(r.content)}</pre>`
-    : `<p style="font-size:13px;color:var(--muted);margin:6px 0 0">${fmtSize(r.size)} · <a class="dl" href="/api/download/${encodeURIComponent(r.code_file||r.name)}" download>Download</a></p>`;
+    : `<p style="font-size:13px;color:var(--muted);margin:6px 0 0">${fmtSize(r.size)} · <button class="dl" onclick="downloadSaved(this.dataset.f)" data-f="${escapeHtml(r.code_file||r.name)}">Download</button></p>`;
   return `<div class="report">
     <div class="report-head">
       <span class="tag ${r.kind}">${r.ext || r.kind}</span>
@@ -119,6 +124,7 @@ function reportCard(r) {
 }
 
 const _pending = {};
+let _byName = {};   // every report (pending + saved + project) keyed by name
 
 function _download(filename, text, mime) {
   const blob = new Blob([text], { type: mime || "text/plain" });
@@ -133,30 +139,94 @@ function downloadCode(name) {
   const r = _pending[name];
   if (!r) return;
   const fn = r.code_file || (name + "." + (r.extension || "txt"));
-  _download(fn, r.code || "", "text/plain");
-  toast("Code file saved to your Downloads.");
+  saveFile(fn, r.code || "");
 }
 
-function downloadReport(name) {
-  const r = _pending[name];
-  if (!r) return;
-  const lines = [
-    "# Report — " + name,
-    "",
-    "**Language:** " + (r.language || r.extension || "n/a"),
-    "",
-    "## Overview",
-    (r.overview || "(none)"),
-    "",
-    "## Errors found",
-    (r.errors || "None"),
-    "",
-    "## Tech-stack review",
-    (r.tech_stack || "n/a"),
-    ""
-  ];
-  _download(name + "_report.md", lines.join("\n"), "text/markdown");
-  toast("Report saved to your Downloads.");
+function _esc(s){ return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function _nl(s){ return _esc(s).replace(/\n/g,"<br>"); }
+function buildReportHtml(name, r) {
+  const lang = _esc(r.language || r.extension || "");
+  const diagrams = String(r.diagrams || "");
+  const mer = [...diagrams.matchAll(/```mermaid\n([\s\S]*?)```/g)].map(m => m[1]);
+  const diagHtml = mer.length
+    ? mer.map(b => `<pre class="mermaid">${_esc(b)}</pre>`).join("")
+    : (diagrams ? `<pre>${_esc(diagrams)}</pre>` : "");
+  const merScript = mer.length
+    ? '<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script><script>try{mermaid.initialize({startOnLoad:true});}catch(e){}</script>'
+    : "";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${_esc(name)} — Code Capture report</title>
+<style>
+ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;max-width:880px;margin:36px auto;padding:0 22px;color:#1d1d1f;line-height:1.6}
+ h1{font-size:24px;margin:0 0 4px} h2{font-size:16px;margin:28px 0 6px;border-bottom:1px solid #ececef;padding-bottom:5px}
+ .meta{color:#6e6e73;font-size:13px;margin:0 0 8px}
+ pre{background:#f6f6f8;border:1px solid #e6e6ea;border-radius:10px;padding:12px 14px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;white-space:pre-wrap}
+ .err{color:#8a4a2c}
+</style></head><body>
+<h1>Code Capture report</h1>
+<p class="meta">${_esc(name)}${lang ? " · " + lang : ""}</p>
+<h2>Overview</h2><p>${_nl(r.overview || "(none)")}</p>
+<h2>Errors found</h2><p class="err">${_nl(r.errors || "None")}</p>
+<h2>Code</h2><pre>${_esc(r.code || "")}</pre>
+<h2>Tech-stack review</h2><p>${_nl(r.tech_stack || "n/a")}</p>
+${diagHtml ? "<h2>Diagrams</h2>" + diagHtml : ""}
+${merScript}
+</body></html>`;
+}
+async function _svgToPng(svg) {
+  return new Promise(resolve => {
+    let w = 800, h = 450;
+    const vb = svg.match(/viewBox="([\d.\- ]+)"/);
+    if (vb) { const p = vb[1].trim().split(/\s+/).map(Number); if (p.length === 4 && p[2] && p[3]) { w = Math.ceil(p[2]); h = Math.ceil(p[3]); } }
+    const img = new Image();
+    img.onload = () => {
+      const scale = 2, c = document.createElement("canvas");
+      c.width = Math.max(1, w * scale); c.height = Math.max(1, h * scale);
+      const ctx = c.getContext("2d"); ctx.scale(scale, scale);
+      ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(c.toDataURL("image/png").split(",")[1]);
+    };
+    img.onerror = () => resolve(null);
+    img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svg)));
+  });
+}
+async function _reportImages(diagrams) {
+  if (!window.mermaid) return [];
+  const s = String(diagrams || "");
+  const labels = [...s.matchAll(/\*\*(.+?)\*\*/g)].map(m => ({ pos: m.index, text: m[1].trim() }));
+  const blocks = [...s.matchAll(/```mermaid\s*\n([\s\S]*?)```/g)].map(m => ({ pos: m.index, code: m[1].trim() }));
+  const out = [];
+  for (let i = 0; i < blocks.length; i++) {
+    let label = "Diagram";
+    for (const l of labels) { if (l.pos < blocks[i].pos) label = l.text; else break; }
+    try {
+      const { svg } = await mermaid.render("rpt_" + Date.now() + "_" + i, blocks[i].code);
+      const png = await _svgToPng(svg);
+      if (png) out.push({ label, data: png });
+    } catch (e) { console.warn("diagram render failed", e); }
+  }
+  return out;
+}
+async function downloadReport(name) {
+  const r = _byName[name] || _pending[name];
+  const images = r ? await _reportImages(r.diagrams) : [];
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.save_report_docx) {
+    const ok = await window.pywebview.api.save_report_docx(name, images);
+    toast(ok ? ("Saved " + name + ".docx") : "Save cancelled.");
+    return;
+  }
+  try {
+    const res = await fetch("/api/report/docx", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, images }) });
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const el = document.createElement("a");
+    el.href = url; el.download = name + ".docx";
+    document.body.appendChild(el); el.click(); el.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast("Report saved to Downloads.");
+  } catch (e) { toast("Couldn't build the report."); }
 }
 
 function pendingCard(r) {
@@ -183,7 +253,9 @@ function pendingCard(r) {
 
 async function loadReports() {
   const box = $("reports");
-  box.innerHTML = `<p style="color:var(--muted)">Loading…</p>`;
+  const _sy = window.scrollY, _bt = box.scrollTop;          // preserve scroll across a refresh
+  const _hadContent = box.children.length && !box.querySelector(".empty") && !box.querySelector("p");
+  if (!_hadContent) box.innerHTML = `<p style="color:var(--muted)">Loading…</p>`;
   let saved = [], pending = [], reachedServer = false;
   try {
     const res = await fetch("/api/reports");
@@ -200,17 +272,51 @@ async function loadReports() {
     box.innerHTML = `<div class="empty">Couldn't load results. Is the server running?</div>`;
     return;
   }
-  const html = [];
+  const all = [...pending, ...saved];
+  const isProject = (r) => String(r.language || "").toLowerCase() === "project";
+  _byName = {}; for (const r of all) _byName[r.name] = r;
+  const nameToRep = _byName;
+
+  // Names to hide from the top-level list.
+  const hidden = new Set();
+  // (a) While collecting in Project mode, every file captured AFTER entering the mode
+  //     (not in the baseline) belongs to the project-in-progress — keep it in the Project
+  //     panel, not down here. Baseline-based so it never lags the capture.
+  if (_projMode && _projBaseline) {
+    for (const r of all) if (!isProject(r) && !_projBaseline.has(r.name)) hidden.add(r.name);
+  }
+
+  // Render project cards FIRST. Only hide a project's members once its card has
+  // rendered — so a bad project card can never make its members vanish too.
+  // Build every card, tagging each with its timestamp so the final list stays in
+  // chronological order (newest first) regardless of type — a single file captured
+  // after a project sorts above it. Projects are built first only so we know which
+  // member files to fold into their Files section.
+  const rendered = [];   // { mod, html }
+  for (const r of pending.concat(saved)) {
+    if (!isProject(r)) continue;
+    try {
+      const card = projectCard(r, nameToRep, pending.indexOf(r) !== -1);
+      rendered.push({ mod: r.modified || "", html: card });
+      if (Array.isArray(r.members)) r.members.forEach(m => hidden.add(m.name));
+    } catch (e) { console.error("project card failed", r, e); }
+  }
   for (const r of pending) {
-    try { html.push(pendingCard(r)); } catch (e) { console.error("pendingCard failed", r, e); }
+    if (isProject(r) || hidden.has(r.name)) continue;
+    try { rendered.push({ mod: r.modified || "", html: pendingCard(r) }); } catch (e) { console.error("card failed", r, e); }
   }
   for (const r of saved) {
-    try { html.push(reportCard(r)); } catch (e) { console.error("reportCard failed", r, e); }
+    if (isProject(r) || hidden.has(r.name)) continue;
+    try { rendered.push({ mod: r.modified || "", html: reportCard(r) }); } catch (e) { console.error("card failed", r, e); }
   }
+  rendered.sort((x, y) => (x.mod < y.mod ? 1 : x.mod > y.mod ? -1 : 0));   // newest first
+  const html = rendered.map(x => x.html);
   box.innerHTML = html.length
     ? html.join("")
     : `<div class="empty">No results yet. Start a capture session to create your first report.</div>`;
   renderMermaid();
+  box.querySelectorAll("details").forEach(d => d.addEventListener("toggle", () => { if (d.open) renderMermaid(); }));
+  requestAnimationFrame(() => { window.scrollTo(0, _sy); box.scrollTop = _bt; });
 }
 
 $("refreshBtn").addEventListener("click", loadReports);
@@ -309,12 +415,13 @@ $("startBtn").addEventListener("click", async () => {
     await fetch("/api/session/stop", { method: "POST" });
     toast("Session stopped.");
   } else {
-    const single = $("singleToggle") && $("singleToggle").checked;
+    const single = false;   // single-agent backup available via --single, not exposed in the UI
     const idle = idleStopValue();
     const params = new URLSearchParams();
     if (single) params.set("single", "true");
     if (idle !== null) params.set("idle_stop", String(idle));
     if (pickedRegion) params.set("region", pickedRegion);
+    if (_projMode) params.set("project_mode", "true");
     const qs = params.toString();
     await fetch("/api/session/start" + (qs ? "?" + qs : ""), { method: "POST" });
     const manual = idle === 0;
@@ -323,8 +430,6 @@ $("startBtn").addEventListener("click", async () => {
   }
   pollStatus();
 });
-
-$("refreshBtn").addEventListener("click", loadReports);
 
 loadReports();
 setInterval(pollStatus, 1500);
@@ -416,15 +521,24 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
 })();
 
 
-// ── Liquid Glass theme toggle (persisted) ────────────────────────────────────
+// ── Settings: Liquid Glass + Dark mode (persisted) ───────────────────────────
 (function () {
-  const KEY = "cc-glass";
-  if (localStorage.getItem(KEY) === "0") document.body.classList.remove("glass");
-  const t = document.getElementById("glassToggle");
-  if (t) t.addEventListener("click", () => {
-    const on = document.body.classList.toggle("glass");
-    localStorage.setItem(KEY, on ? "1" : "0");
-    toast(on ? "Liquid Glass on." : "Flat look on.");
+  const body = document.body;
+  if (localStorage.getItem("cc-glass") === "0") body.classList.remove("glass");
+  if (localStorage.getItem("cc-dark") === "1") body.classList.add("dark");
+  const setGlass = $("setGlass"), setDark = $("setDark"), modal = $("settingsModal");
+  if (setGlass) setGlass.checked = body.classList.contains("glass");
+  if (setDark)  setDark.checked  = body.classList.contains("dark");
+  if ($("settingsBtn")) $("settingsBtn").addEventListener("click", () => { if (modal) modal.style.display = "flex"; });
+  if ($("settingsClose")) $("settingsClose").addEventListener("click", () => { if (modal) modal.style.display = "none"; });
+  if (modal) modal.addEventListener("click", (e) => { if (e.target === modal) modal.style.display = "none"; });
+  if (setGlass) setGlass.addEventListener("change", () => {
+    body.classList.toggle("glass", setGlass.checked);
+    localStorage.setItem("cc-glass", setGlass.checked ? "1" : "0");
+  });
+  if (setDark) setDark.addEventListener("change", () => {
+    body.classList.toggle("dark", setDark.checked);
+    localStorage.setItem("cc-dark", setDark.checked ? "1" : "0");
   });
 })();
 
@@ -449,3 +563,208 @@ if ($("keySave")) $("keySave").addEventListener("click", async () => {
   } catch (e) { toast("Couldn't reach the server."); }
 });
 checkApiKey();
+
+
+// ── Project mode: pick captured files, build a cross-file dependency map ──────
+function _attr(v){ return String(v||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;"); }
+async function loadProjectPicker() {
+  const box = $("projFiles"); if (!box) return;
+  box.innerHTML = "Loading…";
+  let items = [];
+  try {
+    const saved = (await (await fetch("/api/reports")).json()).reports || [];
+    const pend  = (await (await fetch("/api/pending")).json()).reports || [];
+    items = [...pend, ...saved].filter(r => r.kind === "report" && r.code &&
+                                            String(r.language||"").toLowerCase() !== "project");
+  } catch (e) {}
+  if (!items.length) {
+    box.innerHTML = `<p style="color:var(--muted);font-size:13px;margin:0">No captured files yet — capture some files first, then come back.</p>`;
+    updateProjBuild(); return;
+  }
+  box.innerHTML = items.map(r => {
+    const fn = r.code_file || (r.name + "." + (r.extension || "txt"));
+    return `<label class="proj-file">
+      <input type="checkbox" class="proj-check" data-report="${_attr(r.name)}">
+      <input type="text" class="proj-name" value="${_attr(fn)}" spellcheck="false">
+    </label>`;
+  }).join("");
+  box.querySelectorAll(".proj-check").forEach(c => c.addEventListener("change", updateProjBuild));
+  updateProjBuild();
+}
+function updateProjBuild() {
+  const n = document.querySelectorAll(".proj-check:checked").length;
+  const btn = $("projBuild"); if (btn) btn.disabled = n < 2;
+  const hint = $("projHint"); if (hint) hint.textContent = n < 2 ? "Select 2 or more captured files." : (n + " files selected.");
+}
+if ($("projPickBtn")) $("projPickBtn").addEventListener("click", () => {
+  const p = $("projPicker"); const open = p.style.display === "none";
+  p.style.display = open ? "block" : "none";
+  if (open) loadProjectPicker();
+});
+if ($("projBuild")) $("projBuild").addEventListener("click", async () => {
+  const items = [];
+  document.querySelectorAll(".proj-file").forEach(row => {
+    const chk = row.querySelector(".proj-check");
+    if (chk && chk.checked) items.push({ report: chk.dataset.report, filename: (row.querySelector(".proj-name").value || "").trim() });
+  });
+  if (items.length < 2) return;
+  const btn = $("projBuild"); btn.disabled = true; btn.textContent = "Analyzing…";
+  try {
+    const res = await fetch("/api/project/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
+    const jr = await res.json();
+    if (jr.ok) { toast("Project map built — see Recent results."); $("projPicker").style.display = "none"; loadReports(); }
+    else toast(jr.error || "Couldn't build the project map.");
+  } catch (e) { toast("Couldn't reach the server."); }
+  btn.disabled = false; btn.textContent = "Build map";
+});
+
+
+// ── Clear reports ────────────────────────────────────────────────────────────
+if ($("clearBtn")) {
+  let _clearArmed = false, _clearTimer = null;
+  $("clearBtn").addEventListener("click", async () => {
+    const b = $("clearBtn");
+    if (!_clearArmed) {                       // first click: arm (confirm() isn't reliable in the app window)
+      _clearArmed = true; b.textContent = "Confirm clear?";
+      _clearTimer = setTimeout(() => { _clearArmed = false; b.textContent = "Clear"; }, 3000);
+      return;
+    }
+    clearTimeout(_clearTimer); _clearArmed = false; b.textContent = "Clear";
+    try {
+      const r = await fetch("/api/reports/clear", { method: "POST" });
+      const j = await r.json();
+      toast("Cleared " + (j.removed || 0) + " file(s)."
+        + (j.failed ? "  " + j.failed + " were busy — click Clear again." : ""));
+      loadReports();
+    } catch (e) { toast("Couldn't clear reports."); }
+  });
+}
+
+
+// ── Project mode: live-collect captured files while you capture, then map ─────
+let _projMode = false, _projBaseline = new Set(), _projTimer = null, _projFiles = [];
+async function _fetchProjReports() {
+  let items = [];
+  try {
+    const saved = (await (await fetch("/api/reports")).json()).reports || [];
+    const pend  = (await (await fetch("/api/pending")).json()).reports || [];
+    items = [...pend, ...saved].filter(r => r.kind === "report" && r.code &&
+                                            String(r.language||"").toLowerCase() !== "project");
+  } catch (e) {}
+  return items;
+}
+async function refreshProjLive() {
+  if (!_projMode) return;
+  const all = await _fetchProjReports();
+  _projFiles = all.filter(r => !_projBaseline.has(r.name));
+  const box = $("projLiveFiles"); if (!box) return;
+  box.innerHTML = _projFiles.length ? _projFiles.map(r => {
+    const fn = r.code_file || (r.name + "." + (r.extension || "txt"));
+    return `<div class="proj-file"><input type="text" class="proj-name" data-report="${_attr(r.name)}" value="${_attr(fn)}" spellcheck="false"></div>`;
+  }).join("") : `<p style="color:var(--muted);font-size:13px;margin:0">No files captured yet — capture your first file.</p>`;
+  const cnt = $("projLiveCount"); if (cnt) cnt.textContent = _projFiles.length + " file(s) captured.";
+  const btn = $("projLiveBuild"); if (btn) btn.disabled = _projFiles.length < 2;
+}
+async function setProjectMode(on) {
+  _projMode = on;
+  if ($("projLive"))  $("projLive").style.display = on ? "block" : "none";
+  if ($("projPicker")) $("projPicker").style.display = "none";
+  document.querySelectorAll("#projSeg .seg-opt").forEach(b =>
+    b.classList.toggle("active", (b.dataset.mode === "project") === on));
+  if (sessionRunning) {           // relaunch so the worker actually switches mode (mode is fixed at launch)
+    try {
+      await fetch("/api/session/stop", { method: "POST" });
+      const params = new URLSearchParams();
+      const idle = idleStopValue(); if (idle !== null) params.set("idle_stop", String(idle));
+      if (pickedRegion) params.set("region", pickedRegion);
+      if (on) params.set("project_mode", "true");
+      await fetch("/api/session/start" + (params.toString() ? "?" + params.toString() : ""), { method: "POST" });
+      pollStatus();
+    } catch (e) {}
+  }
+  if (on) {
+    const all = await _fetchProjReports();
+    _projBaseline = new Set(all.map(r => r.name));   // only files captured AFTER now count toward this project
+    await refreshProjLive();
+    if (!_projTimer) _projTimer = setInterval(refreshProjLive, 3000);
+    toast("Project mode on — capture your files one at a time.");
+  } else if (_projTimer) {
+    clearInterval(_projTimer); _projTimer = null;
+  }
+}
+document.querySelectorAll("#projSeg .seg-opt").forEach(b =>
+  b.addEventListener("click", () => setProjectMode(b.dataset.mode === "project")));
+if ($("projLiveBuild")) $("projLiveBuild").addEventListener("click", async () => {
+  const items = [];
+  $("projLiveFiles").querySelectorAll(".proj-name").forEach(inp => {
+    items.push({ report: inp.dataset.report, filename: (inp.value || "").trim() });
+  });
+  if (items.length < 2) return;
+  const btn = $("projLiveBuild"); btn.disabled = true; btn.textContent = "Analyzing…";
+  try {
+    const r = await fetch("/api/project/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) {
+      // reset the collection for the next project; the just-built project (language
+      // "Project") is NOT in this baseline, so it stays visible in Recent results.
+      const done = await _fetchProjReports();
+      _projBaseline = new Set(done.map(x => x.name));
+      await refreshProjLive();
+      await loadReports();
+      toast("Project map built — see Recent results.");
+    } else {
+      const msg = j.error || ("Build failed (HTTP " + r.status + ")");
+      toast(msg);
+      const st = $("projLiveCount"); if (st) st.textContent = msg;   // keep the reason visible
+    }
+  } catch (e) { toast("Couldn't reach the server — is it running?"); }
+  btn.disabled = false; btn.textContent = "Build map";
+});
+
+if ($("projPickBtn")) $("projPickBtn").style.display = "none"; // retired on load — multiple files require Project mode
+
+
+// ── Downloads: native Save dialog in the app window, blob fallback in a browser ──
+async function saveFile(filename, content) {
+  try {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.save_text) {
+      const ok = await window.pywebview.api.save_text(filename, content || "");
+      toast(ok ? ("Saved " + filename) : "Save cancelled.");
+      return;
+    }
+  } catch (e) {}
+  _download(filename, content || "", "text/plain");   // real browser (dev)
+  toast("Saved " + filename + " to Downloads.");
+}
+async function downloadSaved(name) {
+  // `name` is the code filename. The code is already loaded in the report data, so
+  // save that directly (works for pending, saved, and project-member files alike).
+  const r = Object.values(_byName).find(x => x && (x.code_file === name || x.name === name));
+  if (r && r.code) { await saveFile(name, r.code); return; }
+  // Fallback: fetch the file from reports/ on disk — but never save an error body.
+  try {
+    const res = await fetch("/api/download/" + encodeURIComponent(name));
+    if (!res.ok) { toast("Couldn't find that code file."); return; }
+    await saveFile(name, await res.text());
+  } catch (e) { toast("Couldn't load that file."); }
+}
+window.downloadSaved = downloadSaved;
+window.saveFile = saveFile;
+
+
+// ── Project report: one container + a dropdown of its member file reports ────
+function projectCard(r, nameToRep, isPending) {
+  const inner = isPending ? pendingCard(r) : reportCard(r);
+  const members = Array.isArray(r.members) ? r.members : [];
+  const memberHtml = members.map(m => {
+    const mr = nameToRep[m.name];
+    const label = escapeHtml(m.filename || m.name);
+    const content = mr && mr.kind === "report" ? reportCard(mr)
+      : `<p style="color:var(--muted);font-size:13px;padding:8px 4px">${label} — report no longer available</p>`;
+    return `<details class="proj-member"><summary>${label}</summary>${content}</details>`;
+  }).join("");
+  return `<div class="project-report">${inner}
+    <details class="proj-files"><summary>Files (${members.length})</summary>
+      <div class="proj-files-body">${memberHtml}</div>
+    </details></div>`;
+}

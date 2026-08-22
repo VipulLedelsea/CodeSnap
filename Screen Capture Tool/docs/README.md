@@ -35,7 +35,7 @@ Built by Ledelsea · macOS · Python.
 
 ### Download the app (macOS) — easiest
 
-1. Go to the [**Releases**](https://github.com/Vipuld14/ScreenCaptureInterpreter/releases) page and download **Code-Capture-macOS.zip**, then unzip it.
+1. Go to the [**Releases**](https://github.com/VipulLedelsea/CodeCapture/releases) page and download **Code-Capture-macOS.zip**, then unzip it.
 2. **Move `Code Capture.app` into your Applications folder** (drag it there). This step matters — running it straight from Downloads makes macOS launch it in a locked-down mode where screen capture won't work.
 3. The app is not signed by Apple, so the first time: **right-click** (or Control-click) **Code Capture.app → Open**, then confirm **Open** in the dialog. (Double-clicking shows an "unidentified developer" warning — right-click → Open bypasses it. You only do this once.)
 4. When prompted, grant **Screen Recording**, **Accessibility**, and **Input Monitoring** in System Settings → Privacy & Security, then quit and reopen the app (Screen Recording only applies after a relaunch).
@@ -48,8 +48,8 @@ That's it — click **Start capture** and press **Cmd+Shift+1**.
 One command sets everything up and launches the app:
 
 ```bash
-git clone https://github.com/Vipuld14/ScreenCaptureInterpreter.git
-cd "ScreenCaptureInterpreter/Screen Capture Tool"
+git clone https://github.com/VipulLedelsea/CodeCapture.git
+cd "CodeCapture/Screen Capture Tool"
 python3 run.py
 ```
 
@@ -74,8 +74,8 @@ Windows runs the app **from source** (the double-click `.app` is macOS-only).
 Same repo, use `python` instead of `python3`:
 
 ```bash
-git clone https://github.com/Vipuld14/ScreenCaptureInterpreter.git
-cd "ScreenCaptureInterpreter\Screen Capture Tool"
+git clone https://github.com/VipulLedelsea/CodeCapture.git
+cd "CodeCapture\Screen Capture Tool"
 python run.py
 ```
 

@@ -57,8 +57,8 @@ pre.code{background:#FAF7F4;border:0.5px solid var(--line);border-radius:8px;pad
 .dl:hover{background:var(--blue-soft)}
 button.dl{background:transparent;cursor:pointer;font-family:inherit}
 .report-actions{display:flex;gap:8px;flex-wrap:wrap}
-.dl.secondary{color:var(--muted)}
-.dl.secondary:hover{background:var(--line)}
+.dl.secondary,button.dl.secondary{color:var(--copper-ink,#8a4a2c);background:transparent;border-color:var(--copper,#be6e4a);font-weight:600}
+.dl.secondary:hover{background:var(--copper-tint,#f6e9e1);border-color:var(--copper,#be6e4a);color:var(--copper-ink,#8a4a2c)}
 .btn-primary.stop{background:#8A4A2C}
 .status-feed{background:#FBF6F2;border:0.5px solid var(--line);border-radius:var(--card-radius);padding:12px 16px;margin-bottom:14px;max-height:160px;overflow:auto}
 .status-feed .ev{display:flex;align-items:center;gap:9px;font-size:13px;color:#5C534B;padding:3px 0}
@@ -176,7 +176,7 @@ h1{font-weight:600;letter-spacing:-.2px}
 
 /* --- download buttons --- */
 .dl:hover{border-color:var(--blue);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
-.dl.secondary:hover{border-color:var(--copper);color:var(--copper-ink);background:var(--copper-tint)}
+.dl.secondary:hover{border-color:var(--copper,#be6e4a);color:var(--copper-ink,#8a4a2c);background:var(--copper-tint,#f6e9e1);transform:translateY(-1px);box-shadow:var(--shadow-sm)}
 
 /* --- live status "dot" indicator --- */
 .status{font-weight:500}
@@ -351,14 +351,15 @@ button:focus-visible, input:focus-visible, a:focus-visible{
    a soft ambient backdrop. Copper stays the accent.
    ============================================================ */
 body.glass{
-  background-color:#EDEDF1;
+  background-color:#ECECF2;
   background-image:
     radial-gradient(circle at 1px 1px, rgba(120,116,128,.15) 1px, transparent 1.7px),   /* dot grid */
-    radial-gradient(340px 340px at 5% 3%, rgba(190,110,74,.32), transparent 62%),        /* lighthouse lamp */
-    linear-gradient(116deg, rgba(255,241,226,.60) 0%, rgba(255,241,226,.14) 30%, transparent 52%), /* beam sweep */
-    radial-gradient(760px 560px at 106% 110%, rgba(46,125,176,.16), transparent 60%);    /* teal corner */
-  background-size:34px 34px, auto, auto, auto;
-  background-repeat:repeat, no-repeat, no-repeat, no-repeat;
+    radial-gradient(560px 470px at 1% -3%, rgba(200,114,72,.46), transparent 60%),        /* copper lamp */
+    linear-gradient(116deg, rgba(255,238,220,.55) 0%, rgba(255,238,220,.12) 30%, transparent 52%), /* beam sweep */
+    radial-gradient(720px 560px at 111% 6%, rgba(44,132,186,.32), transparent 58%),       /* teal corner */
+    radial-gradient(740px 660px at 56% 122%, rgba(202,120,78,.24), transparent 60%);      /* warm bottom glow */
+  background-size:34px 34px, auto, auto, auto, auto;
+  background-repeat:repeat, no-repeat, no-repeat, no-repeat, no-repeat;
   background-attachment:fixed;
 }
 body.glass .main{ background:transparent; }
@@ -440,3 +441,107 @@ body.glass .key-banner{ -webkit-backdrop-filter:blur(20px) saturate(180%); backd
 .key-banner code{ background:#EFEFF2; padding:1px 5px; border-radius:5px; font-size:12px; }
 .key-row{ display:flex; gap:8px; align-items:center; }
 .key-row input{ width:260px; max-width:52vw; padding:8px 11px; border:0.5px solid var(--line); border-radius:10px; font-size:13px; font-family:ui-monospace,Menlo,monospace; }
+
+
+/* Project map picker */
+.project-head{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.project-picker{ margin-top:14px; }
+.project-files{ display:flex; flex-direction:column; gap:6px; max-height:260px; overflow:auto; padding:2px; }
+.proj-file{ display:flex; align-items:center; gap:10px; font-size:13px; }
+.proj-file input[type="text"]{ flex:1; padding:5px 9px; border:0.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
+.project-actions{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:14px; }
+.project-hint{ font-size:12.5px; color:var(--muted); }
+
+
+/* Settings modal + generic switch */
+.settings-modal{ position:fixed; inset:0; background:rgba(0,0,0,.42); -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); display:flex; align-items:center; justify-content:center; z-index:1100; }
+.settings-inner{ background:#fff; border-radius:16px; padding:16px 20px 12px; width:300px; box-shadow:0 24px 60px rgba(0,0,0,.35); }
+.settings-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+.settings-head strong{ font-size:16px; color:var(--ink,#1D1D1F); }
+.settings-row{ display:flex; align-items:center; justify-content:space-between; padding:9px 0; font-size:14px; cursor:pointer; color:var(--text); }
+input.switch{ -webkit-appearance:none; appearance:none; margin:0; width:38px; height:22px; border-radius:22px; background:#E4E4E7; position:relative; cursor:pointer; transition:background .2s var(--ease); flex:none; }
+input.switch::after{ content:""; position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.28); transition:transform .2s var(--ease); }
+input.switch:checked{ background:var(--copper); }
+input.switch:checked::after{ transform:translateX(16px); }
+
+/* ── Dark mode ── */
+body.dark{
+  --bg:#161619; --panel:#202024; --line:#34343A; --line-soft:#2B2B31;
+  --text:#F2F2F5; --muted:#9A9AA2; --faint:#6E6E77;
+  --copper-tint:#241C17; --copper-soft:#33251C; --blue-soft:#16242E; --warn-soft:#2C2114;
+  color-scheme:dark;
+}
+body.dark .sidebar{ background:#1B1B1F; }
+body.dark .card, body.dark .report, body.dark .status-feed, body.dark .devflow,
+body.dark .settings-inner, body.dark .region-modal-inner{ background:var(--panel); border-color:var(--line); color:var(--text); }
+body.dark pre.code{ background:#141417; border-color:var(--line); color:#e7e7ec; }
+body.dark .btn-secondary{ background:#26262B; color:var(--text); border-color:var(--line); }
+body.dark .tag.file, body.dark .tag.text, body.dark .pill-soon{ background:#26262B; color:#B6B6BE; }
+body.dark input[type="text"], body.dark input[type="password"]{ background:#141417; color:var(--text); border-color:var(--line); }
+body.dark input.switch{ background:#3A3A40; }
+body.dark .brand-logo{ filter:brightness(0) invert(.9); opacity:.85; }   /* soft light logo, blends into the sidebar */
+body.dark .dl{ color:#8fbfe0; border-color:var(--line); }
+body.dark .dl.secondary{ color:#e2a07f; background:transparent; border-color:var(--copper,#be6e4a); }
+body.dark .toast{ background:#f2f2f5; color:#1b1b1f; }
+body.dark .rsec.errors .rsec-body{ color:#E7A98A; }
+body.dark .rsec.tech .rsec-body{ color:#9CC7E6; }
+body.dark .tag.code{ color:#9CC7E6; }
+body.dark .tag.doc{ color:#E7A98A; }
+body.dark .step{ color:#E7B79E; }
+
+/* Dark + Liquid Glass */
+body.dark.glass{
+  background:
+    radial-gradient(circle at 1px 1px, rgba(255,255,255,.05) 1px, transparent 1.7px),
+    radial-gradient(620px 520px at 0% -4%, rgba(216,128,86,.55), transparent 60%),
+    radial-gradient(720px 560px at 112% 8%, rgba(54,146,202,.44), transparent 58%),
+    radial-gradient(760px 680px at 55% 122%, rgba(188,104,68,.34), transparent 60%);
+  background-color:#0A0A0D; background-size:34px 34px, auto, auto, auto;
+  background-repeat:repeat, no-repeat, no-repeat, no-repeat; background-attachment:fixed;
+}
+body.dark.glass .card, body.dark.glass .report, body.dark.glass .status-feed, body.dark.glass .devflow{
+  background:rgba(42,42,49,.55); border:0.5px solid rgba(255,255,255,.08);
+  box-shadow:0 10px 34px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.06);
+}
+body.dark.glass .sidebar{ background:rgba(18,18,22,.90); -webkit-backdrop-filter:blur(30px) saturate(160%); backdrop-filter:blur(30px) saturate(160%); border-right:0.5px solid rgba(255,255,255,.07); }
+body.dark.glass .settings-inner, body.dark.glass .region-modal-inner{ background:rgba(36,36,42,.82); }
+body.dark.glass .step{ background:rgba(60,60,68,.5); }
+
+
+/* dark-mode fixes: empty box, translucent surfaces */
+body.dark .empty{ background:#1E1E22; border-color:var(--line); color:var(--muted); }
+body.dark.glass .empty{ background:rgba(42,42,49,.42); }
+body.dark .status-feed .ev{ color:#c9c9d0; }
+
+
+/* dark sidebar readability */
+body.dark .nav-item.active{ color:#ECB89C; background:rgba(190,110,74,.16); }
+body.dark .nav-item{ color:#C7C7CE; }
+body.dark .nav-label, body.dark .footer-item{ color:#9A9AA2; }
+body.dark .brand .name{ color:#F2F2F5; }
+
+
+/* Project mode toggle + live panel */
+.proj-mode-label{ display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted); cursor:pointer; white-space:nowrap; }
+.project-live{ margin-top:14px; }
+
+
+/* Segmented control (Single file / Project) */
+.seg-toggle{ display:inline-flex; background:var(--line-soft); border:0.5px solid var(--line); border-radius:10px; padding:2px; gap:2px; }
+.seg-opt{ border:none; background:transparent; color:var(--muted); font-size:13px; font-weight:500; padding:5px 14px; border-radius:8px; cursor:pointer; font-family:inherit; transition:all .15s var(--ease); }
+.seg-opt.active{ background:var(--copper); color:#fff; box-shadow:0 1px 2px rgba(0,0,0,.14); }
+body.dark .seg-toggle{ background:#26262B; border-color:var(--line); }
+body.dark .seg-opt{ color:#B6B6BE; }
+
+/* Project container + member dropdown */
+.project-report{ margin-bottom:14px; }
+.proj-files{ margin-top:2px; }
+.proj-files > summary{ cursor:pointer; font-size:13px; font-weight:600; color:var(--copper); padding:8px 4px; list-style:none; }
+.proj-files > summary::-webkit-details-marker{ display:none; }
+.proj-files > summary::before{ content:"\25B8  "; }
+.proj-files[open] > summary::before{ content:"\25BE  "; }
+.proj-files-body{ padding-left:10px; border-left:2px solid var(--line); margin:4px 0 6px 6px; }
+.proj-member > summary{ cursor:pointer; font-size:13px; color:var(--text); padding:6px 4px; font-family:ui-monospace,Menlo,monospace; list-style:none; }
+.proj-member > summary::-webkit-details-marker{ display:none; }
+.proj-member > summary::before{ content:"\25B8  "; color:var(--muted); }
+.proj-member[open] > summary::before{ content:"\25BE  "; }

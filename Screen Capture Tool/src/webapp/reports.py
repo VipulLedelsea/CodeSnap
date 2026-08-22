@@ -5,8 +5,28 @@ tech_stack, code). Loose files (docx, orphan code) are listed with metadata only
 """
 
 import json
+import time
 from datetime import datetime
 from pathlib import Path
+
+
+def _read_retry(p, tries=8):
+    """Read text, retrying past transient iCloud file locks (errno 35)."""
+    for _ in range(tries):
+        try:
+            return p.read_text()
+        except OSError:
+            time.sleep(0.12)
+    return None
+
+
+def _stat_retry(p, tries=8):
+    for _ in range(tries):
+        try:
+            return p.stat()
+        except OSError:
+            time.sleep(0.12)
+    return None
 
 CODE_EXTS = {"py", "js", "ts", "jsx", "tsx", "c", "h", "cpp", "cc", "cxx", "hpp",
              "cs", "java", "go", "rb", "rs", "swift", "kt", "php", "sh"}
@@ -37,11 +57,16 @@ def scan_reports(reports_dir) -> list:
     for p in files:
         if p.suffix.lower() != ".json":
             continue
+        _txt = _read_retry(p)
+        if _txt is None:
+            continue
         try:
-            meta = json.loads(p.read_text())
+            meta = json.loads(_txt)
         except Exception:  # noqa: BLE001
             continue
-        st = p.stat()
+        st = _stat_retry(p)
+        if st is None:
+            continue
         code_file = meta.get("code_file", "")
         covered.add(code_file)
         out.append({
@@ -55,6 +80,7 @@ def scan_reports(reports_dir) -> list:
             "extension": meta.get("extension", ""),
             "code": meta.get("code", ""),
             "code_file": code_file,
+            "members": meta.get("members", []),
             "modified": meta.get("created") or datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
         })
 

@@ -47,7 +47,7 @@ from core.analysis import load_env, extract_to_cache, analyse_incremental, fix_s
 from core.validate import check_source
 from core.capture import capture_full_png, capture_region_png, next_png_path
 from agent import run_agent, run_session
-from team import run_team
+from team import run_team, run_team_fast
 from tools import ToolContext
 from core.outputs import (
     safe_ext as _safe_ext,
@@ -95,6 +95,8 @@ class App:
         self.burst_mode = False                   # set from --burst (auto-capture while scrolling)
         self.idle_stop = BURST_IDLE_STOP          # secs of no on-screen change before auto-stop; <=0 = manual (end with Cmd+Shift+1)
         self.region = None                        # (L,T,W,H) fractions to capture only the code area; None = full screen
+        self.project_mode = False                 # project mode: capture many files back-to-back (analysis runs in the background)
+        self._analysing = False                   # True while a capture is being analysed (single-file gate)
         self.team_mode = True                     # DEFAULT: multi-agent team (A2A). --single flips to backup single-agent.
         self._ready_event = threading.Event()     # set by Cmd+Shift+7 to advance an owned session
         self.capture_enabled = False              # captures allowed (stays on during agent run)
@@ -112,7 +114,10 @@ class App:
     # --- hotkey handlers: run on the listener thread; keep them light ---
     def toggle(self):
         if self.burst_mode:
-            self._begin_burst_session()
+            if self.running:
+                self._stop_burst()          # Cmd+Shift+1 again -> finish this capture and analyse
+            else:
+                self._begin_burst_session()
             return
         if self.auto_mode:
             self._begin_owned_session()
@@ -142,9 +147,26 @@ class App:
         return self.client
 
     # --- burst mode: auto-capture while the user scrolls; phash drops near-dups ---
+    def _stop_burst(self):
+        """Manually end a running burst (Cmd+Shift+1 again). The burst loop sees
+        running=False, exits, and its tail runs the analysis."""
+        from core import status
+        status.publish("Capture complete — analysing", "info")
+        from core.notify import notify
+        notify("Code Capture", "Capture complete — analysing")
+        print("[burst] stop requested (Cmd+Shift+1) — analysing.")
+        self.running = False
+
     def _begin_burst_session(self):
         if self.running:
             print("(a session is already running)")
+            return
+        if not self.project_mode and self._analysing:
+            from core import status
+            status.publish("Still analysing the previous file — single mode captures one at a time.", "info")
+            from core.notify import notify
+            notify("Code Capture", "Still analysing the previous capture — one file at a time.")
+            print("(single-file mode: still analysing the previous capture)")
             return
         self._ensure_client()
         from core import status
@@ -204,9 +226,17 @@ class App:
             time.sleep(BURST_INTERVAL)
         status.publish(f"Scrolling stopped — {kept} unique frame(s), analysing", "info")
         from core.notify import notify
-        notify("Code Capture", f"Session captured — {kept} frame(s), analysing")
-        print(f"[burst] done capturing: {kept} unique frame(s). Analysing...")
-        self._analyse_burst(session_dir)
+        notify("Code Capture", f"Capture complete — {kept} frame(s), analysing")
+        if self.project_mode:
+            print(f"[burst] done capturing: {kept} unique frame(s). Analysing in background — start the next file.")
+            self.running = False        # project mode: free the session so the next file can be captured now
+            self.capture_enabled = False
+            threading.Thread(target=self._analyse_burst, args=(session_dir,), daemon=True).start()
+        else:
+            print(f"[burst] done capturing: {kept} unique frame(s). Analysing...")
+            self.running = False          # free run-state; the _analysing gate blocks a new capture until done
+            self.capture_enabled = False
+            self._analyse_burst(session_dir)   # inline (blocks this thread); one file at a time
 
     def _analyse_burst(self, session_dir):
         imgs = sorted(session_dir.glob("*.png"))
@@ -219,8 +249,6 @@ class App:
                 notify("Code Capture", "No frames captured — scroll during the session, then it analyses.")
             except Exception:  # noqa: BLE001
                 pass
-            self.running = False
-            self.capture_enabled = False
             return
         ts = session_dir.name.replace("session_", "")
         ctx = ToolContext(
@@ -228,11 +256,16 @@ class App:
             cache_dir=session_dir / ".cache", out_dir=REPORTS_ROOT,
             out_name=f"report_{ts}", session_dir=session_dir, interactive=False, confirm_saves=False,
         )
+        self._analysis_lock.acquire()   # serialise overlapping analyses (captures stay non-blocking)
+        self._analysing = True
         try:
             audit = []
             goal = (f"There are {len(imgs)} screenshots of one scrolled document/code, in order "
                     f"(consecutive shots overlap). Produce the best verified output.")
-            runner = run_team if self.team_mode else run_agent
+            if self.team_mode:
+                runner = run_team if getattr(self, "sequential_team", False) else run_team_fast
+            else:
+                runner = run_agent
             final, _ = runner(self.client, ctx, goal=goal, verbose=True, audit=audit)
             print(f"\n{'=' * 60}\n{final}\n{'=' * 60}")
         except Exception as exc:  # noqa: BLE001
@@ -245,8 +278,8 @@ class App:
             except Exception:  # noqa: BLE001
                 pass
         finally:
-            self.running = False
-            self.capture_enabled = False
+            self._analysing = False
+            self._analysis_lock.release()
             print("\n[idle] Cmd+Shift+1 for a new burst, Cmd+Shift+9 to quit.")
 
     # --- session lifecycle ---
@@ -542,8 +575,10 @@ def main() -> int:
     ap.add_argument("--auto", action="store_true", help="Agent-owned session: it captures and pages itself.")
     ap.add_argument("--burst", action="store_true", help="(default) Burst: auto-capture while you scroll; phash drops duplicates.")
     ap.add_argument("--single", action="store_true", help="Backup: analyse with the single agent instead of the multi-agent team (team is the default).")
+    ap.add_argument("--sequential-team", action="store_true", dest="sequential_team", help="Run the team specialists one at a time (Coordinator loop) instead of the default parallel pipeline.")
     ap.add_argument("--idle-stop", type=float, default=BURST_IDLE_STOP, dest="idle_stop", help="Seconds of no on-screen change before a burst auto-stops; 0 = manual (end with Cmd+Shift+1).")
     ap.add_argument("--region", default=None, help="Capture only a screen sub-rectangle: \"L,T,W,H\" as fractions 0-1 (left,top,width,height).")
+    ap.add_argument("--project-mode", action="store_true", dest="project_mode", help="Project mode: capture many files back-to-back; analysis runs in the background.")
     args = ap.parse_args()
     load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -571,7 +606,9 @@ def main() -> int:
         app.burst_mode = True; app.agent_mode = app.auto_mode = False
         mode = "BURST (auto-capture while scrolling)"
     app.team_mode = not args.single
+    app.sequential_team = args.sequential_team
     app.idle_stop = args.idle_stop
+    app.project_mode = args.project_mode
     if args.region:
         try:
             app.region = tuple(float(x) for x in args.region.split(","))

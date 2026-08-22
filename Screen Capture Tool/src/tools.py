@@ -134,7 +134,7 @@ def _t_save_output(ctx, inp):
             "language": inp.get("language", ""), "overview": inp.get("overview", ""),
             "errors": inp.get("errors", ""), "tech_stack": inp.get("tech_stack", ""),
             "diagrams": inp.get("diagrams", ""),
-        }, dest, ctx.out_name)
+        }, dest, ctx.out_name, code_name=getattr(ctx, "code_name", None))
     elif fmt == "docx":
         out = outputs.save_docx({"extracted_text": content}, dest, ctx.out_name)
     else:
