@@ -519,6 +519,35 @@ def _strip_md_headers(text: str) -> str:
     return "\n".join(out)
 
 
+
+# Editors draw faint vertical indent-guide lines in the indentation; OCR reads them as
+# pipes/box-drawing bars (e.g. "    |   return x;"). Strip them from the LEADING region
+# only, so real code (bitwise |, F#/OCaml leading "|") is untouched.
+_GUIDE_BOX = "\u2502\u2503\u2506\u2507\u250a\u250b\u254e\u254f\u00a6\u2551"
+
+
+def _strip_indent_guides(text: str) -> str:
+    """Blank indent-guide bars in the LEADING region. Box-drawing bars are always
+    guides. An ASCII '|' is a guide only when it pads toward the next indent stop —
+    i.e. it is followed by 2+ whitespace chars ("|   return"). A real leading '|'
+    (F#/OCaml match arm) is "| Some": one space then code, so it is left intact."""
+    out = []
+    for line in text.split("\n"):
+        j, n, buf, changed = 0, len(line), [], False
+        while j < n:
+            c = line[j]
+            if c in " \t":
+                buf.append(c); j += 1
+            elif c in _GUIDE_BOX:
+                buf.append(" "); j += 1; changed = True
+            elif c == "|" and j + 2 < n and line[j + 1] in " \t" and line[j + 2] in " \t":
+                buf.append(" "); j += 1; changed = True
+            else:
+                break
+        out.append(("".join(buf) + line[j:]) if changed else line)
+    return "\n".join(out)
+
+
 def clean_source(text: str) -> str:
     """Turn a raw OCR'd code extraction into compiler-ready source: unwrap markdown
     code fences (dropping ```lang, ``` and any # headers/prose outside them), remove
@@ -534,6 +563,7 @@ def clean_source(text: str) -> str:
         text = _re.sub(r"^[ \t]*```.*$", "", text, flags=_re.M)  # stray fence lines
         text = _strip_gutter(text)
     text = _strip_md_headers(text)
+    text = _strip_indent_guides(text)
     return text.strip("\n")
 
 
@@ -771,3 +801,74 @@ def build_docx(result: dict) -> "Document":
     else:
         doc.add_paragraph("(No text content was extracted from the images.)")
     return doc
+
+
+EXPLAIN_SYSTEM_PROMPT = (
+    "You are given a compiler/parser error from source code that was transcribed from a "
+    "screenshot. In 1-2 short, plain-English sentences, explain what the error means and which "
+    "LINE it is on. If it looks like a transcription/scan artifact \u2014 an extra or missing "
+    "brace, bracket, parenthesis, quote, semicolon, or colon rather than a real logic bug \u2014 "
+    "say it is likely a scan artifact and exactly what to add or remove to fix it. Always name the "
+    "line number. Be concise and friendly; do NOT output code or restate the raw error verbatim."
+)
+
+
+def explain_error(client, language: str, errors: str, code: str = "") -> str:
+    """One cheap call: a plain-English, line-referenced explanation of a compiler error."""
+    if not errors or errors.strip().lower() == "none":
+        return ""
+    try:
+        msg = client.messages.create(
+            model=MODEL, max_tokens=300, system=EXPLAIN_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content":
+                       f"Language: {language or 'unknown'}\n\nCompiler error:\n{errors}\n\nCode:\n{code[:4000]}"}],
+        )
+        return "".join(getattr(b, "text", "") for b in msg.content).strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+INDENT_REVIEW_SYSTEM = (
+    "You are inspecting a screenshot of source code for INDENTATION mistakes ONLY. Judge by the "
+    "visible horizontal alignment of each line \u2014 NOT by what the code 'should' look like. Flag a "
+    "line only when its indentation is visibly inconsistent with the block it belongs to: e.g. a "
+    "line indented MORE or LESS than its siblings, a body not indented under its header, or a "
+    "sudden unexplained jump in indentation. Do NOT normalise in your head \u2014 if a line sticks out, "
+    "report it exactly as it appears.\n"
+    "Return ONLY a JSON object: {\"issues\": [{\"line_text\": <the code on the mis-aligned line, "
+    "trimmed of leading spaces>, \"problem\": <\"over-indented\"|\"under-indented\"|\"inconsistent\">, "
+    "\"note\": <short reason, e.g. 'one level deeper than the lines around it'>}]}. Return an EMPTY "
+    "issues array if the indentation looks consistent. Be CONSERVATIVE: only flag a line you are "
+    "confident is visibly misaligned; when in doubt, do not flag it."
+)
+
+
+def review_indentation(client, image_paths, language: str = "") -> list:
+    """Image-level indentation check: look at the screenshot(s) and report lines whose
+    indentation is visibly inconsistent with their block. Catches indent errors the
+    faithful transcription may have silently auto-corrected. Returns a list of
+    {line_text, problem, note}. Conservative; [] on any failure."""
+    imgs = sorted(image_paths or [])[:8]
+    content = []
+    for p in imgs:
+        try:
+            p = Path(p)
+            b64 = base64.standard_b64encode(p.read_bytes()).decode()
+            content.append({"type": "image", "source": {"type": "base64",
+                            "media_type": _media_type(p), "data": b64}})
+        except Exception:  # noqa: BLE001
+            pass
+    if not content:
+        return []
+    content.append({"type": "text", "text":
+                    f"Language: {language or 'unknown'}. Inspect the code for indentation mistakes. "
+                    "Return only the JSON object."})
+    try:
+        msg = client.messages.create(model=MODEL, max_tokens=1024, system=INDENT_REVIEW_SYSTEM,
+                                     messages=[{"role": "user", "content": content}])
+        raw = "".join(getattr(b, "text", "") for b in msg.content).strip()
+        data = _parse_json(raw) or {}
+        issues = data.get("issues", []) if isinstance(data, dict) else []
+        return [i for i in issues if isinstance(i, dict) and str(i.get("line_text", "")).strip()]
+    except Exception:  # noqa: BLE001
+        return []

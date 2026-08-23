@@ -119,7 +119,11 @@ def _check(code: str, extension: str) -> dict:
     tmp = Path(tempfile.mktemp(suffix=f".{ext}"))
     tmp.write_text(code)
     try:
-        return validate.check_source(tmp)
+        res = validate.check_source(tmp)
+        if res.get("errors"):
+            # collapse absolute temp paths (e.g. /var/folders/.../tmpXXX/Foo.java:1:) to the bare filename
+            res["errors"] = re.sub(r"\S*/([\w.\-]+:\d+:)", r"\1", res["errors"])
+        return res
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -127,6 +131,17 @@ def _check(code: str, extension: str) -> dict:
 _INDENT_ERR = re.compile(
     r"IndentationError|TabError|unexpected indent|unindent does not match|expected an indented block",
     re.I)
+
+
+_INDENT_SENSITIVE_LANGS = {"python", "py", "yaml", "yml", "coffeescript", "coffee",
+                           "haskell", "hs", "fsharp", "f#", "nim", "cython", "pyx"}
+
+
+def _indent_sensitive(language, extension=None):
+    """True only for languages where indentation is load-bearing (can be a real error)."""
+    l = (language or "").strip().lower()
+    e = (extension or "").strip().lower().lstrip(".")
+    return l in _INDENT_SENSITIVE_LANGS or e in {"py", "pyx", "yaml", "yml", "coffee", "hs", "nim", "fs"}
 
 
 def _indent_caveat(errors: str) -> str:
@@ -141,38 +156,7 @@ def _indent_caveat(errors: str) -> str:
 
 
 
-_INDENT_SENSITIVE_LANGS = {"python", "py", "yaml", "yml", "coffeescript", "coffee",
-                           "haskell", "hs", "fsharp", "f#", "nim", "cython", "pyx"}
-
-
-def _indent_sensitive(language, extension=None):
-    """True only for languages where indentation can be a real compile error."""
-    l = (language or "").strip().lower()
-    e = (extension or "").strip().lower().lstrip(".")
-    return l in _INDENT_SENSITIVE_LANGS or e in {"py", "pyx", "yaml", "yml", "coffee", "hs", "nim", "fs"}
-
-
-def _make_reread(client, ctx):
-    """Return a callable giving an INDEPENDENT (uncached) re-transcription of the
-    screenshots — used to confirm a suspected indentation error against a second read."""
-    def _reread():
-        imgs = sorted(getattr(ctx, "images", []) or [])
-        if not imgs:
-            return None
-        raws = []
-        for p in imgs:
-            try:
-                raws.append(analysis.extract_structured(client, p)["raw"])
-            except Exception:  # noqa: BLE001
-                pass
-        if not raws:
-            return None
-        code, _ = analysis.merge_frames(raws)
-        return code
-    return _reread
-
-
-def agent_decoder(client, code: str, extension: str, language: str, reread=None) -> dict:
+def agent_decoder(client, code: str, extension: str, language: str) -> dict:
     """Decoder (Sonnet). Checks the code AS CAPTURED, then applies a minimal,
     error-only fix if needed. Reports the REAL errors found (never invents), and
     whether the fix resolved them."""
@@ -185,31 +169,18 @@ def agent_decoder(client, code: str, extension: str, language: str, reread=None)
                 "tool": res.get("tool", ""), "resolved": True}
     raw_errors = res.get("errors", "")
 
-    # Confirm-on-error for indentation: a screenshot reads indentation only
-    # approximately, so before trusting an IndentationError we get a SECOND
-    # independent read of the same screenshots and compare.
-    if reread and _indent_sensitive(language, extension) and _INDENT_ERR.search(raw_errors or ""):
-        try:
-            code2 = reread()
-        except Exception:  # noqa: BLE001
-            code2 = None
-        if code2 and code2.strip() and code2 != code:
-            r2 = _check(code2, extension)
-            if r2.get("ok"):
-                # second independent read compiles cleanly -> the indent error was a
-                # scan artifact, not a real bug. Trust the clean read.
-                return {"errors": "None", "code": code2, "checked": True,
-                        "tool": r2.get("tool", ""), "resolved": True, "indent_reread": "resolved"}
-            if _INDENT_ERR.search(r2.get("errors", "") or ""):
-                # both reads show the indentation error -> it is real; report firmly.
-                errors = (raw_errors + "\n(Confirmed by a second independent read of the "
-                          "screenshot: this indentation error is in the code, not a scan artifact.)")
-            else:
-                errors = _indent_caveat(raw_errors)
-        else:
-            errors = _indent_caveat(raw_errors)
-    else:
-        errors = _indent_caveat(raw_errors)
+    # A [CUT OFF] marker in the code means the screenshot was truncated at the edge —
+    # that is an incomplete capture, not a real code error.
+    if "[CUT OFF]" in code:
+        return {"errors": ("Possible incomplete capture \u2014 a line was cut off at the screen edge "
+                           "([CUT OFF]). Re-capture with the full width/height visible.\n(checker output: "
+                           + raw_errors + ")"),
+                "code": code, "checked": True, "tool": res.get("tool", ""),
+                "resolved": None, "truncated": True}
+
+    # Single faithful scan: report the indentation error the checker found as-is
+    # (indentation is read approximately from a screenshot, so it is noted as lower-confidence).
+    errors = _indent_caveat(raw_errors)
     if validate.looks_truncated(errors):
         # The capture was likely cut off (an open quote/brace/statement never closed),
         # so this is probably NOT a real code bug. Do NOT "fix" it by inventing the
@@ -352,8 +323,7 @@ def _tc_repair(client, ctx, scratch, _inp):
     if not scratch.get("is_code"):
         return "Content is not code — no repair needed."
     d = agent_decoder(client, scratch.get("code", ""),
-                          scratch.get("extension", "txt"), scratch.get("language", ""),
-                          _make_reread(client, ctx))
+                          scratch.get("extension", "txt"), scratch.get("language", ""))
     scratch["code"] = d["code"]        # fixed code becomes what we save
     scratch["errors"] = d["errors"]
     summary = {k: v for k, v in d.items() if k != "code"}
@@ -382,6 +352,10 @@ def _tc_finalize(client, ctx, scratch, inp):
     tech = a.get("tech_stack", inp.get("tech_stack", "")) if a else inp.get("tech_stack", "")
     # Errors reflect ONLY the Decoder's real compiler check — never model-typed.
     errors = scratch.get("errors") or "None"
+    if errors != "None":
+        _expl = analysis.explain_error(client, language, errors, scratch.get("code", ""))
+        if _expl:
+            errors = _expl + "\n\nCompiler details:\n" + errors
     is_code = bool(scratch.get("is_code", True))
     code = scratch.get("code", "")
     diagrams = scratch.get("diagrams", "")
@@ -536,6 +510,28 @@ def _apply_content_name(ctx, name):
     ctx.code_name = "Code_" + cand       # code file -> Code_Calculator.py
 
 
+
+
+def _merge_indent_review(compile_errors: str, indent_issues: list, code: str) -> str:
+    """Fold the image-level indentation review into the errors field. Only surface an
+    issue whose line actually appears in the transcription (guards against invented lines)."""
+    grounded = []
+    for it in (indent_issues or []):
+        lt = str(it.get("line_text", "")).strip()
+        if lt and lt in code:
+            grounded.append(it)
+    if not grounded:
+        return compile_errors
+    note = "Indentation issues seen in the screenshot:\n" + "\n".join(
+        f"- {it.get('problem', 'indentation')}: {it.get('line_text', '').strip()}"
+        + (f" ({it.get('note', '').strip()})" if it.get("note") else "")
+        for it in grounded)
+    if compile_errors == "None":
+        return (note + "\n(The transcribed code compiled, but the screenshot shows the above \u2014 "
+                "the transcription may have auto-corrected the indentation; verify against the original.)")
+    return compile_errors + "\n\n" + note
+
+
 def run_team_fast(client, ctx, goal=None, verbose=True, audit=None, max_iters=None):
     """Parallel team pipeline — same report as run_team(), lower wall-clock time.
 
@@ -587,13 +583,16 @@ def run_team_fast(client, ctx, goal=None, verbose=True, audit=None, max_iters=No
             print(f"[team-fast] {saved}")
         return report_md, []
 
-    # Stage 2 — Analyst || Decoder run together (independent)
+    # Stage 2 — Analyst || Decoder (|| indentation reviewer for indent-sensitive langs)
     audit.append("analyze"); _pub("analyze", stage="classify")
     audit.append("repair"); _pub("repair", stage="fix")
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    indent_lang = _indent_sensitive(language, extension)
+    with ThreadPoolExecutor(max_workers=3) as pool:
         f_an = pool.submit(_analyst_enrich, client, numbered, base)
-        f_de = pool.submit(agent_decoder, client, code0, extension, language, _make_reread(client, ctx))
+        f_de = pool.submit(agent_decoder, client, code0, extension, language)
+        f_rv = pool.submit(analysis.review_indentation, client, getattr(ctx, "images", []), language) if indent_lang else None
         an = f_an.result(); de = f_de.result()
+        indent_issues = f_rv.result() if f_rv is not None else []
 
     code = de.get("code", code0)          # Decoder ships the fixed code if the error-only fix compiled
     # Stage 3 — Diagrammer draws the REPAIRED code (waits for the Decoder on purpose)
@@ -604,7 +603,16 @@ def run_team_fast(client, ctx, goal=None, verbose=True, audit=None, max_iters=No
     tech = an.get("tech_stack", "")
     language = language or an.get("language", "")
     extension = extension or an.get("extension", "") or "txt"
-    errors = de.get("errors") or "None"
+
+    # Compiler errors first (with a plain-English explanation), then the image-level
+    # indentation review, which catches misalignments the transcription may have
+    # silently auto-corrected (so the compiled text looked clean).
+    compile_errors = de.get("errors") or "None"
+    if compile_errors != "None" and not de.get("truncated"):
+        _expl = analysis.explain_error(client, language, compile_errors, code)
+        if _expl:
+            compile_errors = _expl + "\n\nCompiler details:\n" + compile_errors
+    errors = _merge_indent_review(compile_errors, indent_issues, code)
     diagrams = di or ""
 
     report_md = _assemble(language, overview, errors, code, tech, extension, True,
