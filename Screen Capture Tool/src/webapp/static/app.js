@@ -156,7 +156,7 @@ function buildReportHtml(name, r) {
     : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${_esc(name)} — Code Capture report</title>
+<title>${_esc(name)} — CodeSnap report</title>
 <style>
  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;max-width:880px;margin:36px auto;padding:0 22px;color:#1d1d1f;line-height:1.6}
  h1{font-size:24px;margin:0 0 4px} h2{font-size:16px;margin:28px 0 6px;border-bottom:1px solid #ececef;padding-bottom:5px}
@@ -164,7 +164,7 @@ function buildReportHtml(name, r) {
  pre{background:#f6f6f8;border:1px solid #e6e6ea;border-radius:10px;padding:12px 14px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;white-space:pre-wrap}
  .err{color:#8a4a2c}
 </style></head><body>
-<h1>Code Capture report</h1>
+<h1>CodeSnap report</h1>
 <p class="meta">${_esc(name)}${lang ? " · " + lang : ""}</p>
 <h2>Overview</h2><p>${_nl(r.overview || "(none)")}</p>
 <h2>Errors found</h2><p class="err">${_nl(r.errors || "None")}</p>

@@ -1,5 +1,5 @@
-# PyInstaller spec — builds "Code Capture.app" for macOS.
-# Build on a Mac:  pyinstaller CodeCapture.spec   (see DEPLOY.md)
+# PyInstaller spec — builds "CodeSnap.app" for macOS.
+# Build on a Mac:  pyinstaller CodeSnap.spec   (see DEPLOY.md)
 # One binary that runs the web app by default and the capture worker with --capture.
 
 block_cipher = None
@@ -35,7 +35,7 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
     pyz, a.scripts, [], exclude_binaries=True,
-    name='Code Capture',
+    name='CodeSnap',
     debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
     console=False,              # windowed app (no terminal)
     argv_emulation=False,       # keep our --capture flag intact
@@ -44,22 +44,22 @@ exe = EXE(
 
 coll = COLLECT(
     exe, a.binaries, a.zipfiles, a.datas,
-    strip=False, upx=False, name='Code Capture',
+    strip=False, upx=False, name='CodeSnap',
 )
 
 app = BUNDLE(
     coll,
-    name='Code Capture.app',
+    name='CodeSnap.app',
     icon=None,
-    bundle_identifier='com.ledelsea.codecapture',
+    bundle_identifier='com.ledelsea.codesnap',
     info_plist={
-        'CFBundleName': 'Code Capture',
-        'CFBundleDisplayName': 'Code Capture',
+        'CFBundleName': 'CodeSnap',
+        'CFBundleDisplayName': 'CodeSnap',
         'CFBundleShortVersionString': '1.0.0',
         'CFBundleVersion': '1.0.0',
         'LSMinimumSystemVersion': '12.0',
         # osascript notifications send Apple events:
-        'NSAppleEventsUsageDescription': 'Code Capture uses AppleScript to show desktop notifications.',
+        'NSAppleEventsUsageDescription': 'CodeSnap uses AppleScript to show desktop notifications.',
         'NSHumanReadableCopyright': 'Ledelsea',
     },
 )

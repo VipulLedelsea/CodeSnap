@@ -1,4 +1,4 @@
-# Code Capture
+# CodeSnap
 
 **Capture code from your screen and get a clean, verified report.** A team of AI
 agents transcribes what's on screen *exactly*, checks it against a real compiler,
@@ -35,9 +35,9 @@ Built by Ledelsea · macOS · Python.
 
 ### Download the app (macOS) — easiest
 
-1. Go to the [**Releases**](https://github.com/VipulLedelsea/CodeCapture/releases) page and download **Code-Capture-macOS.zip**, then unzip it.
-2. **Move `Code Capture.app` into your Applications folder** (drag it there). This step matters — running it straight from Downloads makes macOS launch it in a locked-down mode where screen capture won't work.
-3. The app is not signed by Apple, so the first time: **right-click** (or Control-click) **Code Capture.app → Open**, then confirm **Open** in the dialog. (Double-clicking shows an "unidentified developer" warning — right-click → Open bypasses it. You only do this once.)
+1. Go to the [**Releases**](https://github.com/VipulLedelsea/CodeSnap/releases) page and download **CodeSnap-macOS.zip**, then unzip it.
+2. **Move `CodeSnap.app` into your Applications folder** (drag it there). This step matters — running it straight from Downloads makes macOS launch it in a locked-down mode where screen capture won't work.
+3. The app is not signed by Apple, so the first time: **right-click** (or Control-click) **CodeSnap.app → Open**, then confirm **Open** in the dialog. (Double-clicking shows an "unidentified developer" warning — right-click → Open bypasses it. You only do this once.)
 4. When prompted, grant **Screen Recording**, **Accessibility**, and **Input Monitoring** in System Settings → Privacy & Security, then quit and reopen the app (Screen Recording only applies after a relaunch).
 5. In the app, paste your **Anthropic API key** (from [console.anthropic.com](https://console.anthropic.com/)) into the one-time setup banner. It's saved only on your Mac.
 
@@ -48,8 +48,8 @@ That's it — click **Start capture** and press **Cmd+Shift+1**.
 One command sets everything up and launches the app:
 
 ```bash
-git clone https://github.com/VipulLedelsea/CodeCapture.git
-cd "CodeCapture/Screen Capture Tool"
+git clone https://github.com/VipulLedelsea/CodeSnap.git
+cd "CodeSnap/Screen Capture Tool"
 python3 run.py
 ```
 
@@ -64,7 +64,7 @@ Build the double-click macOS app instead of running from the terminal:
 python3 run.py --build
 ```
 
-That produces `dist/Code Capture.app` -- drag it to `/Applications`. First run
+That produces `dist/CodeSnap.app` -- drag it to `/Applications`. First run
 needs the macOS permissions in **Privacy & Security** (Screen Recording,
 Accessibility, Input Monitoring) -- see [macOS permissions](#macos-permissions).
 
@@ -74,8 +74,8 @@ Windows runs the app **from source** (the double-click `.app` is macOS-only).
 Same repo, use `python` instead of `python3`:
 
 ```bash
-git clone https://github.com/VipulLedelsea/CodeCapture.git
-cd "CodeCapture\Screen Capture Tool"
+git clone https://github.com/VipulLedelsea/CodeSnap.git
+cd "CodeSnap\Screen Capture Tool"
 python run.py
 ```
 
@@ -88,7 +88,7 @@ on Windows:
 - Region capture (Win+Shift+8) is macOS-only; use the default **burst** mode, which captures the full screen.
 - No packaged `.exe` -- run from source with `python run.py`.
 
-> Code Capture was built and tested primarily on macOS; Windows support is
+> CodeSnap was built and tested primarily on macOS; Windows support is
 > run-from-source and less battle-tested.
 
 ## How it works
@@ -193,7 +193,7 @@ The capture worker needs, in **System Settings → Privacy & Security**:
 - **Accessibility** and **Input Monitoring** — for the global hotkey
 
 When running the web app from Terminal, grant these to your **terminal app**.
-When running the bundled `.app`, grant them to **Code Capture** (and re-grant
+When running the bundled `.app`, grant them to **CodeSnap** (and re-grant
 after each rebuild — see DEPLOY.md).
 
 ## Supported languages
@@ -209,9 +209,9 @@ is transcribed and reported, just not compiler-verified.
 See **[DEPLOY.md](DEPLOY.md)**. In short:
 
 ```bash
-pyinstaller --noconfirm packaging/CodeCapture.spec
-xattr -cr "dist/Code Capture.app"
-codesign --force --deep --sign - "dist/Code Capture.app"
+pyinstaller --noconfirm packaging/CodeSnap.spec
+xattr -cr "dist/CodeSnap.app"
+codesign --force --deep --sign - "dist/CodeSnap.app"
 ```
 
 `main.py` is the single entry point: it runs the web app by default and the
@@ -229,7 +229,7 @@ Full pre-demo results are in **[TEST_REPORT.md](TEST_REPORT.md)**.
 ## Project structure
 
 ```
-Code Capture.command   double-click launcher (starts the web app)
+CodeSnap.command   double-click launcher (starts the web app)
 requirements.txt       Python dependencies
 src/                   all application code
   main.py                single entry point (web app / --capture worker)
@@ -241,7 +241,7 @@ src/                   all application code
   webapp/                FastAPI server + browser UI (static/)
 docs/                  README, DEPLOY, DEMO_GUIDE, TEST_REPORT, REQUIREMENTS
 deliverables/          slide deck, Q&A prep, internship report, architecture html
-packaging/             CodeCapture.spec + build_app.command (build the .app)
+packaging/             CodeSnap.spec + build_app.command (build the .app)
 assets/                images used by docs/deliverables
 demo_samples/          sample code files for demos
 tests/                 pytest suite + accuracy harness

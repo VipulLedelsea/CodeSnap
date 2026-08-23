@@ -1,4 +1,4 @@
-"""Single entry point for Code Capture.
+"""Single entry point for CodeSnap.
 
 Runs the local web app by default. When invoked with --capture it runs the
 hotkey capture worker instead (the web app launches this on 'Start capture').

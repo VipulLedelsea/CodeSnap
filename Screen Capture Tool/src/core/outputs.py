@@ -97,13 +97,13 @@ def report_docx(report: dict, dest_path, images=None):
     normal.font.name = "Calibri"; normal.font.size = Pt(11); normal.font.color.rgb = INK
 
     title = doc.add_paragraph()
-    tr = title.add_run("Code Capture report")
+    tr = title.add_run("CodeSnap report")
     tr.bold = True; tr.font.size = Pt(24); tr.font.color.rgb = INK
     title.paragraph_format.space_after = Pt(2)
 
     meta = (report.get("language") or report.get("extension") or "").strip()
     sub = doc.add_paragraph()
-    sr = sub.add_run((meta + "  \u00b7  " if meta else "") + "Compiler-verified by Code Capture")
+    sr = sub.add_run((meta + "  \u00b7  " if meta else "") + "Compiler-verified by CodeSnap")
     sr.italic = True; sr.font.size = Pt(10.5); sr.font.color.rgb = MUTED
     sub.paragraph_format.space_after = Pt(10)
 

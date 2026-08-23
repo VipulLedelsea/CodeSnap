@@ -25,7 +25,7 @@ REPORTS = PROJECT / "reports"
 PENDING = REPORTS / "pending"
 STATIC = HERE / "static"
 
-app = FastAPI(title="Ledelsea — Code Capture")
+app = FastAPI(title="Ledelsea — CodeSnap")
 _session = SessionManager()
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
@@ -121,13 +121,13 @@ def api_key_status():
 
 @app.post("/api/key")
 def api_key_set(value: str = ""):
-    """Save the user's Anthropic key to ~/.code_capture/.env (found by the capture
+    """Save the user's Anthropic key to ~/.codesnap/.env (found by the capture
     worker on launch) and this process's env. Local-only server, so this is fine."""
     import os
     key = (value or "").strip()
     if not (key.startswith("sk-ant") and len(key) > 20):
         return JSONResponse({"ok": False, "error": "That doesn't look like an Anthropic key (it should start with 'sk-ant')."}, status_code=400)
-    cfg = Path.home() / ".code_capture"
+    cfg = Path.home() / ".codesnap"
     try:
         cfg.mkdir(parents=True, exist_ok=True)
         (cfg / ".env").write_text(f"ANTHROPIC_API_KEY={key}\n")
@@ -289,7 +289,7 @@ def api_screen(delay: float = 0.0, notify: bool = False):
     if notify:
         try:
             from core.notify import notify as _notify
-            _notify("Code Capture", "Screenshot taken — switch back to draw the code box.")
+            _notify("CodeSnap", "Screenshot taken — switch back to draw the code box.")
         except Exception:  # noqa: BLE001 - notification is optional
             pass
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
@@ -347,7 +347,7 @@ def main():
     if want_native:
         try:
             import webview
-            print(f"Code Capture running (native window) at {url}")
+            print(f"CodeSnap running (native window) at {url}")
 
             class _JsApi:
                 def __init__(self):
@@ -388,7 +388,7 @@ def main():
                         return False
 
             _api = _JsApi()
-            win = webview.create_window("Code Capture", url, width=1200, height=840,
+            win = webview.create_window("CodeSnap", url, width=1200, height=840,
                                         min_size=(940, 620), js_api=_api)
             _api.window = win
             try:

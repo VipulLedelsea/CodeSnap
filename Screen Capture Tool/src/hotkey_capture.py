@@ -153,7 +153,7 @@ class App:
         from core import status
         status.publish("Capture complete — analysing", "info")
         from core.notify import notify
-        notify("Code Capture", "Capture complete — analysing")
+        notify("CodeSnap", "Capture complete — analysing")
         print("[burst] stop requested (Cmd+Shift+1) — analysing.")
         self.running = False
 
@@ -165,7 +165,7 @@ class App:
             from core import status
             status.publish("Still analysing the previous file — single mode captures one at a time.", "info")
             from core.notify import notify
-            notify("Code Capture", "Still analysing the previous capture — one file at a time.")
+            notify("CodeSnap", "Still analysing the previous capture — one file at a time.")
             print("(single-file mode: still analysing the previous capture)")
             return
         self._ensure_client()
@@ -173,7 +173,7 @@ class App:
         status.clear()
         status.publish("Burst capture — scroll through the file steadily", "start")
         from core.notify import notify
-        notify("Code Capture", "Session started — start scrolling")
+        notify("CodeSnap", "Session started — start scrolling")
         ts = time.strftime("%Y%m%d_%H%M%S")
         self.session_dir = CAPTURES_ROOT / f"session_{ts}"
         self.session_dir.mkdir(parents=True, exist_ok=True)
@@ -226,7 +226,7 @@ class App:
             time.sleep(BURST_INTERVAL)
         status.publish(f"Scrolling stopped — {kept} unique frame(s), analysing", "info")
         from core.notify import notify
-        notify("Code Capture", f"Capture complete — {kept} frame(s), analysing")
+        notify("CodeSnap", f"Capture complete — {kept} frame(s), analysing")
         if self.project_mode:
             print(f"[burst] done capturing: {kept} unique frame(s). Analysing in background — start the next file.")
             self.running = False        # project mode: free the session so the next file can be captured now
@@ -246,7 +246,7 @@ class App:
                 from core import status
                 status.publish("No frames captured — scroll while the session runs so it can read the screen.", "info", stage="done")
                 from core.notify import notify
-                notify("Code Capture", "No frames captured — scroll during the session, then it analyses.")
+                notify("CodeSnap", "No frames captured — scroll during the session, then it analyses.")
             except Exception:  # noqa: BLE001
                 pass
             return
@@ -274,7 +274,7 @@ class App:
                 from core import status
                 status.publish("Analysis failed — please start a new session and try again.", "error", stage="done")
                 from core.notify import notify
-                notify("Code Capture", "Analysis failed — please try again.")
+                notify("CodeSnap", "Analysis failed — please try again.")
             except Exception:  # noqa: BLE001
                 pass
         finally:
@@ -304,7 +304,7 @@ class App:
             self.running = False
             return
         from core.notify import notify
-        notify("Code Capture", "Captured — analysing...")
+        notify("CodeSnap", "Captured — analysing...")
         print("  Captured the screen — analysing. The agent will notify you to scroll "
               "(press Cmd+Shift+7), and tell you when to return to the terminal. Cmd+Shift+9 to quit.")
         threading.Thread(target=self._run_owned_session, args=(self.session_dir, [first]), daemon=True).start()

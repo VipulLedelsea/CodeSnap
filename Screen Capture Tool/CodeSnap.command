@@ -1,10 +1,10 @@
 #!/bin/bash
-# Double-click this file (Finder) to launch Code Capture — no terminal typing needed.
+# Double-click this file (Finder) to launch CodeSnap — no terminal typing needed.
 # It activates the virtual environment, makes sure dependencies are installed,
 # then starts the local web app and opens it in your browser.
 
 cd "$(dirname "$0")" || exit 1
-echo "Starting Code Capture..."
+echo "Starting CodeSnap..."
 
 # Pick a virtual environment: prefer the off-iCloud one (faster), else the local .venv
 if [ -d "$HOME/sct-venv" ]; then

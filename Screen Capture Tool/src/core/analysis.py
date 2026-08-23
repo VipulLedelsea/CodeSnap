@@ -53,7 +53,7 @@ USER_PROMPT = "Analyse all these screenshots as one continuous document and retu
 def load_env() -> None:
     """Load ANTHROPIC_API_KEY. Searches, in order: the existing environment, the
     working directory's .env (dev), a .env next to the executable/bundle, and
-    ~/.code_capture/.env (used by the installed .app). First hit wins."""
+    ~/.codesnap/.env (installed .app; ~/.code_capture/.env still read for older installs). First hit wins."""
     import os
     if os.environ.get("ANTHROPIC_API_KEY"):
         return
@@ -67,7 +67,8 @@ def load_env() -> None:
     if os.environ.get("ANTHROPIC_API_KEY"):
         return
     for cand in (Path(sys.executable).resolve().parent / ".env",   # 2) next to the app binary
-                 Path.home() / ".code_capture" / ".env"):          # 3) installed-app config
+                 Path.home() / ".codesnap" / ".env",               # 3) installed-app config
+                 Path.home() / ".code_capture" / ".env"):          # legacy (pre-rename installs)
         try:
             if cand.exists():
                 load_dotenv(cand)

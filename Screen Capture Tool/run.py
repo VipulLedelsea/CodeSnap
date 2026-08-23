@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-command setup + launch for Code Capture.
+"""One-command setup + launch for CodeSnap.
 
 Run this once after cloning — it creates a virtual environment, installs the
 dependencies, asks for your Anthropic API key the first time, and starts the app.
@@ -56,7 +56,7 @@ def ensure_api_key() -> None:
         step("API key found in environment")
         return
     env_file = ROOT / ".env"
-    candidates = [env_file, Path.home() / ".code_capture" / ".env"]
+    candidates = [env_file, Path.home() / ".codesnap" / ".env", Path.home() / ".code_capture" / ".env"]
     for f in candidates:
         try:
             if f.exists() and "ANTHROPIC_API_KEY" in f.read_text():
@@ -74,7 +74,7 @@ def ensure_api_key() -> None:
 
 
 def run_app() -> None:
-    step("Starting Code Capture — your browser will open ...")
+    step("Starting CodeSnap — your browser will open ...")
     subprocess.call([str(_venv_python()), str(ROOT / "src" / "main.py")], cwd=str(ROOT))
 
 
@@ -84,8 +84,8 @@ def build_app() -> None:
     step("Building the macOS .app (PyInstaller) ...")
     py = str(_venv_python())
     subprocess.check_call([py, "-m", "pip", "install", "-q", "pyinstaller"])
-    subprocess.check_call([py, "-m", "PyInstaller", "--noconfirm", "packaging/CodeCapture.spec"], cwd=str(ROOT))
-    app = ROOT / "dist" / "Code Capture.app"
+    subprocess.check_call([py, "-m", "PyInstaller", "--noconfirm", "packaging/CodeSnap.spec"], cwd=str(ROOT))
+    app = ROOT / "dist" / "CodeSnap.app"
     subprocess.call(["xattr", "-cr", str(app)])
     subprocess.call(["codesign", "--force", "--deep", "--sign", "-", str(app)])
     print(f"\nBuilt: {app}")
@@ -93,12 +93,12 @@ def build_app() -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Set up and run Code Capture.")
+    ap = argparse.ArgumentParser(description="Set up and run CodeSnap.")
     ap.add_argument("--build", action="store_true", help="build the double-click macOS .app instead of running")
     ap.add_argument("--setup", action="store_true", help="set up the environment but don't launch")
     args = ap.parse_args()
 
-    print("Code Capture — setup")
+    print("CodeSnap — setup")
     ensure_python()
     ensure_venv()
     install_deps()

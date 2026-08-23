@@ -143,7 +143,7 @@ def _t_save_output(ctx, inp):
         from core.notify import notify
         from core import status
         status.publish(f"Report ready to download: {ctx.out_name}", "ready")
-        notify("Code Capture", "Report ready — open the website to download")
+        notify("CodeSnap", "Report ready — open the website to download")
         return (f"Report prepared for download (not auto-saved): {Path(out).name}. "
                 "It is staged in reports/pending and downloadable from the website.")
     return f"Saved: {Path(out).resolve()}"
