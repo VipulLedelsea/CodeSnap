@@ -23,7 +23,7 @@ a = Analysis(
         # this project's own modules (imported lazily inside functions)
         'hotkey_capture', 'agent', 'team', 'tools',
         'core.analysis', 'core.capture', 'core.validate',
-        'core.outputs', 'core.notify', 'core.status',
+        'core.outputs', 'core.notify', 'core.status', 'core.project',
         'webapp.server', 'webapp.session', 'webapp.reports',
     ],
     hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=[],

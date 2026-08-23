@@ -26,3 +26,10 @@ uvicorn
 
 # Native app window (packaged .app renders the UI in a real window, not a browser tab)
 pywebview
+
+# macOS native-window backend for pywebview (WKWebView). Darwin-only so
+# non-Mac installs skip it.
+pyobjc-core; sys_platform == "darwin"
+pyobjc-framework-Cocoa; sys_platform == "darwin"
+pyobjc-framework-WebKit; sys_platform == "darwin"
+pyobjc-framework-Quartz; sys_platform == "darwin"
