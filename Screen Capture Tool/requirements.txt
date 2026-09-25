@@ -17,6 +17,9 @@ pynput
 # Near-duplicate frame detection (Milestone 5)
 imagehash
 
+# Program model attribute validation (Phase 2)
+pydantic>=2
+
 # Testing
 pytest
 

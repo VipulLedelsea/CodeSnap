@@ -96,6 +96,7 @@ class App:
         self.idle_stop = BURST_IDLE_STOP          # secs of no on-screen change before auto-stop; <=0 = manual (end with Cmd+Shift+1)
         self.region = None                        # (L,T,W,H) fractions to capture only the code area; None = full screen
         self.project_mode = False                 # project mode: capture many files back-to-back (analysis runs in the background)
+        self.program = None
         self._analysing = False                   # True while a capture is being analysed (single-file gate)
         self.team_mode = True                     # DEFAULT: multi-agent team (A2A). --single flips to backup single-agent.
         self._ready_event = threading.Event()     # set by Cmd+Shift+7 to advance an owned session
@@ -268,6 +269,8 @@ class App:
                 runner = run_agent
             final, _ = runner(self.client, ctx, goal=goal, verbose=True, audit=audit)
             print(f"\n{'=' * 60}\n{final}\n{'=' * 60}")
+            if self.program:
+                self._ingest_into_program(imgs, ctx)
         except Exception as exc:  # noqa: BLE001
             print(f"Analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
             try:
@@ -281,6 +284,22 @@ class App:
             self._analysing = False
             self._analysis_lock.release()
             print("\n[idle] Cmd+Shift+1 for a new burst, Cmd+Shift+9 to quit.")
+
+    def _ingest_into_program(self, imgs, ctx):
+        from core import status
+        from core.model import ProgramStore, ingest_capture
+        if not ctx.last_report:
+            return
+        try:
+            with ProgramStore.open(self.program) as store:
+                session_id = store.add_session(mode="burst", region=",".join(map(str, self.region)) if self.region else None)
+                status.publish("Adding file to the program model", "tool", stage="save")
+                artifact_id = ingest_capture(store, self.client, imgs, ctx.last_report, session_id=session_id)
+                name = store.artifact(artifact_id)["name"]
+            status.publish(f"Added {name} to program {self.program}", "info", stage="done")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Program update failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            status.publish(f"Couldn't add the file to the program: {exc}", "error", stage="done")
 
     # --- session lifecycle ---
     def _begin_owned_session(self):
@@ -579,6 +598,7 @@ def main() -> int:
     ap.add_argument("--idle-stop", type=float, default=BURST_IDLE_STOP, dest="idle_stop", help="Seconds of no on-screen change before a burst auto-stops; 0 = manual (end with Cmd+Shift+1).")
     ap.add_argument("--region", default=None, help="Capture only a screen sub-rectangle: \"L,T,W,H\" as fractions 0-1 (left,top,width,height).")
     ap.add_argument("--project-mode", action="store_true", dest="project_mode", help="Project mode: capture many files back-to-back; analysis runs in the background.")
+    ap.add_argument("--program", default=None, help="Program slug: add each analysed file to that program's model.")
     args = ap.parse_args()
     load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -608,7 +628,8 @@ def main() -> int:
     app.team_mode = not args.single
     app.sequential_team = args.sequential_team
     app.idle_stop = args.idle_stop
-    app.project_mode = args.project_mode
+    app.project_mode = args.project_mode or bool(args.program)
+    app.program = args.program
     if args.region:
         try:
             app.region = tuple(float(x) for x in args.region.split(","))

@@ -33,6 +33,7 @@ class ToolContext:
     region: dict = None                  # fixed capture rectangle (owned session)
     ready_event: object = None           # threading.Event set by the "next" hotkey
     confirm_saves: bool = True            # False in owned/auto mode -> save without asking
+    last_report: dict = None
 
 
 def _bg_extract(ctx, path):
@@ -128,6 +129,13 @@ def _t_save_output(ctx, inp):
         if ans in ("n", "no"):
             return "User chose NOT to save. Nothing was written."
     dest = (Path(ctx.out_dir) / "pending") if auto else Path(ctx.out_dir)
+    ctx.last_report = {
+        "is_code": fmt == "source", "code": content, "extension": inp.get("extension", ""),
+        "language": inp.get("language", ""), "overview": inp.get("overview", ""),
+        "errors": inp.get("errors", ""), "tech_stack": inp.get("tech_stack", ""),
+        "diagrams": inp.get("diagrams", ""), "code_name": getattr(ctx, "code_name", None),
+        "out_name": ctx.out_name,
+    }
     if fmt == "source":
         out = outputs.save_report_bundle({
             "code": content, "extension": inp.get("extension", "txt"),

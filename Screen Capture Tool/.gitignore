@@ -51,3 +51,10 @@ docs/DEMO_GUIDE.md
 docs/TEST_REPORT.md
 docs/DEEP_DIVE.md
 docs/REQUIREMENTS.md
+
+# private dev notes (not for the repo)
+CONTEXT.md
+
+# Phase 2 planning docs (private)
+docs/PHASE2_*.md
+docs/M[0-9]*_*.md

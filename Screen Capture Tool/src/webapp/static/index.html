@@ -34,6 +34,39 @@
         </div>
       </div>
 
+      <div class="card program-card">
+        <div class="project-head">
+          <div>
+            <p style="font-size:15px;font-weight:500;margin:0 0 4px">Program</p>
+            <p style="font-size:13px;color:var(--muted);margin:0" id="progSub">Pick a program to build its model across captures, or capture single files.</p>
+          </div>
+          <div class="prog-pick">
+            <select id="progSelect"><option value="">Single files (no program)</option></select>
+            <button class="btn-secondary" id="progNewBtn" type="button">New program</button>
+          </div>
+        </div>
+        <div class="prog-new" id="progNew" style="display:none">
+          <input type="text" id="progNewName" placeholder="Program name, e.g. MDE Aid Calc" spellcheck="false">
+          <button class="btn-primary" id="progCreate" type="button">Create</button>
+          <button class="btn-link" id="progNewCancel" type="button">Cancel</button>
+        </div>
+        <div class="prog-body" id="progBody" style="display:none">
+          <div class="prog-stats" id="progStats"></div>
+          <div class="prog-section-label">Files</div>
+          <div class="prog-files" id="progFiles"></div>
+          <div class="prog-section-label">Referenced but not captured</div>
+          <div class="prog-missing" id="progMissing"></div>
+          <details class="prog-map" id="progMapBox"><summary>Dependency map</summary><div id="progMap"></div></details>
+          <div class="project-actions">
+            <span class="project-hint">Each capture is added to this program.</span>
+            <span style="display:flex;gap:8px">
+              <button class="btn-link" id="progImport" type="button">Import past reports</button>
+              <button class="btn-secondary" id="progExport" type="button">Export model</button>
+            </span>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="start-row">
           <div>
@@ -88,7 +121,7 @@
         <span class="step">3 · Report</span>
       </div>
 
-      <div class="card project-card">
+      <div class="card project-card" style="display:none">
         <div class="project-head">
           <div>
             <p style="font-size:15px;font-weight:500;margin:0 0 4px">Project map</p>

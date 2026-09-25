@@ -1,4 +1,5 @@
 const $ = (id) => document.getElementById(id);
+let _program = "";
 if (window.mermaid) { try { mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" }); } catch (e) {} }
 
 const ANALYZING_MSGS = [
@@ -379,6 +380,7 @@ async function pollStatus() {
     if ((d.events || []).length !== lastEventCount) {
       lastEventCount = (d.events || []).length;
       loadReports();
+      if (typeof loadProgram === "function" && _program) loadProgram();
     }
   } catch (e) {}
 }
@@ -422,6 +424,7 @@ $("startBtn").addEventListener("click", async () => {
     if (idle !== null) params.set("idle_stop", String(idle));
     if (pickedRegion) params.set("region", pickedRegion);
     if (_projMode) params.set("project_mode", "true");
+    if (_program) params.set("program", _program);
     const qs = params.toString();
     await fetch("/api/session/start" + (qs ? "?" + qs : ""), { method: "POST" });
     const manual = idle === 0;
@@ -768,3 +771,131 @@ function projectCard(r, nameToRep, isPending) {
       <div class="proj-files-body">${memberHtml}</div>
     </details></div>`;
 }
+
+
+// ── Program model: pick/create a program; every capture is added to it ──────
+const PROG_KEY = "codesnap.program";
+function _progStore(v) {
+  try { if (v === undefined) return localStorage.getItem(PROG_KEY) || ""; localStorage.setItem(PROG_KEY, v); } catch (e) {}
+  return "";
+}
+async function _json(url, opts) {
+  const r = await fetch(url, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || j.detail || ("HTTP " + r.status));
+  return j;
+}
+async function loadPrograms(select) {
+  let list = [];
+  try { list = (await _json("/api/programs")).programs || []; } catch (e) {}
+  const sel = $("progSelect");
+  sel.innerHTML = `<option value="">Single files (no program)</option>` +
+    list.map(p => `<option value="${_attr(p.slug)}">${escapeHtml(p.name)}</option>`).join("");
+  const want = select !== undefined ? select : _progStore();
+  _program = list.some(p => p.slug === want) ? want : "";
+  sel.value = _program;
+  _progStore(_program);
+  await loadProgram();
+}
+function _stat(n, label) { return `<div class="prog-stat"><b>${n}</b><span>${label}</span></div>`; }
+async function loadProgram() {
+  const body = $("progBody");
+  if (!_program) { body.style.display = "none"; $("progSub").textContent = "Pick a program to build its model across captures, or capture single files."; return; }
+  let d;
+  try { d = await _json("/api/programs/" + encodeURIComponent(_program)); }
+  catch (e) { toast(e.message); return; }
+  body.style.display = "block";
+  $("progSub").textContent = d.program.description || "Every capture is transcribed, checked, and added to this program's model.";
+  const c = d.coverage, u = d.usage;
+  $("progStats").innerHTML = _stat(c.files, "files") + _stat(c.entities, "entities") +
+    _stat(c.missing.length, "missing") + _stat(Math.round(c.resolved_ratio * 100) + "%", "resolved") +
+    _stat(((u.input_tokens + u.output_tokens) / 1000).toFixed(1) + "k", "tokens");
+  $("progFiles").innerHTML = d.artifacts.length ? d.artifacts.map(a => `
+    <details class="prog-file" data-id="${a.id}">
+      <summary>
+        <span class="pf-name">${escapeHtml(a.name)}</span>
+        <span class="pf-meta">${escapeHtml(a.language || a.artifact_type)} · v${a.version} · ${a.entities} entities · ${a.frames} frames</span>
+        <span class="pf-status ${_attr(a.status)}">${escapeHtml(a.status)}</span>
+      </summary>
+      <div class="pf-detail"></div>
+    </details>`).join("") : `<p class="project-hint" style="margin:0">No files yet — start a capture.</p>`;
+  document.querySelectorAll("#progFiles .prog-file").forEach(el =>
+    el.addEventListener("toggle", () => { if (el.open) loadArtifact(el); }));
+  $("progMissing").innerHTML = c.missing.length ? c.missing.map(m => {
+    const by = (m.referenced_by || []).map(r => `${r.name} (${r.relation}${r.artifact ? ", " + r.artifact : ""})`).join("; ");
+    return `<div class="pm"><b>${escapeHtml(m.name)}</b> <small>${escapeHtml(m.kind)} — used by ${escapeHtml(by || "unknown")}</small></div>`;
+  }).join("") : `<p class="project-hint" style="margin:0">Nothing missing so far.</p>`;
+  if ($("progMapBox").open) loadProgramMap();
+}
+async function loadArtifact(el) {
+  const box = el.querySelector(".pf-detail");
+  box.innerHTML = `<span class="project-hint">Loading…</span>`;
+  let d;
+  try { d = await _json(`/api/programs/${encodeURIComponent(_program)}/artifacts/${el.dataset.id}`); }
+  catch (e) { box.textContent = e.message; return; }
+  const base = `/api/programs/${encodeURIComponent(_program)}`;
+  const errs = d.artifact.validation_ok === 0 ? `<div class="project-hint">Compiler: ${escapeHtml((d.artifact.validation_errors || "").slice(0, 300))}</div>` : "";
+  box.innerHTML = `
+    <div class="pf-rename"><input type="text" value="${_attr(d.artifact.name)}" spellcheck="false">
+      <button class="btn-link pf-save" type="button">Rename</button>
+      <button class="btn-link pf-re" type="button">Re-extract</button></div>
+    ${errs}
+    <div class="pf-entities">${d.entities.map(e => `<div>${escapeHtml(e.name)} <i>${escapeHtml(e.kind)}${e.line_start ? " · L" + e.line_start : ""}</i></div>`).join("") || "<div><i>No entities extracted.</i></div>"}</div>
+    <div class="pf-frames">${d.evidence.map(ev => `<a href="${base}/evidence/${ev.id}" target="_blank" rel="noopener"><img src="${base}/evidence/${ev.id}" alt="frame ${ev.ord + 1}" loading="lazy"></a>`).join("")}</div>`;
+  box.querySelector(".pf-save").addEventListener("click", async () => {
+    const name = box.querySelector("input").value.trim();
+    try { await _json(`${base}/artifacts/${el.dataset.id}/rename`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }); toast("Renamed."); loadProgram(); }
+    catch (e) { toast(e.message); }
+  });
+  box.querySelector(".pf-re").addEventListener("click", async (ev) => {
+    ev.target.textContent = "Extracting…";
+    try { const r = await _json(`${base}/artifacts/${el.dataset.id}/reextract`, { method: "POST" }); toast(`${r.entities} entities, ${r.relations} relations.`); loadProgram(); }
+    catch (e) { toast(e.message); ev.target.textContent = "Re-extract"; }
+  });
+}
+async function loadProgramMap() {
+  const box = $("progMap");
+  try {
+    const g = await _json(`/api/programs/${encodeURIComponent(_program)}/graph`);
+    box.innerHTML = g.edges.length ? `<pre class="mermaid">${escapeHtml(g.mermaid)}</pre>` : `<p class="project-hint">No dependencies yet.</p>`;
+    renderMermaid();
+  } catch (e) { box.textContent = e.message; }
+}
+$("progSelect").addEventListener("change", async (e) => {
+  _program = e.target.value; _progStore(_program);
+  if (_projMode) setProjectMode(false);
+  await loadProgram();
+  toast(_program ? "Captures will be added to this program." : "Single-file mode.");
+});
+$("progNewBtn").addEventListener("click", () => { $("progNew").style.display = "flex"; $("progNewName").focus(); });
+$("progNewCancel").addEventListener("click", () => { $("progNew").style.display = "none"; });
+async function createProgram() {
+  const name = $("progNewName").value.trim();
+  if (!name) return;
+  try {
+    const r = await _json("/api/programs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    $("progNew").style.display = "none"; $("progNewName").value = "";
+    await loadPrograms(r.program.slug);
+    toast("Program created.");
+  } catch (e) { toast(e.message); }
+}
+$("progCreate").addEventListener("click", createProgram);
+$("progNewName").addEventListener("keydown", (e) => { if (e.key === "Enter") createProgram(); });
+$("progMapBox").addEventListener("toggle", () => { if ($("progMapBox").open) loadProgramMap(); });
+$("progExport").addEventListener("click", async () => {
+  try {
+    const r = await fetch(`/api/programs/${encodeURIComponent(_program)}/export`);
+    if (!r.ok) throw new Error("Export failed");
+    await saveFile(_program + ".program.json", await r.text());
+  } catch (e) { toast(e.message); }
+});
+$("progImport").addEventListener("click", async (ev) => {
+  ev.target.textContent = "Importing…"; ev.target.disabled = true;
+  try {
+    const r = await _json(`/api/programs/${encodeURIComponent(_program)}/import`, { method: "POST" });
+    toast(`Imported ${r.imported.length} file(s).`);
+    await loadProgram();
+  } catch (e) { toast(e.message); }
+  ev.target.textContent = "Import past reports"; ev.target.disabled = false;
+});
+loadPrograms();

@@ -8,7 +8,7 @@ Run:  python -m webapp        (or: python webapp/server.py)
 
 from pathlib import Path
 
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -104,10 +104,156 @@ def api_pending_download(name: str):
 
 
 @app.post("/api/session/start")
-def api_session_start(single: bool = False, idle_stop: float | None = None, region: str | None = None, project_mode: bool = False):
-    started = _session.start(single=single, idle_stop=idle_stop, region=region, project_mode=project_mode)
+def api_session_start(single: bool = False, idle_stop: float | None = None, region: str | None = None,
+                      project_mode: bool = False, program: str | None = None):
+    if program and not _program_exists(program):
+        return JSONResponse({"error": f"Unknown program: {program}"}, status_code=404)
+    started = _session.start(single=single, idle_stop=idle_stop, region=region, project_mode=project_mode,
+                             program=program)
     return {"running": _session.running(), "started": started, "single": single,
-            "idle_stop": idle_stop, "region": region, "project_mode": project_mode}
+            "idle_stop": idle_stop, "region": region, "project_mode": project_mode or bool(program),
+            "program": program}
+
+
+def _program_exists(slug: str) -> bool:
+    from core.model import programs_root
+    return bool(slug) and "/" not in slug and (programs_root() / slug / "program.db").exists()
+
+
+def _open_program(slug: str):
+    from core.model import ProgramStore
+    if not _program_exists(slug):
+        raise HTTPException(status_code=404, detail=f"Unknown program: {slug}")
+    return ProgramStore.open(slug)
+
+
+def _client():
+    import os
+    import anthropic
+    from core import analysis
+    analysis.load_env()
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise HTTPException(status_code=400, detail="No API key set — add it in the app first.")
+    return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=120.0)
+
+
+def _artifact_summary(store, artifact: dict) -> dict:
+    keep = ("id", "name", "artifact_type", "language", "version", "status", "validation_tool",
+            "validation_ok", "validation_errors", "created", "updated")
+    out = {k: artifact.get(k) for k in keep}
+    out["entities"] = len(store._all("SELECT DISTINCT entity_id FROM entity_source WHERE artifact_id = ?",
+                                     (artifact["id"],)))
+    out["frames"] = len(store.artifact_evidence(artifact["id"]))
+    return out
+
+
+@app.get("/api/programs")
+def api_programs():
+    from core.model import ProgramStore
+    return {"programs": ProgramStore.list()}
+
+
+@app.post("/api/programs")
+def api_program_create(payload: dict = Body(...)):
+    from core.model import ProgramStore
+    name = str((payload or {}).get("name", "")).strip()
+    if not name:
+        return JSONResponse({"error": "Give the program a name."}, status_code=400)
+    with ProgramStore.create(name, str(payload.get("description", "")).strip()) as store:
+        return {"ok": True, "program": store.info}
+
+
+@app.get("/api/programs/{slug}")
+def api_program(slug: str):
+    with _open_program(slug) as store:
+        return {
+            "program": store.info,
+            "coverage": store.coverage(),
+            "usage": store.usage(),
+            "artifacts": [_artifact_summary(store, a) for a in store.artifacts()],
+        }
+
+
+@app.get("/api/programs/{slug}/artifacts/{artifact_id}")
+def api_program_artifact(slug: str, artifact_id: int):
+    with _open_program(slug) as store:
+        artifact = store.artifact(artifact_id)
+        if artifact is None:
+            raise HTTPException(status_code=404, detail="No such file in this program.")
+        entities = store._all(
+            "SELECT DISTINCT e.id, e.kind, e.name, e.key, e.line_start, e.line_end, e.origin FROM entity e "
+            "JOIN entity_source s ON s.entity_id = e.id WHERE s.artifact_id = ? ORDER BY e.line_start",
+            (artifact_id,),
+        )
+        evidence = [{"id": e["id"], "ord": e["ord"]} for e in store.artifact_evidence(artifact_id)]
+        return {"artifact": artifact, "entities": entities, "evidence": evidence}
+
+
+@app.post("/api/programs/{slug}/artifacts/{artifact_id}/rename")
+def api_program_artifact_rename(slug: str, artifact_id: int, payload: dict = Body(...)):
+    with _open_program(slug) as store:
+        try:
+            store.rename_artifact(artifact_id, str((payload or {}).get("name", "")))
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        return {"ok": True, "artifact": _artifact_summary(store, store.artifact(artifact_id))}
+
+
+@app.post("/api/programs/{slug}/artifacts/{artifact_id}/reextract")
+def api_program_artifact_reextract(slug: str, artifact_id: int):
+    from core.model import ingest_artifact
+    client = _client()
+    with _open_program(slug) as store:
+        if store.artifact(artifact_id) is None:
+            raise HTTPException(status_code=404, detail="No such file in this program.")
+        try:
+            counts = ingest_artifact(store, client, artifact_id)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"Re-extraction failed: {exc}"}, status_code=500)
+        return {"ok": True, **counts}
+
+
+@app.get("/api/programs/{slug}/graph")
+def api_program_graph(slug: str):
+    from core.model import dependency_mermaid
+    with _open_program(slug) as store:
+        graph = store.graph()
+        return {**graph, "mermaid": dependency_mermaid(graph)}
+
+
+@app.get("/api/programs/{slug}/coverage")
+def api_program_coverage(slug: str):
+    with _open_program(slug) as store:
+        return store.coverage()
+
+
+@app.get("/api/programs/{slug}/export")
+def api_program_export(slug: str):
+    with _open_program(slug) as store:
+        store.export()
+        path = store.exports_dir / "program.json"
+    return FileResponse(str(path), filename=f"{slug}.program.json", media_type="application/json")
+
+
+@app.get("/api/programs/{slug}/evidence/{evidence_id}")
+def api_program_evidence(slug: str, evidence_id: int):
+    with _open_program(slug) as store:
+        ev = store.evidence(evidence_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="No such screenshot.")
+    return FileResponse(ev["abs_path"])
+
+
+@app.post("/api/programs/{slug}/import")
+def api_program_import(slug: str, extract: bool = True):
+    from core.model import import_reports
+    client = _client() if extract else None
+    with _open_program(slug) as store:
+        try:
+            imported = import_reports(store, [REPORTS, PENDING], client=client)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"Import failed: {exc}"}, status_code=500)
+        return {"ok": True, "imported": imported}
 
 
 @app.get("/api/key/status")

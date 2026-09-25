@@ -17,7 +17,7 @@ class SessionManager:
     def running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
-    def start(self, single: bool = False, idle_stop=None, region=None, project_mode=False) -> bool:
+    def start(self, single: bool = False, idle_stop=None, region=None, project_mode=False, program=None) -> bool:
         if self.running():
             return False
         from core import status
@@ -36,6 +36,8 @@ class SessionManager:
             argv += ["--region", region]              # capture only the picked code rectangle
         if project_mode:
             argv += ["--project-mode"]                # allow back-to-back multi-file capture
+        if program:
+            argv += ["--program", program]
         if single:
             argv.append("--single")   # backup: single agent instead of the default team
         self._proc = subprocess.Popen(argv, cwd=str(PROJECT))
