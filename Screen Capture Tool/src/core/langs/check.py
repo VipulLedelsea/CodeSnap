@@ -25,7 +25,8 @@ _MISSING = [
     re.compile(r"error CS0234: The type or namespace name '([^']+)'"),
 ]
 _FOLLOW_ON = re.compile(r"cannot find symbol|does not exist|CS0246|CS0234|CS0103|was not declared in this scope|"
-                        r"unknown type name|has not been declared|incomplete type|No such file", re.I)
+                        r"unknown type name|has not been declared|incomplete type|No such file|file not found|"
+                        r"^\s*\d+ errors? generated|compilation terminated", re.I)
 
 
 def _missing(output: str) -> list:
