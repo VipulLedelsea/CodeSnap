@@ -828,10 +828,16 @@ async function loadProgram() {
     </details>`).join("") : `<p class="project-hint" style="margin:0">No files yet — start a capture.</p>`;
   document.querySelectorAll("#progFiles .prog-file").forEach(el =>
     el.addEventListener("toggle", () => { if (el.open) loadArtifact(el); }));
-  $("progMissing").innerHTML = c.missing.length ? c.missing.map(m => {
-    const by = (m.referenced_by || []).map(r => `${r.name} (${r.relation}${r.artifact ? ", " + r.artifact : ""})`).join("; ");
-    return `<div class="pm"><b>${escapeHtml(m.name)}</b> <small>${escapeHtml(m.kind)} — used by ${escapeHtml(by || "unknown")}</small></div>`;
+  const mc = c.missing_counts || {};
+  $("progMissingLabel").textContent = `Referenced but not captured — ${mc.missing_code || 0} code · ${mc.external || 0} external · ${mc.library || 0} library`;
+  const order = { missing_code: 0, external: 1, library: 2 };
+  const catLabel = { missing_code: "code", external: "external", library: "library" };
+  const shown = c.missing.filter(m => m.category !== "library").sort((a, b) => order[a.category] - order[b.category]);
+  $("progMissing").innerHTML = shown.length ? shown.slice(0, 80).map(m => {
+    const by = (m.referenced_by || []).slice(0, 4).map(r => `${r.name} (${r.relation}${r.artifact ? ", " + r.artifact : ""})`).join("; ");
+    return `<div class="pm"><span class="pm-cat ${_attr(m.category)}">${catLabel[m.category] || m.category}</span> <b>${escapeHtml(m.name)}</b> <small>${escapeHtml(m.kind)} — used by ${escapeHtml(by || "unknown")}</small></div>`;
   }).join("") : `<p class="project-hint" style="margin:0">${c.entities ? "Nothing missing so far." : "No structure extracted yet — use Re-extract on a file."}</p>`;
+  if ($("progFlowsBox").open) loadProgramFlows();
   if ($("progMapBox").open) loadProgramMap();
 }
 async function loadArtifact(el) {
@@ -885,6 +891,15 @@ function profileHtml(p) {
   const flags = Object.keys(st).map(k => `${escapeHtml(k)}=${escapeHtml(String(st[k]))}`);
   if (flags.length) bits.push("Settings: " + flags.join(", "));
   return bits.length ? `<div class="pf-profile">${escapeHtml(p.language || "")} · ${bits.join(" · ")}</div>` : "";
+}
+async function loadProgramFlows() {
+  const box = $("progFlows");
+  try {
+    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/flows?limit=200`);
+    if (!d.flows.length) { box.innerHTML = `<p class="project-hint">No flows yet — capture entry points (screens, endpoints, jobs) and the code they call.</p>`; return; }
+    box.innerHTML = `<p class="project-hint">${d.total} flow(s)</p>` + d.flows.map(f =>
+      `<div class="pf-flow"><b>${escapeHtml(f.entry)}</b> <small>${escapeHtml(f.entry_kind)}</small> → ${f.steps.map(s => escapeHtml(s.to)).join(" → ")} <small>(${escapeHtml(f.access || "")} ${escapeHtml(f.target_kind)})</small></div>`).join("");
+  } catch (e) { box.textContent = e.message; }
 }
 async function loadProgramMap() {
   const box = $("progMap");
@@ -947,3 +962,10 @@ document.querySelectorAll("#kindSeg .seg-opt").forEach(b => b.addEventListener("
     pollStatus();
   }
 }));
+
+$("progFlowsBox").addEventListener("toggle", () => { if ($("progFlowsBox").open) loadProgramFlows(); });
+$("progRelink").addEventListener("click", async () => {
+  try { const r = await _json(`/api/programs/${encodeURIComponent(_program)}/relink`, { method: "POST" });
+        toast(`Linked: ${r.merged} merged, ${r.jcl + r.config + r.screens + r.translated} new links.`); loadProgram(); }
+  catch (e) { toast(e.message); }
+});

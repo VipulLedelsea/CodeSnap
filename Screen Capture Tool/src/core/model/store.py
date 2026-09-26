@@ -500,6 +500,29 @@ class ProgramStore:
                         "WHERE a.name = (SELECT name FROM artifact WHERE id = ?)", (artifact_id,))
         return round(row["cost"], 4) if row else 0.0
 
+    def merge_entities(self, source_id: int, target_id: int, rule: str = ""):
+        if source_id == target_id:
+            return
+        src, dst = self.entity(source_id), self.entity(target_id)
+        if src is None or dst is None:
+            return
+        with self.transaction() as db:
+            db.execute("UPDATE relation SET from_id = ? WHERE from_id = ?", (target_id, source_id))
+            db.execute("UPDATE relation SET to_id = ? WHERE to_id = ?", (target_id, source_id))
+            db.execute("UPDATE entity_source SET entity_id = ? WHERE entity_id = ?", (target_id, source_id))
+            db.execute("UPDATE OR IGNORE evidence_link SET target_id = ? WHERE target_type = 'entity' AND target_id = ?",
+                       (target_id, source_id))
+            db.execute("UPDATE entity SET parent_id = ? WHERE parent_id = ?", (target_id, source_id))
+            db.execute("DELETE FROM relation WHERE from_id = to_id AND from_id = ?", (target_id,))
+            db.execute(
+                "DELETE FROM relation WHERE id IN (SELECT r.id FROM relation r JOIN relation k ON k.kind = r.kind "
+                "AND k.from_id = r.from_id AND k.to_id = r.to_id AND k.artifact_id IS r.artifact_id AND k.id < r.id "
+                "WHERE r.from_id = ? OR r.to_id = ?)", (target_id, target_id))
+            aliases = sorted(set(dst["attrs"].get("aliases", [])) | {src["key"]})
+            attrs = {**dst["attrs"], "aliases": aliases}
+            db.execute("UPDATE entity SET attrs = ?, updated = ? WHERE id = ?", (json.dumps(attrs), _now(), target_id))
+            db.execute("DELETE FROM entity WHERE id = ?", (source_id,))
+
     def coverage(self) -> dict:
         by_status = {r["status"]: r["n"] for r in self._all(
             "SELECT status, COUNT(*) AS n FROM artifact WHERE is_current = 1 GROUP BY status")}
@@ -512,16 +535,24 @@ class ProgramStore:
                 "JOIN entity e ON e.id = r.from_id LEFT JOIN artifact a ON a.id = r.artifact_id WHERE r.to_id = ?",
                 (placeholder["id"],),
             )
+            if self._one("SELECT 1 FROM relation WHERE kind = 'same_as' AND (from_id = ? OR to_id = ?)",
+                         (placeholder["id"], placeholder["id"])):
+                continue
             missing.append({"id": placeholder["id"], "kind": placeholder["kind"], "name": placeholder["name"],
-                            "referenced_by": referrers})
+                            "category": classify_placeholder(placeholder, referrers), "referenced_by": referrers})
         total = sum(by_kind.values())
+        counts = {c: sum(1 for m in missing if m["category"] == c) for c in ("missing_code", "external", "library")}
+        code_total = total - sum(by_kind.get(k, 0) for k in ("table", "column", "data_store", "external_system",
+                                                             "config_item"))
+        denom = code_total + counts["missing_code"]
         return {
             "files": sum(by_status.values()),
             "files_by_status": by_status,
             "entities": total,
             "entities_by_kind": by_kind,
             "missing": missing,
-            "resolved_ratio": round(total / (total + len(missing)), 3) if total + len(missing) else None,
+            "missing_counts": counts,
+            "resolved_ratio": round(code_total / denom, 3) if denom and code_total else (None if not total else 1.0),
         }
 
     def graph(self) -> dict:
@@ -548,6 +579,11 @@ class ProgramStore:
         if write:
             (self.exports_dir / "program.json").write_text(json.dumps(data, indent=2))
         return data
+
+
+def classify_placeholder(entity: dict, referrers=()) -> str:
+    from .linker import classify
+    return classify(entity, referrers)
 
 
 def _image_size(path: Path):

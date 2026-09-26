@@ -255,6 +255,21 @@ def api_program_graph(slug: str):
         return {**graph, "mermaid": dependency_mermaid(graph)}
 
 
+@app.post("/api/programs/{slug}/relink")
+def api_program_relink(slug: str):
+    from core.model.linker import link_program
+    with _open_program(slug) as store:
+        return {"ok": True, **link_program(store), "coverage": store.coverage()}
+
+
+@app.get("/api/programs/{slug}/flows")
+def api_program_flows(slug: str, limit: int = 500):
+    from core.model.linker import trace_flows
+    with _open_program(slug) as store:
+        flows = trace_flows(store)
+    return {"flows": flows[:limit], "total": len(flows)}
+
+
 @app.get("/api/programs/{slug}/coverage")
 def api_program_coverage(slug: str):
     with _open_program(slug) as store:

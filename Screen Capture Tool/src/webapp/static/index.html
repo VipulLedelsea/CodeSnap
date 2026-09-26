@@ -55,12 +55,14 @@
           <div class="prog-cost" id="progCost"></div>
           <div class="prog-section-label">Files</div>
           <div class="prog-files" id="progFiles"></div>
-          <div class="prog-section-label">Referenced but not captured</div>
+          <div class="prog-section-label" id="progMissingLabel">Referenced but not captured</div>
           <div class="prog-missing" id="progMissing"></div>
+          <details class="prog-map" id="progFlowsBox"><summary>Flows (entry point → data)</summary><div id="progFlows"></div></details>
           <details class="prog-map" id="progMapBox"><summary>Dependency map</summary><div id="progMap"></div></details>
           <div class="project-actions">
             <span class="project-hint">Each capture is added to this program.</span>
             <span style="display:flex;gap:8px">
+              <button class="btn-link" id="progRelink" type="button">Re-link</button>
               <button class="btn-link" id="progImport" type="button">Import past reports</button>
               <button class="btn-secondary" id="progExport" type="button">Export model</button>
             </span>

@@ -8,7 +8,7 @@ ENTITY_KINDS = {
 
 RELATION_KINDS = {
     "contains", "calls", "imports", "includes", "inherits", "implements", "uses", "reads",
-    "writes", "displays", "navigates_to", "invokes_transaction", "connects_to", "depends_on",
+    "writes", "displays", "navigates_to", "invokes_transaction", "connects_to", "depends_on", "same_as",
 }
 
 ARTIFACT_TYPES = {"code", "ui_screen", "db_schema", "sql", "config", "api", "job", "web", "other"}

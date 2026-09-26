@@ -590,3 +590,7 @@ body.dark .seg-opt{ color:#B6B6BE; }
 .kind-label{ font-size:13px; color:var(--muted); }
 .pf-type{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted); }
 .pf-type select{ padding:4px 8px; border:0.5px solid var(--line); border-radius:8px; font-size:12.5px; background:var(--panel); color:var(--text); }
+.pm-cat{ font-size:10.5px; border-radius:5px; padding:1px 6px; border:0.5px solid var(--line); color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+.pm-cat.missing_code{ color:#B42318; border-color:#F3C4BE; }
+.pm-cat.external{ color:#1D5FA8; border-color:#C4D8F0; }
+.pf-flow{ font-size:12.5px; padding:3px 0; line-height:1.5; }

@@ -107,6 +107,7 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
         store.log_run("structure", artifact_id=artifact_id, model=parsed["parser"], prompt_version=parsed["parser"],
                       input_tokens=0, output_tokens=0, ms=parsed["ms"])
         store.set_status(artifact_id, "structured")
+        _relink(store)
         return {**counts, "parser": parsed["parser"]}
     try:
         structure = extract_structure(client, code, filename=artifact["name"], language=artifact["language"])
@@ -123,7 +124,16 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
                       error="output truncated (max_tokens)" if call.get("stop_reason") == "max_tokens" else None)
     counts = apply_structure(store, artifact_id, structure, artifact["name"], len(code.splitlines()))
     store.set_status(artifact_id, "structured")
+    _relink(store)
     return counts
+
+
+def _relink(store):
+    from .linker import link_program
+    try:
+        return link_program(store)
+    except Exception:
+        return None
 
 
 def _parse_deterministic(code: str, artifact: dict):
