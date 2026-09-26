@@ -75,7 +75,7 @@ PACKS = [
      "units": [("paragraph", r"^.{5}C.{5}(?P<name>[A-Z0-9#@$]{1,14})\s+BEGSR\b"), ("paragraph", r"^\s*BEGSR\s+(?P<name>[A-Z0-9#@$_]+)"),
                ("function", r"\bdcl-proc\s+(?P<name>\w+)"), ("function", r"^.{5}P(?P<name>[A-Z0-9#@$_]{1,15})\s+B\b")],
      "unit_end": {"paragraph": R(r"\bENDSR\b", re.I), "function": R(r"\bend-proc\b|^.{5}P\s+.*\bE\b", re.I)},
-     "calls": [("calls", r"\bEXSR\s+(?P<target>[A-Z0-9#@$_]+)", "paragraph"), ("calls", r"\bCALLP?\b\s*\(?\s*'?(?P<target>[A-Z0-9#@$_]+)'?", "program"),
+     "calls": [("calls", r"\bEXSR\s+(?P<target>[A-Z0-9#@$_]+)", "paragraph"), ("calls", r"\bCALLP?\b\s*\(?\s*'?(?!QCMDEXC|QCMDCHK|QUS[A-Z]|QSYS|QDC|QWC|QMH)(?P<target>[A-Z0-9#@$_]+)'?", "program"),
                ("calls", r"\bCALLB\s+'(?P<target>\w+)'", "program")],
      "includes": [(r"/(?:COPY|INCLUDE)\s+(?P<target>[\w/,]+)", "copybook")],
      "files": [("uses", r"^.{5}F(?P<target>[A-Z0-9#@$_]{1,10})\s+[IUOC]", "database file"), ("uses", r"\bdcl-f\s+(?P<target>\w+)", "database file"),
