@@ -193,8 +193,11 @@ def _link_translated(store) -> int:
 def link_program(store) -> dict:
     with store.transaction() as db:
         db.execute("DELETE FROM relation WHERE origin = 'inferred' AND artifact_id IS NULL")
-    return {"merged": _merge_placeholders(store), "jcl": _link_jcl(store), "config": _link_config(store),
-            "screens": _link_screens(store), "translated": _link_translated(store), "version": LINKER_VERSION}
+    from .corrections import apply_corrections
+    out = {"merged": _merge_placeholders(store), "jcl": _link_jcl(store), "config": _link_config(store),
+           "screens": _link_screens(store), "translated": _link_translated(store), "version": LINKER_VERSION}
+    out["corrections"] = apply_corrections(store)
+    return out
 
 
 def trace_flows(store, max_depth: int = 12, per_entry: int = 40) -> list:

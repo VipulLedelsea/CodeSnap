@@ -847,6 +847,7 @@ async function loadProgram() {
   if ($("progAssessBox").open) loadAssessment();
   if ($("progDiagBox").open) loadDiagrams();
   if ($("progUiBox").open) loadUiReview();
+  if ($("progFixBox").open) loadCorrections();
   const rb = `/api/programs/${encodeURIComponent(_program)}/report`;
   $("progReportHtml").href = `${rb}.html`;
   $("progReportDocx").href = `${rb}.docx`;
@@ -940,8 +941,15 @@ function findingList(box, rows, onUpdate) {
       <div class="sec-d"><p>${escapeHtml(f.detail || "")}</p>${ev}
       <div class="sec-refs">${_refTags(f.refs || {})}</div>
       <div class="sec-src">Source: ${escapeHtml(f.source || "")}</div>
-      <div class="sec-actions">${["open", "accepted", "dismissed", "fixed"].map(s => `<button class="btn-link${f.status === s ? " on" : ""}" data-status="${s}" type="button">${s}</button>`).join(" ")}</div></div></details>`;
+      <div class="sec-actions">${["open", "accepted", "dismissed", "fixed"].map(s => `<button class="btn-link${f.status === s ? " on" : ""}" data-status="${s}" type="button">${s}</button>`).join(" ")}
+        <select class="sec-sev" title="Correct severity">${["", "critical", "high", "medium", "low", "info"].map(v => `<option value="${v}">${v ? v : "severity…"}</option>`).join("")}</select></div></div></details>`;
   }).join("");
+  box.querySelectorAll(".sec-sev").forEach(sel => sel.addEventListener("change", async () => {
+    const f = rows.find(x => String(x.id) === sel.closest(".sec-f").dataset.id);
+    if (!sel.value || !f) return;
+    await applyCorrections([{ op: "finding.severity", payload: { sig: `${f.rule || f.category}|${f.title}`, severity: sel.value } }], "severity corrected from findings list");
+    onUpdate({ ...f, severity: sel.value });
+  }));
   box.querySelectorAll(".sec-actions button").forEach(b => b.addEventListener("click", async () => {
     const id = b.closest(".sec-f").dataset.id;
     try {
@@ -1001,6 +1009,123 @@ async function runUiReview(withSite) {
     await loadUiReview();
   } catch (e) { $("progUi").textContent = e.message; }
   btn.disabled = false; btn.textContent = label;
+}
+function _impactHtml(impact, warnings) {
+  return `<div class="fix-impact"><b>What changed</b><ul>${(impact || []).map(t => `<li>${escapeHtml(t)}</li>`).join("")}</ul>${(warnings || []).map(w => `<p class="project-hint">${escapeHtml(w)}</p>`).join("")}</div>`;
+}
+async function applyCorrections(ops, note) {
+  const d = await _json(`/api/programs/${encodeURIComponent(_program)}/corrections`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ops, note: note || "" }) });
+  $("progFixImpact").innerHTML = _impactHtml(d.impact, d.warnings);
+  toast((d.impact || [])[0] || "Correction applied.");
+  await loadCorrections();
+  if ($("progAssessBox").open) loadAssessment();
+  return d;
+}
+async function loadCorrections() {
+  try {
+    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/corrections`);
+    const active = d.corrections.filter(c => c.active).length;
+    $("progFixSummary").innerHTML = `Corrections &amp; feedback ${active ? `<span class="sev low">${active} active</span>` : ""}`;
+    $("progFixLog").innerHTML = d.corrections.length ? d.corrections.slice().reverse().map(c => `<div class="fix-row ${c.active ? "" : "undone"}"><span>${escapeHtml(c.description)}</span>${c.note ? ` <small>— ${escapeHtml(c.note)}</small>` : ""} <small>${escapeHtml((c.created || "").slice(0, 16).replace("T", " "))}</small>${c.active && c.undoable ? ` <button class="btn-link fix-undo" data-id="${c.id}" type="button">undo</button>` : c.active ? "" : " <small>(undone)</small>"}</div>`).join("") : `<p class="project-hint">No corrections yet. Corrections survive re-capture, re-scan and re-assessment.</p>`;
+    $("progFixLog").querySelectorAll(".fix-undo").forEach(b => b.addEventListener("click", async () => {
+      try {
+        const r = await _json(`/api/programs/${encodeURIComponent(_program)}/corrections/${b.dataset.id}/undo`, { method: "POST" });
+        $("progFixImpact").innerHTML = _impactHtml(r.impact);
+        loadCorrections();
+        if ($("progFixSearch").value.trim().length >= 2) searchEntities();
+        if ($("progAssessBox").open) loadAssessment();
+      } catch (e) { toast(e.message); }
+    }));
+  } catch (e) { $("progFixLog").textContent = e.message; }
+}
+async function interpretCorrection() {
+  const text = $("progFixText").value.trim();
+  if (!text) { toast("Describe the correction first."); return; }
+  const btn = $("progFixInterpret"); btn.disabled = true; btn.textContent = "Interpreting…";
+  try {
+    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/corrections/interpret`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    const box = $("progFixProposal");
+    if (!d.changes.length) { box.innerHTML = `<p class="project-hint">${escapeHtml(d.unclear || "Couldn't map that to a change — try naming the program, table or finding.")}</p>`; }
+    else {
+      box.innerHTML = d.changes.map((c, i) => `<label class="fix-prop"><input type="checkbox" data-i="${i}" checked> ${escapeHtml(c.description)}${c.reason ? ` <small>— ${escapeHtml(c.reason)}</small>` : ""}</label>`).join("")
+        + (d.rejected.length ? `<p class="project-hint">Skipped ${d.rejected.length}: ${d.rejected.map(r => escapeHtml(r.error)).join("; ")}</p>` : "")
+        + `<button class="btn-primary" id="progFixApply" type="button">Apply selected</button>`;
+      $("progFixApply").addEventListener("click", async () => {
+        const ops = [...box.querySelectorAll("input[type=checkbox]:checked")].map(x => d.changes[+x.dataset.i]).map(c => ({ op: c.op, payload: c.payload }));
+        if (!ops.length) return;
+        await applyCorrections(ops, text); box.innerHTML = ""; $("progFixText").value = "";
+      });
+    }
+  } catch (e) { $("progFixProposal").textContent = e.message; }
+  btn.disabled = false; btn.textContent = "Interpret";
+}
+let _fixTimer = null;
+function inlineAsk(container, fields) {
+  return new Promise(resolve => {
+    const form = document.createElement("div");
+    form.className = "fix-ask";
+    form.innerHTML = fields.map(f => f.options
+      ? `<label>${escapeHtml(f.label)} <select data-n="${_attr(f.name)}">${f.options.map(o => `<option>${escapeHtml(o)}</option>`).join("")}</select></label>`
+      : `<label>${escapeHtml(f.label)} <input data-n="${_attr(f.name)}" value="${_attr(f.value || "")}" spellcheck="false"></label>`).join(" ")
+      + ` <button class="btn-primary" data-ok type="button">OK</button> <button class="btn-link" data-cancel type="button">Cancel</button>`;
+    container.querySelectorAll(".fix-ask").forEach(x => x.remove());
+    container.appendChild(form);
+    const first = form.querySelector("input,select"); if (first) first.focus();
+    const done = ok => {
+      const out = {};
+      form.querySelectorAll("[data-n]").forEach(i => { out[i.dataset.n] = i.value; });
+      form.remove(); resolve(ok ? out : null);
+    };
+    form.querySelector("[data-ok]").addEventListener("click", () => done(true));
+    form.querySelector("[data-cancel]").addEventListener("click", () => done(false));
+    form.querySelectorAll("input").forEach(i => i.addEventListener("keydown", ev => { if (ev.key === "Enter") done(true); if (ev.key === "Escape") done(false); }));
+  });
+}
+async function searchEntities() {
+  const q = $("progFixSearch").value.trim();
+  const box = $("progFixResults");
+  if (q.length < 2) { box.innerHTML = ""; return; }
+  try {
+    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/entities/search?q=${encodeURIComponent(q)}`);
+    box.innerHTML = d.entities.map((e, i) => {
+      const flags = [e.attrs.no_pii ? "no student data" : "", e.attrs.pii ? "student data" : "", e.attrs.hardcoded_secret === false ? "not a secret" : ""].filter(Boolean);
+      const acts = [`<button class="btn-link" data-act="rename" type="button">rename</button>`,
+        ["table", "column", "field", "ui_element", "data_store", "screen"].includes(e.kind) ? `<button class="btn-link" data-act="${e.attrs.no_pii ? "pii" : "nopii"}" type="button">${e.attrs.no_pii ? "holds student data" : "no student data"}</button>` : "",
+        e.kind === "config_item" && e.attrs.hardcoded_secret ? `<button class="btn-link" data-act="nosecret" type="button">not a secret</button>` : "",
+        `<button class="btn-link" data-act="addrel" type="button">add relation</button>`,
+        `<button class="btn-link" data-act="delete" type="button">not real — remove</button>`].join(" ");
+      const rels = e.relations.map((r, j) => `<div class="fix-rel">${escapeHtml(r.from)} <b>${escapeHtml(r.kind)}</b> ${escapeHtml(r.to)}${r.origin === "corrected" ? " <small>(corrected)</small>" : ""} <button class="btn-link" data-rel="${j}" type="button">remove</button></div>`).join("");
+      return `<details class="fix-ent" data-i="${i}"><summary><b>${escapeHtml(e.name)}</b> <small>${escapeHtml(e.kind)}${e.file ? " · " + escapeHtml(e.file) : ""}${e.origin === "placeholder" ? " · not captured" : ""}${flags.length ? " · " + flags.join(", ") : ""}</small></summary><div class="fix-acts">${acts}</div>${rels}</details>`;
+    }).join("") || `<p class="project-hint">Nothing matches.</p>`;
+    box.querySelectorAll(".fix-ent").forEach(el => {
+      const e = d.entities[+el.dataset.i];
+      el.querySelectorAll("[data-act]").forEach(b => b.addEventListener("click", async () => {
+        const act = b.dataset.act;
+        let ops = [];
+        if (act === "rename") {
+          const v = await inlineAsk(el.querySelector(".fix-acts"), [{ name: "name", label: "New name", value: e.name }]);
+          if (!v || !v.name || v.name === e.name) return;
+          ops = [{ op: "entity.rename", payload: { key: e.key, name: v.name } }];
+        }
+        if (act === "nopii") ops = [{ op: "entity.set_attrs", payload: { key: e.key, attrs: { no_pii: true } } }];
+        if (act === "pii") ops = [{ op: "entity.set_attrs", payload: { key: e.key, attrs: { no_pii: false, pii: "student data (analyst)" } } }];
+        if (act === "nosecret") ops = [{ op: "entity.set_attrs", payload: { key: e.key, attrs: { hardcoded_secret: false } } }];
+        if (act === "delete") ops = [{ op: "entity.delete", payload: { key: e.key } }];
+        if (act === "addrel") {
+          const v = await inlineAsk(el.querySelector(".fix-acts"), [
+            { name: "kind", label: `${e.name} …`, options: ["calls", "uses", "reads", "writes", "includes", "displays", "navigates_to", "connects_to", "depends_on", "inherits", "implements"] },
+            { name: "to", label: "target name", value: "" }]);
+          if (!v || !v.to) return;
+          ops = [{ op: "relation.add", payload: { kind: v.kind, from_key: e.key, to_name: v.to.trim() } }];
+        }
+        try { await applyCorrections(ops, ""); searchEntities(); } catch (err) { toast(err.message); }
+      }));
+      el.querySelectorAll("[data-rel]").forEach(b => b.addEventListener("click", async () => {
+        const r = e.relations[+b.dataset.rel];
+        try { await applyCorrections([{ op: "relation.delete", payload: { kind: r.kind, from_key: r.from_key, to_key: r.to_key } }], ""); searchEntities(); } catch (err) { toast(err.message); }
+      }));
+    });
+  } catch (e) { box.textContent = e.message; }
 }
 async function loadProgramFindings() {
   try {
@@ -1170,6 +1295,9 @@ document.querySelectorAll("#kindSeg .seg-opt").forEach(b => b.addEventListener("
   }
 }));
 
+$("progFixBox").addEventListener("toggle", () => { if ($("progFixBox").open) loadCorrections(); });
+$("progFixInterpret").addEventListener("click", interpretCorrection);
+$("progFixSearch").addEventListener("input", () => { clearTimeout(_fixTimer); _fixTimer = setTimeout(searchEntities, 250); });
 $("progUiBox").addEventListener("toggle", () => { if ($("progUiBox").open) loadUiReview(); });
 $("progUiRun").addEventListener("click", () => runUiReview(false));
 $("progUiScan").addEventListener("click", () => runUiReview(true));

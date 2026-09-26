@@ -490,6 +490,16 @@ class ProgramStore:
                 (target_type, target_id, op, json.dumps(payload or {}), note, _now()),
             ).lastrowid
 
+    def correction(self, correction_id: int) -> dict | None:
+        return self._one("SELECT * FROM correction WHERE id = ?", (correction_id,))
+
+    def update_correction(self, correction_id: int, *, payload: dict | None = None, active: bool | None = None):
+        with self.transaction() as db:
+            if payload is not None:
+                db.execute("UPDATE correction SET payload = ? WHERE id = ?", (json.dumps(payload), correction_id))
+            if active is not None:
+                db.execute("UPDATE correction SET active = ? WHERE id = ?", (int(active), correction_id))
+
     def corrections(self, active_only: bool = True) -> list:
         where = "WHERE active = 1" if active_only else ""
         return self._all(f"SELECT * FROM correction {where} ORDER BY id")

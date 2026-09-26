@@ -107,6 +107,8 @@ def run_assessment(store, *, scan: bool = True, online: bool = False, today=None
         from core.uireview import run_ui_review
         security_scan.run_scan(store, online=online, today=today)
         run_ui_review(store, today=today)
+    from core.model.corrections import apply_corrections
+    apply_corrections(store)
     inputs = store.get_meta("assessment_inputs", {}) or {}
     comp_inputs = inputs.get("components") or {}
     components = _components(store)

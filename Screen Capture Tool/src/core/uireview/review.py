@@ -141,6 +141,8 @@ def run_ui_review(store, *, site_url=None, fetcher=None, max_pages=10, today=Non
         st = kept.get((f["rule"], f["title"]))
         if st and f["category"] in CATEGORIES:
             store.set_finding_status(f["id"], st)
+    from core.model.corrections import apply_corrections
+    apply_corrections(store)
     flows = journeys(store)
     store.set_meta("ui_flows", flows)
     store.log_run("ui_review", prompt_version="ui-review-v1", ok=True)

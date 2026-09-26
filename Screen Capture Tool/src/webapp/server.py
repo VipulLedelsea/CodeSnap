@@ -290,10 +290,12 @@ def api_program_finding_status(slug: str, finding_id: int, payload: dict = Body(
     status_ = str((payload or {}).get("status", "")).strip()
     if status_ not in ("open", "accepted", "dismissed", "fixed"):
         return JSONResponse({"error": "status must be open, accepted, dismissed or fixed"}, status_code=400)
+    from core.model.corrections import add, finding_sig
     with _open_program(slug) as store:
-        if store.finding(finding_id) is None:
+        f = store.finding(finding_id)
+        if f is None:
             raise HTTPException(status_code=404, detail="No such finding.")
-        store.set_finding_status(finding_id, status_)
+        add(store, "finding.status", {"sig": finding_sig(f), "status": status_}, str((payload or {}).get("note", "")))
         return {"ok": True, "finding": store.finding(finding_id)}
 
 
@@ -412,6 +414,76 @@ def api_program_ui(slug: str):
     with _open_program(slug) as store:
         return {"summary": summary(store), "site": store.get_meta("site_scan"), "flows": store.get_meta("ui_flows"),
                 "findings": [f for f in store.findings() if f["category"] in CATEGORIES]}
+
+
+@app.get("/api/programs/{slug}/corrections")
+def api_program_corrections(slug: str):
+    from core.model.corrections import history
+    with _open_program(slug) as store:
+        return {"corrections": history(store)}
+
+
+@app.post("/api/programs/{slug}/corrections")
+def api_program_correct(slug: str, payload: dict = Body(...)):
+    from core import feedback
+    from core.model.corrections import CorrectionError
+    ops = (payload or {}).get("ops") or ([{"op": payload.get("op"), "payload": payload.get("payload") or {}}]
+                                         if (payload or {}).get("op") else [])
+    if not ops:
+        return JSONResponse({"error": "Send an op or a list of ops."}, status_code=400)
+    with _open_program(slug) as store:
+        try:
+            return {"ok": True, **feedback.apply(store, ops, str(payload.get("note", "")))}
+        except CorrectionError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/programs/{slug}/corrections/{correction_id}/undo")
+def api_program_correction_undo(slug: str, correction_id: int):
+    from core import feedback
+    from core.model.corrections import CorrectionError
+    with _open_program(slug) as store:
+        try:
+            return {"ok": True, **feedback.undo(store, correction_id)}
+        except CorrectionError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/programs/{slug}/corrections/interpret")
+def api_program_correction_interpret(slug: str, payload: dict = Body(...)):
+    from core import feedback
+    text = str((payload or {}).get("text", "")).strip()
+    if not text:
+        return JSONResponse({"error": "Describe the correction first."}, status_code=400)
+    client = _client()
+    with _open_program(slug) as store:
+        return {"ok": True, **feedback.interpret(store, text, client)}
+
+
+@app.get("/api/programs/{slug}/entities/search")
+def api_program_entity_search(slug: str, q: str = "", limit: int = 25):
+    with _open_program(slug) as store:
+        ql = q.strip().lower()
+        if len(ql) < 2:
+            return {"entities": []}
+        rank = {"program": 0, "class": 1, "table": 2, "screen": 3, "copybook": 4, "data_store": 5, "api_endpoint": 6}
+        hits = sorted([e for e in store.entities() if ql in e["name"].lower() and e["kind"] != "file"],
+                      key=lambda e: (e["name"].lower() != ql, not e["name"].lower().startswith(ql),
+                                     e["origin"] == "placeholder", rank.get(e["kind"], 9), e["name"]))[:max(1, min(limit, 100))]
+        out = []
+        for e in hits:
+            rels = []
+            for r in store.relations(from_id=e["id"]) + store.relations(to_id=e["id"]):
+                a, b = store.entity(r["from_id"]), store.entity(r["to_id"])
+                if a and b:
+                    rels.append({"kind": r["kind"], "from_key": a["key"], "from": a["name"], "to_key": b["key"],
+                                 "to": b["name"], "origin": r["origin"]})
+            src = store.entity_sources(e["id"])
+            out.append({"key": e["key"], "name": e["name"], "kind": e["kind"], "origin": e["origin"],
+                        "attrs": {k: v for k, v in (e.get("attrs") or {}).items() if k in (
+                            "no_pii", "pii", "hardcoded_secret", "store_type", "aliases")},
+                        "file": src[0]["artifact_name"] if src else None, "relations": rels[:30]})
+        return {"entities": out}
 
 
 @app.get("/api/programs/{slug}/coverage")

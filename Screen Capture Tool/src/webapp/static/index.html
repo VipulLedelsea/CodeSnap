@@ -74,6 +74,24 @@
             </div>
             <div id="progAssess"></div>
           </details>
+          <details class="prog-map" id="progFixBox"><summary id="progFixSummary">Corrections &amp; feedback</summary>
+            <div class="fix-grid">
+              <div>
+                <div class="prog-section-label">Describe a correction</div>
+                <textarea id="progFixText" rows="3" placeholder="e.g. AIDCALC calls AIDAUDIT, not AIDERR · the DISTRICT table holds no student data · the SmtpPassword finding is a test value"></textarea>
+                <div class="sec-bar"><button class="btn-secondary" id="progFixInterpret" type="button">Interpret</button><span class="project-hint">Uses the text model (≈ $0.01). You review before anything changes.</span></div>
+                <div id="progFixProposal"></div>
+              </div>
+              <div>
+                <div class="prog-section-label">Or find an element</div>
+                <input type="search" id="progFixSearch" placeholder="Search programs, classes, tables, fields…" spellcheck="false">
+                <div id="progFixResults"></div>
+              </div>
+            </div>
+            <div id="progFixImpact"></div>
+            <div class="prog-section-label">Correction log</div>
+            <div id="progFixLog"></div>
+          </details>
           <details class="prog-map" id="progUiBox"><summary id="progUiSummary">UI, process &amp; website</summary>
             <div class="sec-bar">
               <button class="btn-secondary" id="progUiRun" type="button">Review UI</button>

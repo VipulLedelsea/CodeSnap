@@ -2,6 +2,7 @@ from datetime import date
 
 from core.assess import run_assessment
 from core.assess.scores import DIMENSIONS, LABELS
+from core.model.corrections import history
 from core.security.scan import technologies
 
 SEV_ORDER = ["critical", "high", "medium", "low", "info"]
@@ -299,6 +300,10 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
         {"type": "bullets", "items": [f"{m['kind']} {m['name']} — used by "
                                       + ", ".join(sorted({r.get('artifact') or r['name'] for r in m['referenced_by']})[:3])
                                       for m in missing[:40]] or ["Nothing missing."]},
+        {"type": "h", "text": "Analyst corrections"},
+        {"type": "table", "head": ["Date", "Change", "Note"],
+         "rows": [[c["created"][:10], c["description"], c.get("note") or ""] for c in history(store) if c["active"]]
+         or [["—", "No corrections applied — the model is exactly as extracted.", ""]], "small": True},
         {"type": "h", "text": "Method"},
         {"type": "bullets", "items": [
             "Code, screens, schemas and configuration were captured as screenshots and transcribed with a vision model; "

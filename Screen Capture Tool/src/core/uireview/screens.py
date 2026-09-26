@@ -51,7 +51,7 @@ def check_screens(store) -> list:
             if re.search(r"no (visible )?label|unlabel", notes, re.I) or re.fullmatch(r"field \d+", label, re.I):
                 add("ACC-LABEL", "accessibility", "medium", f"field '{label}' has no visible label", label,
                     wcag="1.3.1 / 3.3.2 (A)")
-            hit = pii_class(label.replace(" ", "_"))
+            hit = None if fa.get("no_pii") else pii_class(label.replace(" ", "_"))
             if hit and hit[1] in ("critical", "high") and not re.search(r"mask|\*{3}|hidden|last 4", notes, re.I):
                 add("UIS-PII", "ui_security", "high" if hit[1] == "critical" else "medium",
                     f"{hit[0]} shown in full on screen ('{label}')", label, cwe="CWE-359", ferpa=True)

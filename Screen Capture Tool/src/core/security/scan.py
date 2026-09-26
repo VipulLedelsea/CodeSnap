@@ -39,14 +39,21 @@ class _Ctx:
 
 def _pii(store, ctx):
     groups, sensitive_entities, sensitive_artifacts = {}, set(), set()
+    no_pii_arts = {e["artifact_id"] for e in store.entities("file") if (e.get("attrs") or {}).get("no_pii")}
+    ctx.no_pii_arts = no_pii_arts
     for ent in store.entities():
         if ent["kind"] not in ("column", "field", "ui_element", "config_item") or ent["origin"] == "placeholder":
             continue
+        parent = store.entity(ent["parent_id"]) if ent["parent_id"] else None
+        attrs = ent.get("attrs") or {}
+        if attrs.get("no_pii") or ((parent or {}).get("attrs") or {}).get("no_pii") or ent["artifact_id"] in no_pii_arts:
+            continue
         hit = pii_class(ent["name"])
+        if attrs.get("pii"):
+            hit = (str(attrs["pii"]) if isinstance(attrs["pii"], str) else "student data (analyst)", "high")
         if not hit:
             continue
         label, sev = hit
-        parent = store.entity(ent["parent_id"]) if ent["parent_id"] else None
         owner = parent or ent
         g = groups.setdefault(owner["id"], {"owner": owner, "labels": {}, "severity": "info", "evidence": []})
         g["labels"].setdefault(label, []).append(ent["name"])
@@ -135,7 +142,8 @@ def _code(store, ctx, sensitive_artifacts, has_pii):
         text = art.get("transcription") or ""
         if not text.strip():
             continue
-        if text_has_student_data(code_lines(text, family(art["name"], art.get("language") or ""))):
+        if art["id"] not in getattr(ctx, "no_pii_arts", set()) and text_has_student_data(
+                code_lines(text, family(art["name"], art.get("language") or ""))):
             sensitive_artifacts.add(art["id"])
         for h in scan_text(text, art["name"], art.get("language") or ""):
             hits.append({**h, "artifact_id": art["id"]})
@@ -190,6 +198,8 @@ def run_scan(store, *, online: bool = False, today: date | None = None, cache_di
         status = kept.get((f["rule"], f["title"]))
         if status and f["category"] in CATEGORIES:
             store.set_finding_status(f["id"], status)
+    from core.model.corrections import apply_corrections
+    apply_corrections(store)
     store.log_run("security_scan", model=None, prompt_version="security-v1", ok=True)
     return {"snapshot": data["snapshot"], "technologies": inventory, "summary": summary(store)}
 
