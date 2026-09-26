@@ -36,7 +36,8 @@ def _kind(kind, allowed, default):
 
 
 def apply_structure(store, artifact_id: int, structure: dict, filename: str, total_lines: int | None = None) -> dict:
-    file_id = store.upsert_entity("file", filename, artifact_id=artifact_id, line_start=1, line_end=total_lines)
+    file_id = store.upsert_entity("file", filename, artifact_id=artifact_id, line_start=1, line_end=total_lines,
+                                  attrs=structure.get("file_attrs") or None)
     local = {}
     pending = [e for e in structure.get("entities", []) if str(e.get("name") or "").strip()]
     created = 0
@@ -123,15 +124,17 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
 
 def _parse_deterministic(code: str, artifact: dict):
     import time
-    from core.cobol.parser import PARSER_VERSION, parse
+    from core.cobol.parser import PARSER_VERSION as COBOL_VERSION, parse as parse_cobol_family
+    from core.langs.structure import PARSER_VERSION as TS_VERSION, parse_source
     began = time.monotonic()
-    try:
-        structure = parse(code, artifact["name"], artifact.get("language") or "")
-    except Exception:
-        return None
-    if structure is None:
-        return None
-    return {"structure": structure, "parser": PARSER_VERSION, "ms": int((time.monotonic() - began) * 1000)}
+    for version, fn in ((COBOL_VERSION, parse_cobol_family), (TS_VERSION, parse_source)):
+        try:
+            structure = fn(code, artifact["name"], artifact.get("language") or "")
+        except Exception:
+            structure = None
+        if structure is not None:
+            return {"structure": structure, "parser": version, "ms": int((time.monotonic() - began) * 1000)}
+    return None
 
 
 def ingest_capture(store, client, images, report: dict, *, session_id: int | None = None,

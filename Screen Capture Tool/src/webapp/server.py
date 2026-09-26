@@ -188,7 +188,9 @@ def api_program_artifact(slug: str, artifact_id: int):
             (artifact_id,),
         )
         evidence = [{"id": e["id"], "ord": e["ord"]} for e in store.artifact_evidence(artifact_id)]
-        return {"artifact": artifact, "entities": entities, "evidence": evidence}
+        file_entity = store.entity_by_key(f"file:{artifact['name']}")
+        profile = (file_entity or {}).get("attrs", {}).get("profile")
+        return {"artifact": artifact, "entities": entities, "evidence": evidence, "profile": profile}
 
 
 @app.post("/api/programs/{slug}/artifacts/{artifact_id}/rename")

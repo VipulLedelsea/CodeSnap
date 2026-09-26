@@ -845,6 +845,7 @@ async function loadArtifact(el) {
       <button class="btn-link pf-save" type="button">Rename</button>
       <button class="btn-link pf-re" type="button">Re-extract</button></div>
     ${errs}
+    ${profileHtml(d.profile)}
     <div class="pf-entities">${d.entities.map(e => `<div>${escapeHtml(e.name)} <i>${escapeHtml(e.kind)}${e.line_start ? " · L" + e.line_start : ""}</i></div>`).join("") || "<div><i>No entities extracted.</i></div>"}</div>
     <div class="pf-frames">${d.evidence.map(ev => `<a href="${base}/evidence/${ev.id}" target="_blank" rel="noopener"><img src="${base}/evidence/${ev.id}" alt="frame ${ev.ord + 1}" loading="lazy"></a>`).join("")}</div>`;
   box.querySelector(".pf-save").addEventListener("click", async () => {
@@ -857,6 +858,19 @@ async function loadArtifact(el) {
     try { const r = await _json(`${base}/artifacts/${el.dataset.id}/reextract`, { method: "POST" }); toast(`${r.entities} entities, ${r.relations} relations.`); loadProgram(); }
     catch (e) { toast(e.message); ev.target.textContent = "Re-extract"; }
   });
+}
+function profileHtml(p) {
+  if (!p) return "";
+  const bits = [];
+  if (p.dialect) bits.push(`<b>${escapeHtml(p.dialect)}</b>`);
+  if (p.level_signal) bits.push(escapeHtml(p.level_signal));
+  if (p.cobol_translated) bits.push(`<b>COBOL-translated .NET</b>`);
+  if ((p.frameworks || []).length) bits.push("Frameworks: " + p.frameworks.map(escapeHtml).join(", "));
+  if ((p.legacy_markers || []).length) bits.push("Legacy: " + p.legacy_markers.map(m => {
+    const lines = (p.evidence || {})[m];
+    return escapeHtml(m) + (lines && lines.length ? ` <small>(L${lines.join(", L")})</small>` : "");
+  }).join("; "));
+  return bits.length ? `<div class="pf-profile">${escapeHtml(p.language || "")} · ${bits.join(" · ")}</div>` : "";
 }
 async function loadProgramMap() {
   const box = $("progMap");

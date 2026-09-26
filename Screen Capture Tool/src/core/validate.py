@@ -162,7 +162,13 @@ def _check_cobol(path: Path):
     return check_cobol(path)
 
 
+def _check_legacy(path: Path):
+    from core.langs.check import check_legacy_source
+    return check_legacy_source(path)
+
+
 _CHECKERS.update({"cbl": _check_cobol, "cob": _check_cobol, "cpy": _check_cobol})
+_CHECKERS.update({ext: _check_legacy for ext in ("cpp", "cc", "cxx", "hpp", "hh", "hxx", "cs", "java")})
 
 
 def check_source(path) -> dict:

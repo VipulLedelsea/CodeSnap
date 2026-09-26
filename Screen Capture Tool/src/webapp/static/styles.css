@@ -584,3 +584,5 @@ body.dark .seg-opt{ color:#B6B6BE; }
 .prog-map #progMap{ overflow:auto; margin-top:8px; }
 .prog-cost{ font-size:12.5px; color:var(--muted); margin:-6px 2px 10px; line-height:1.6; }
 .prog-cost b{ color:var(--text); font-weight:600; }
+.pf-profile{ font-size:12.5px; color:var(--muted); line-height:1.6; }
+.pf-profile b{ color:var(--text); font-weight:600; }
