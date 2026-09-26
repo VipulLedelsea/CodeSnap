@@ -8,7 +8,8 @@ DISPOSITIONS = {
     "retire": ("Retire", "rebuild", "Decommission; function is no longer needed or is duplicated elsewhere."),
 }
 NO_PATH = ("ASP.NET Web Forms", "Pre-standard C++", "Adobe Flash", "Microsoft Silverlight", "ActiveX", "Java applets",
-           "Apache Struts 1", "16-bit Windows", "Borland OWL", ".NET Remoting", "EJB 2", "AngularJS")
+           "Apache Struts 1", "16-bit Windows", "Borland OWL", ".NET Remoting", "EJB 2", "AngularJS", "Visual Basic 6.0",
+           "VBScript", "Classic ASP", "Visual FoxPro", "Borland Database Engine", "GW-BASIC")
 IMPACT_KINDS = {"student_data": 4, "writes": 4, "entry": 3}
 LEVELS = [(20, "critical"), (12, "high"), (6, "medium"), (0, "low")]
 
@@ -65,6 +66,9 @@ def disposition(scores: dict, facts: dict, inputs: dict) -> dict:
     if facts.get("cobol_share", 0) >= 0.5 and P < 70 and D >= 55 and S >= 50:
         return pick("rehost", f"COBOL/CICS code is in reasonable shape (tech debt {D}/100) but the platform/skills "
                               f"are the constraint (supportability {P}/100)")
+    if facts.get("eol_share", 0) >= 0.5 and D >= 45:
+        return pick("replatform", "Runs on an end-of-life runtime with a supported successor: " + "; ".join(sorted(set(facts["eol_hard"]))[:3]),
+                    f"Code is workable (tech debt {D}/100)")
     if P < 60 and D >= 45:
         return pick("replatform", f"Supportability {P}/100: runtime or libraries past end of life but have an upgrade path",
                     f"Code is workable (tech debt {D}/100)")

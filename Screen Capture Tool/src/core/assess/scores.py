@@ -12,8 +12,19 @@ _DECISION = {
     "cobol": r"\b(IF|EVALUATE|WHEN|PERFORM\s+UNTIL|PERFORM\s+VARYING|GO\s+TO)\b",
     "default": r"\b(if|else\s+if|elif|case|for|foreach|while|catch|switch)\b|\?\s*[^:;]+:|&&|\|\|",
 }
-_GOTO = {"cobol": r"\bGO\s+TO\b", "default": r"\bgoto\s+\w+"}
+_DECISION["legacy"] = (r"\b(IF|ELSEIF|ELSIF|ELSE\s+IF|WHEN|CASE|SELECT\s+CASE|DECIDE|FOR|FOREACH|WHILE|UNTIL|DOW|DOU|"
+                       r"DO\s+WHILE|DO\s+UNTIL|CATCH|ON\s+ERROR|SCAN|IFEQ|IFNE|IFGT|IFLT|IFGE|IFLE|DOWEQ|DOWNE|CABEQ|CABNE)\b")
+_GOTO = {"cobol": r"\bGO\s+TO\b", "default": r"\bgoto\s+\w+",
+         "legacy": r"\bGO\s*TO\b|\bGOSUB\b|\bSIGNAL\s+(?!ON\b|OFF\b)\w+|\bCABEQ\b|\bCABNE\b|\bESCAPE\s+(TOP|BOTTOM)\b"}
 SKILL_SCARCE = ("COBOL", "COBOL copybook", "CICS BMS map", "JCL")
+SCARCE_FAMILIES = {
+    "cobol": "COBOL/CICS", "rpg": "RPG / IBM i", "cl": "IBM i CL", "natural": "Natural/Adabas", "pli": "PL/I",
+    "asm": "mainframe assembler", "easytrieve": "Easytrieve", "rexx": "REXX / TSO", "clist": "TSO CLIST",
+    "powerbuilder": "PowerBuilder", "foxpro": "Visual FoxPro", "informix4gl": "Informix 4GL", "progress": "Progress ABL",
+    "delphi": "Delphi", "vb6": "Visual Basic 6", "basic": "DOS-era BASIC", "fortran": "Fortran",
+    "ims_dbd": "IMS", "ims_psb": "IMS", "ims_mfs": "IMS MFS", "oracle_forms": "Oracle Forms", "informix_form": "Informix 4GL",
+    "datawindow": "PowerBuilder", "dfm": "Delphi", "ispf_panel": "ISPF",
+}
 
 
 class Score:
@@ -38,11 +49,13 @@ def grade(score) -> str:
 
 
 def text_metrics(text: str, name: str, language: str = "") -> dict:
-    fam = family(name, language)
+    fam = family(name, language, text or "")
     lines = code_lines(text or "", fam)
     code = [l for l in lines if l.strip()]
-    key = "cobol" if fam == "cobol" else "default"
-    flags = re.I if key == "cobol" else 0
+    from core.security.rules import PACK_IDS
+    key = "cobol" if fam == "cobol" else "legacy" if (fam in PACK_IDS and fam not in ("javascript", "python", "perl", "php", "shell")) \
+        or fam == "vb" else "default"
+    flags = re.I if key in ("cobol", "legacy") else 0
     decisions = sum(len(re.findall(_DECISION[key], l, flags)) for l in code)
     gotos = sum(len(re.findall(_GOTO[key], l, flags)) for l in code)
     return {"lines": len(code), "decisions": decisions, "gotos": gotos, "family": fam}
@@ -106,8 +119,13 @@ def score_component(c: dict) -> dict:
             pts = EOL_POINTS.get(status, 0) * (0.5 if "not confirmed" in (f.get("detail") or "") else 1)
             sup.deduct(pts, "SUP-EOL", f["title"], {"finding": f["id"]})
     lang = art.get("language") or prof.get("language") or ""
-    if lang in SKILL_SCARCE or c["metrics"]["family"] == "cobol":
-        sup.deduct(10, "SUP-SKILLS", "COBOL/CICS skills are scarce — support depends on a shrinking MNIT/vendor pool")
+    scarce = SCARCE_FAMILIES.get(c["metrics"]["family"]) or SCARCE_FAMILIES.get(prof.get("pack") or "")
+    if lang in SKILL_SCARCE:
+        scarce = "COBOL/CICS"
+    if prof.get("pack") == "cobol" and set(prof.get("frameworks") or []) & {"IDMS", "IMS DB/DC"}:
+        scarce = "COBOL + " + "/".join(sorted(set(prof["frameworks"]) & {"IDMS", "IMS DB/DC"}))
+    if scarce:
+        sup.deduct(10, "SUP-SKILLS", f"{scarce} skills are scarce — support depends on a shrinking MNIT/vendor pool")
 
     cx = s["complexity"]
     units = max(1, len(c["units"]))

@@ -21,6 +21,8 @@ import os as _os
 import time
 from pathlib import Path
 
+from core.langpacks.formats import PROMPT_CLAUSE as _LEGACY_FORMAT_CLAUSE
+
 MODEL = _os.environ.get("CODESNAP_MODEL", "claude-opus-5-5")
 TEXT_MODEL = _os.environ.get("CODESNAP_TEXT_MODEL", "claude-sonnet-5")
 # Per-image extraction is an OCR-like task — use a cheaper/faster model to cut cost.
@@ -192,6 +194,7 @@ EXTRACT_SYSTEM_PROMPT = (
     "on screen. Producing clean code from broken input is a FAILURE.\n"
     "Output PLAIN TEXT only — no Markdown: no # headings, no ``` code fences, no - bullets. "
     "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. Count spaces exactly, both leading spaces and runs of spaces inside a line (aligned PIC/VALUE clauses must land in the same column as on screen); in assembler/BMS a continuation character sits in column 72. Use plain ASCII hyphens and quotes. "
+    + _LEGACY_FORMAT_CLAUSE +
     "Do NOT include the editor's line-number gutter, fold arrows, breakpoint dots, minimaps, "
     "scrollbars, tab bars, or status bars — only the content itself, keeping its own indentation. "
     "If several windows are visible, transcribe ONLY the primary code/document (the focused "
@@ -230,6 +233,7 @@ EXTRACT_JSON_SYSTEM_PROMPT = (
     "things goes: note it HERE, but do NOT change raw_transcription. Empty array if nothing looked "
     "off.\n"
     "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. Count spaces exactly, both leading spaces and runs of spaces inside a line (aligned PIC/VALUE clauses must land in the same column as on screen); in assembler/BMS a continuation character sits in column 72. Use plain ASCII hyphens and quotes. "
+    + _LEGACY_FORMAT_CLAUSE +
     "Do NOT include the editor's line-number gutter, fold arrows, breakpoint dots, minimaps, "
     "scrollbars, tab bars, or status bars \u2014 only the content itself. If several windows are "
     "visible, transcribe ONLY the primary focused editor pane; ignore other windows, the dock, and "
@@ -268,6 +272,7 @@ EXTRACT_INDENT_SYSTEM_PROMPT = (
     '"suggested": <what you think it should be>} for anything that looked wrong \u2014 your outlet; '
     "do NOT change raw_transcription. Empty array if nothing looked off.\n"
     "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. Count spaces exactly, both leading spaces and runs of spaces inside a line (aligned PIC/VALUE clauses must land in the same column as on screen); in assembler/BMS a continuation character sits in column 72. Use plain ASCII hyphens and quotes. "
+    + _LEGACY_FORMAT_CLAUSE +
     "Ignore the editor's line-number gutter, fold arrows, minimaps, scrollbars, tabs, and status "
     "bars. Transcribe ONLY the primary focused editor pane. For a line cut off at the edge, end its "
     "text with [CUT OFF]. If there is no meaningful text, return "
@@ -555,6 +560,10 @@ def _strip_indent_guides(text: str) -> str:
 
 
 def clean_source(text: str) -> str:
+    return _clean_source(text)
+
+
+def _clean_source(text: str) -> str:
     """Turn a raw OCR'd code extraction into compiler-ready source: unwrap markdown
     code fences (dropping ```lang, ``` and any # headers/prose outside them), remove
     an editor line-number gutter, and drop identical duplicate blocks. Faithful — it
@@ -567,6 +576,11 @@ def clean_source(text: str) -> str:
         text = "\n\n".join(blocks) if blocks else _re.sub(r"^[ \t]*```.*$", "", text, flags=_re.M)
         from core.cobol.normalize import normalize_transcription
         return normalize_transcription(text).strip("\n")
+    from core.langpacks.formats import detect_format, minimal_clean
+    if detect_format(_FENCE_RE.sub(lambda m: m.group(1), text)):
+        blocks = _FENCE_RE.findall(text)
+        text = "\n\n".join(blocks) if blocks else _re.sub(r"^[ \t]*```.*$", "", text, flags=_re.M)
+        return minimal_clean(text)
     blocks = _FENCE_RE.findall(text)
     if blocks:
         cleaned = [_strip_gutter(b).strip("\n") for b in blocks]
@@ -622,7 +636,9 @@ def merge_frames(raw_parts: list):
     clean = [c for c in candidates if c.strip() and not _has_dup_headers(c)]
     best = max(clean or candidates, key=lambda c: len(c.splitlines())) if candidates else stitched
     from core.cobol import is_column_sensitive
-    return (best if is_column_sensitive(best) else _fix_leading_indent(best)), parts
+    from core.langpacks.formats import detect_format
+    keep = is_column_sensitive(best) or detect_format(best)
+    return (best if keep else _fix_leading_indent(best)), parts
 
 
 def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8) -> "list | None":

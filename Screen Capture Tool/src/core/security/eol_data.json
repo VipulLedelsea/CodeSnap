@@ -936,6 +936,583 @@
     }
    ],
    "url": "https://endoflife.date/windows-server"
+  },
+  "php": {
+   "label": "PHP",
+   "url": "https://endoflife.date/php",
+   "cycles": [
+    {
+     "cycle": "8.5",
+     "release": "2025-11-20",
+     "support": "2027-12-31",
+     "eol": "2029-12-31"
+    },
+    {
+     "cycle": "8.4",
+     "release": "2024-11-21",
+     "support": "2026-12-31",
+     "eol": "2028-12-31"
+    },
+    {
+     "cycle": "8.3",
+     "release": "2023-11-23",
+     "support": "2025-12-31",
+     "eol": "2027-12-31"
+    },
+    {
+     "cycle": "8.2",
+     "release": "2022-12-08",
+     "support": "2024-12-31",
+     "eol": "2026-12-31"
+    },
+    {
+     "cycle": "8.1",
+     "release": "2021-11-25",
+     "support": "2023-11-25",
+     "eol": "2025-12-31"
+    },
+    {
+     "cycle": "8.0",
+     "release": "2020-11-26",
+     "support": "2022-11-26",
+     "eol": "2023-11-26"
+    },
+    {
+     "cycle": "7.4",
+     "release": "2019-11-28",
+     "support": "2021-11-28",
+     "eol": "2022-11-28"
+    },
+    {
+     "cycle": "7.3",
+     "release": "2018-12-06",
+     "support": "2020-12-06",
+     "eol": "2021-12-06"
+    },
+    {
+     "cycle": "7.2",
+     "release": "2017-11-30",
+     "support": "2019-11-30",
+     "eol": "2020-11-30"
+    },
+    {
+     "cycle": "7.1",
+     "release": "2016-12-01",
+     "support": "2018-12-01",
+     "eol": "2019-12-01"
+    },
+    {
+     "cycle": "7.0",
+     "release": "2015-12-03",
+     "support": "2018-01-04",
+     "eol": "2019-01-10"
+    },
+    {
+     "cycle": "5.6",
+     "release": "2014-08-28",
+     "support": "2017-01-19",
+     "eol": "2018-12-31"
+    },
+    {
+     "cycle": "5.5",
+     "release": "2013-06-20",
+     "support": "2015-07-10",
+     "eol": "2016-07-21"
+    },
+    {
+     "cycle": "5.4",
+     "release": "2012-03-01",
+     "support": "2014-09-14",
+     "eol": "2015-09-14"
+    },
+    {
+     "cycle": "5.3",
+     "release": "2009-06-30",
+     "support": "2011-06-30",
+     "eol": "2014-08-14"
+    },
+    {
+     "cycle": "5.2",
+     "release": "2006-11-02",
+     "support": "2008-11-02",
+     "eol": "2011-01-06"
+    },
+    {
+     "cycle": "5.1",
+     "release": "2005-11-24",
+     "support": "2006-08-24",
+     "eol": "2006-08-24"
+    },
+    {
+     "cycle": "5.0",
+     "release": "2004-07-13",
+     "support": "2005-09-05",
+     "eol": "2005-09-05"
+    }
+   ]
+  },
+  "python": {
+   "label": "Python",
+   "url": "https://endoflife.date/python",
+   "cycles": [
+    {
+     "cycle": "3.14",
+     "release": "2025-10-07",
+     "eol": "2030-10-31"
+    },
+    {
+     "cycle": "3.13",
+     "release": "2024-10-07",
+     "eol": "2029-10-31"
+    },
+    {
+     "cycle": "3.12",
+     "release": "2023-10-02",
+     "eol": "2028-10-31"
+    },
+    {
+     "cycle": "3.11",
+     "release": "2022-10-24",
+     "eol": "2027-10-31"
+    },
+    {
+     "cycle": "3.10",
+     "release": "2021-10-04",
+     "eol": "2026-10-31"
+    },
+    {
+     "cycle": "3.9",
+     "release": "2020-10-05",
+     "eol": "2025-10-31"
+    },
+    {
+     "cycle": "3.8",
+     "release": "2019-10-14",
+     "eol": "2024-10-07"
+    },
+    {
+     "cycle": "3.7",
+     "release": "2018-06-27",
+     "eol": "2023-06-27"
+    },
+    {
+     "cycle": "3.6",
+     "release": "2016-12-23",
+     "eol": "2021-12-23"
+    },
+    {
+     "cycle": "3.5",
+     "release": "2015-09-13",
+     "eol": "2020-09-30"
+    },
+    {
+     "cycle": "3.4",
+     "release": "2014-03-16",
+     "eol": "2019-03-18"
+    },
+    {
+     "cycle": "2.7",
+     "release": "2010-07-03",
+     "eol": "2020-01-01"
+    },
+    {
+     "cycle": "2.6",
+     "release": "2008-10-01",
+     "eol": "2013-10-29"
+    }
+   ]
+  },
+  "perl": {
+   "label": "Perl",
+   "url": "https://endoflife.date/perl",
+   "cycles": [
+    {
+     "cycle": "5.44",
+     "release": "2026-07-15",
+     "eol": "2029-07-15"
+    },
+    {
+     "cycle": "5.42",
+     "release": "2025-07-03",
+     "eol": "2028-07-03"
+    },
+    {
+     "cycle": "5.40",
+     "release": "2024-06-09",
+     "eol": "2027-06-09"
+    },
+    {
+     "cycle": "5.38",
+     "release": "2023-07-02",
+     "eol": "2026-07-02"
+    },
+    {
+     "cycle": "5.36",
+     "release": "2022-05-27",
+     "eol": "2025-05-27"
+    },
+    {
+     "cycle": "5.34",
+     "release": "2021-05-20",
+     "eol": "2024-05-20"
+    },
+    {
+     "cycle": "5.32",
+     "release": "2020-06-20",
+     "eol": "2023-06-20"
+    },
+    {
+     "cycle": "5.30",
+     "release": "2019-05-22",
+     "eol": "2022-05-22"
+    },
+    {
+     "cycle": "5.28",
+     "release": "2018-06-22",
+     "eol": "2021-06-23"
+    },
+    {
+     "cycle": "5.26",
+     "release": "2017-05-30",
+     "eol": "2020-05-30"
+    }
+   ]
+  },
+  "coldfusion": {
+   "label": "Adobe ColdFusion",
+   "url": "https://endoflife.date/coldfusion",
+   "cycles": [
+    {
+     "cycle": "2025",
+     "release": "2025-02-25",
+     "support": "2030-04-08",
+     "eol": "2030-04-08",
+     "extended": "2031-04-08"
+    },
+    {
+     "cycle": "2023",
+     "release": "2022-05-16",
+     "support": "2028-05-16",
+     "eol": "2028-05-16",
+     "extended": "2029-05-16"
+    },
+    {
+     "cycle": "2021",
+     "release": "2020-11-11",
+     "support": "2025-12-09",
+     "eol": "2025-12-09",
+     "extended": "2026-11-10"
+    },
+    {
+     "cycle": "2018",
+     "release": "2018-07-12",
+     "support": "2023-07-19",
+     "eol": "2023-07-19",
+     "extended": "2024-07-13"
+    },
+    {
+     "cycle": "2016",
+     "release": "2016-02-16",
+     "support": "2021-03-22",
+     "eol": "2021-03-22",
+     "extended": "2022-02-17"
+    },
+    {
+     "cycle": "11",
+     "release": "2014-04-29",
+     "support": "2019-06-11",
+     "eol": "2019-06-11",
+     "extended": "2021-04-30"
+    },
+    {
+     "cycle": "10",
+     "release": "2012-05-15",
+     "support": "2017-05-16",
+     "eol": "2017-05-16",
+     "extended": "2019-05-16"
+    }
+   ]
+  },
+  "oracle-database": {
+   "label": "Oracle Database",
+   "url": "https://endoflife.date/oracle-database",
+   "cycles": [
+    {
+     "cycle": "23",
+     "release": "2023-09-19",
+     "eol": "2031-12-31"
+    },
+    {
+     "cycle": "21",
+     "release": "2021-08-13",
+     "eol": "2027-07-31"
+    },
+    {
+     "cycle": "19",
+     "release": "2019-04-25",
+     "eol": "2029-12-31",
+     "extended": "2032-12-31"
+    },
+    {
+     "cycle": "18",
+     "release": "2018-07-23",
+     "eol": "2021-06-30"
+    },
+    {
+     "cycle": "12.2",
+     "release": "2017-03-01",
+     "eol": "2022-03-31"
+    },
+    {
+     "cycle": "12.1",
+     "release": "2013-06-25",
+     "eol": "2018-07-31",
+     "extended": "2022-07-31"
+    },
+    {
+     "cycle": "11.2",
+     "release": "2009-09-01",
+     "eol": "2015-01-31",
+     "extended": "2020-12-31"
+    },
+    {
+     "cycle": "11.1",
+     "release": "2007-08-09",
+     "eol": "2012-08-31",
+     "extended": "2015-08-31"
+    },
+    {
+     "cycle": "10.2",
+     "release": "2005-07-11",
+     "eol": "2010-07-31",
+     "extended": "2015-07-31"
+    },
+    {
+     "cycle": "9.2",
+     "release": "2002-05-01",
+     "eol": "2007-07-31",
+     "extended": "2010-07-31"
+    }
+   ]
+  },
+  "ibm-i": {
+   "label": "IBM i",
+   "url": "https://endoflife.date/ibm-i",
+   "cycles": [
+    {
+     "cycle": "7.6",
+     "release": "2025-04-18",
+     "eol": false
+    },
+    {
+     "cycle": "7.5",
+     "release": "2022-05-10",
+     "eol": false
+    },
+    {
+     "cycle": "7.4",
+     "release": "2019-06-21",
+     "eol": "2026-09-30",
+     "extended": "2029-09-30"
+    },
+    {
+     "cycle": "7.3",
+     "release": "2016-04-15",
+     "eol": "2023-09-30",
+     "extended": "2028-09-30"
+    },
+    {
+     "cycle": "7.2",
+     "release": "2014-05-02",
+     "eol": "2021-04-30",
+     "extended": "2026-04-30"
+    },
+    {
+     "cycle": "7.1",
+     "release": "2010-04-23",
+     "eol": "2018-04-30",
+     "extended": "2024-04-30"
+    },
+    {
+     "cycle": "6.1",
+     "release": "2008-03-21",
+     "eol": "2015-09-30",
+     "extended": "2019-09-30"
+    },
+    {
+     "cycle": "5.4",
+     "release": "2006-02-14",
+     "eol": "2013-09-30",
+     "extended": "2017-09-30"
+    }
+   ]
+  },
+  "nodejs": {
+   "label": "Node.js",
+   "url": "https://endoflife.date/nodejs",
+   "cycles": [
+    {
+     "cycle": "26",
+     "release": "2026-05-05",
+     "support": "2027-10-27",
+     "eol": "2029-04-30"
+    },
+    {
+     "cycle": "24",
+     "release": "2025-05-06",
+     "support": "2026-10-20",
+     "eol": "2028-04-30"
+    },
+    {
+     "cycle": "22",
+     "release": "2024-04-24",
+     "support": "2025-10-21",
+     "eol": "2027-04-30"
+    },
+    {
+     "cycle": "20",
+     "release": "2023-04-18",
+     "support": "2024-10-22",
+     "eol": "2026-04-30"
+    },
+    {
+     "cycle": "18",
+     "release": "2022-04-19",
+     "support": "2023-10-18",
+     "eol": "2025-04-30"
+    },
+    {
+     "cycle": "16",
+     "release": "2021-04-20",
+     "support": "2022-10-18",
+     "eol": "2023-09-11"
+    },
+    {
+     "cycle": "14",
+     "release": "2020-04-21",
+     "support": "2021-10-19",
+     "eol": "2023-04-30"
+    },
+    {
+     "cycle": "12",
+     "release": "2019-04-23",
+     "support": "2020-10-20",
+     "eol": "2022-04-30"
+    },
+    {
+     "cycle": "10",
+     "release": "2018-04-24",
+     "support": "2020-05-19",
+     "eol": "2021-04-30"
+    },
+    {
+     "cycle": "8",
+     "release": "2017-05-30",
+     "support": "2019-01-01",
+     "eol": "2019-12-31"
+    },
+    {
+     "cycle": "6",
+     "release": "2016-04-26",
+     "support": "2018-04-30",
+     "eol": "2019-04-30"
+    },
+    {
+     "cycle": "4",
+     "release": "2015-09-09",
+     "support": "2017-04-01",
+     "eol": "2018-04-30"
+    }
+   ]
+  },
+  "mysql": {
+   "label": "MySQL",
+   "url": "https://endoflife.date/mysql",
+   "cycles": [
+    {
+     "cycle": "9.7",
+     "release": "2026-04-21",
+     "eol": "2034-04-21"
+    },
+    {
+     "cycle": "8.4",
+     "release": "2024-04-10",
+     "support": "2029-04-30",
+     "eol": "2032-04-30"
+    },
+    {
+     "cycle": "8.0",
+     "release": "2018-04-08",
+     "support": "2025-04-30",
+     "eol": "2026-04-30"
+    },
+    {
+     "cycle": "5.7",
+     "release": "2015-10-09",
+     "support": "2020-10-31",
+     "eol": "2023-10-31"
+    },
+    {
+     "cycle": "5.6",
+     "release": "2013-02-01",
+     "support": "2018-02-28",
+     "eol": "2021-02-28"
+    },
+    {
+     "cycle": "5.5",
+     "release": "2010-12-03",
+     "support": "2015-12-31",
+     "eol": "2018-12-31"
+    }
+   ]
+  },
+  "office": {
+   "label": "Microsoft Office (incl. Access)",
+   "url": "https://endoflife.date/office",
+   "cycles": [
+    {
+     "cycle": "2024",
+     "release": "2024-10-01",
+     "support": "2029-10-09",
+     "eol": "2029-10-09"
+    },
+    {
+     "cycle": "2021",
+     "release": "2021-10-05",
+     "support": "2026-10-13",
+     "eol": "2026-10-13"
+    },
+    {
+     "cycle": "2019",
+     "release": "2018-09-24",
+     "support": "2023-10-10",
+     "eol": "2025-10-14"
+    },
+    {
+     "cycle": "2016",
+     "release": "2015-09-22",
+     "support": "2020-10-13",
+     "eol": "2025-10-14"
+    },
+    {
+     "cycle": "2013",
+     "release": "2013-01-09",
+     "support": "2018-04-10",
+     "eol": "2023-04-11"
+    },
+    {
+     "cycle": "2010",
+     "release": "2010-07-15",
+     "support": "2015-10-13",
+     "eol": "2020-10-13"
+    },
+    {
+     "cycle": "2007",
+     "release": "2007-01-27",
+     "support": "2012-10-09",
+     "eol": "2017-10-10"
+    }
+   ]
   }
  },
  "curated": {
@@ -1023,6 +1600,149 @@
    "label": "Apache Struts 1.x",
    "product": "apache-struts",
    "cycle": "1.3"
+  },
+  "vb6": {
+   "label": "Visual Basic 6.0",
+   "status": "auto",
+   "eol": "2008-04-08",
+   "url": "https://learn.microsoft.com/en-us/previous-versions/visualstudio/visual-basic-6/visual-basic-6-support-policy",
+   "note": "The VB6 IDE has had no support since 2008; only the VB6 runtime files still ship with Windows ('It Just Works'). Controls/OCXs from third parties are usually unsupported."
+  },
+  "vbscript": {
+   "label": "VBScript",
+   "status": "legacy",
+   "url": "https://techcommunity.microsoft.com/blog/windows-itpro-blog/vbscript-deprecation-timelines-and-next-steps/4148301",
+   "note": "Microsoft deprecated VBScript (Oct 2023): it becomes a Windows feature-on-demand, then disabled by default, then removed in a future Windows release."
+  },
+  "classic-asp": {
+   "label": "Classic ASP (Active Server Pages)",
+   "status": "legacy",
+   "url": "https://learn.microsoft.com/en-us/troubleshoot/developer/webapps/iis/active-server-pages/support-for-asp-in-windows",
+   "note": "ASP still runs in IIS on supported Windows, but receives no new development and depends on VBScript/COM components."
+  },
+  "ms-access": {
+   "label": "Microsoft Access application",
+   "status": "legacy",
+   "url": "https://learn.microsoft.com/en-us/lifecycle/products/microsoft-access-2019",
+   "note": "Follows the Office/Microsoft 365 lifecycle (Access 2016/2019 ended 2025-10-14). Capture File > Account to confirm the version; .mdb/Jet files and linked ODBC tables are a common data-integrity risk."
+  },
+  "vba": {
+   "label": "VBA macros",
+   "status": "legacy",
+   "url": "https://learn.microsoft.com/en-us/deployoffice/security/internet-macros-blocked",
+   "note": "VBA remains supported inside Office but receives no new features; macros from the internet are blocked by default."
+  },
+  "natural-adabas": {
+   "label": "Natural / Adabas",
+   "status": "supported",
+   "url": "https://www.softwareag.com/en_corporate/platform/adabas-natural.html",
+   "note": "Vendor-supported, but Natural/Adabas skills are scarce; confirm the installed release against the vendor roadmap."
+  },
+  "pli": {
+   "label": "IBM Enterprise PL/I",
+   "status": "supported",
+   "url": "https://www.ibm.com/support/pages/lifecycle",
+   "note": "Current Enterprise PL/I releases are supported; older compilers (e.g. PL/I for MVS & VM) are long out of service. PL/I skills are scarce."
+  },
+  "hlasm": {
+   "label": "IBM High Level Assembler",
+   "status": "supported",
+   "url": "https://www.ibm.com/products/high-level-assembler-and-toolkit-feature",
+   "note": "Supported with z/OS, but assembler maintenance skills are very scarce."
+  },
+  "zos": {
+   "label": "z/OS / TSO / ISPF",
+   "status": "unknown",
+   "url": "https://www.ibm.com/support/pages/lifecycle",
+   "note": "z/OS 2.4 ended service 2024-09-30 and 2.5 on 2026-09-30; 3.x is current. Confirm the release with the mainframe team."
+  },
+  "easytrieve": {
+   "label": "Easytrieve Report Generator",
+   "status": "supported",
+   "url": "https://techdocs.broadcom.com/us/en/ca-mainframe-software/devops/ca-easytrieve-report-generator.html",
+   "note": "Vendor-supported (Broadcom); old Easytrieve Plus releases and skills are scarce."
+  },
+  "sas": {
+   "label": "SAS 9.x",
+   "status": "supported",
+   "url": "https://support.sas.com/en/technical-support/services-policies.html",
+   "note": "SAS 9.4 is supported; confirm maintenance level. Licence cost is a common modernization driver (SAS Viya / Python / R)."
+  },
+  "powerbuilder": {
+   "label": "PowerBuilder",
+   "status": "legacy",
+   "url": "https://www.appeon.com/support/lifecycle",
+   "note": "Sybase/SAP PowerBuilder 12.x and older are unsupported; current releases come from Appeon. Confirm the IDE/runtime version."
+  },
+  "visual-foxpro": {
+   "label": "Visual FoxPro 9.0",
+   "status": "auto",
+   "eol": "2015-01-13",
+   "url": "https://learn.microsoft.com/en-us/lifecycle/products/visual-foxpro-90",
+   "note": "Microsoft discontinued FoxPro; extended support for VFP 9.0 ended 2015-01-13. DBF tables have no modern security model."
+  },
+  "informix-4gl": {
+   "label": "IBM Informix 4GL",
+   "status": "legacy",
+   "url": "https://www.ibm.com/support/pages/lifecycle",
+   "note": "Informix 4GL is in maintenance only; confirm the Informix server version (older 11.x/12.x releases are out of support)."
+  },
+  "progress": {
+   "label": "Progress OpenEdge ABL",
+   "status": "unknown",
+   "url": "https://www.progress.com/openedge/support-lifecycle-policy",
+   "note": "Support depends on the OpenEdge release (10.x and 11.x are retired or retiring; 12.x LTS is current). Confirm the version."
+  },
+  "delphi-bde": {
+   "label": "Borland Database Engine (BDE)",
+   "status": "eol",
+   "url": "https://docwiki.embarcadero.com/RADStudio/en/Borland_Database_Engine",
+   "note": "BDE was deprecated by Borland/Embarcadero and is no longer supported; it does not work reliably on current Windows."
+  },
+  "powershell51": {
+   "label": "Windows PowerShell 5.1",
+   "status": "legacy",
+   "url": "https://learn.microsoft.com/en-us/powershell/scripting/install/powershell-support-lifecycle",
+   "note": "Ships with Windows and is still supported there, but gets no new features; PowerShell 7 is the maintained edition."
+  },
+  "angularjs1": {
+   "label": "AngularJS 1.x",
+   "status": "auto",
+   "eol": "2021-12-31",
+   "url": "https://docs.angularjs.org/misc/version-support-status",
+   "note": "Google ended AngularJS support on 2021-12-31; no security fixes."
+  },
+  "ims": {
+   "label": "IBM IMS (DB/DC)",
+   "status": "supported",
+   "url": "https://www.ibm.com/support/pages/lifecycle",
+   "note": "IMS 15 is supported; hierarchical DL/I data and MFS screens are scarce skills. Confirm the IMS release."
+  },
+  "idms": {
+   "label": "CA IDMS",
+   "status": "supported",
+   "url": "https://techdocs.broadcom.com/us/en/ca-mainframe-software/database-management/ca-idms-reference/19-0.html",
+   "note": "Vendor-supported (Broadcom IDMS 19.0); network-model DML and IDMS DBA skills are scarce."
+  },
+  "oracle-forms": {
+   "label": "Oracle Forms & Reports",
+   "status": "auto",
+   "eol": "2026-12-31",
+   "extended": "2027-12-31",
+   "url": "https://www.oracle.com/middleware/technologies/forms.html",
+   "note": "Fusion Middleware 12.2.1.4 Premier Support ends Dec 2026 (extended to Dec 2027); 14.1.2 is the current release. Forms 6i/10g/11g are long unsupported."
+  },
+  "crystal-reports": {
+   "label": "SAP Crystal Reports",
+   "status": "unknown",
+   "url": "https://support.sap.com/en/release-upgrade-maintenance.html",
+   "note": "Crystal Reports 2016 and older are out of mainstream maintenance; confirm the version (2020/2025 are current)."
+  },
+  "gwbasic": {
+   "label": "GW-BASIC / QuickBASIC",
+   "status": "eol",
+   "url": "https://learn.microsoft.com/en-us/lifecycle/",
+   "note": "DOS-era Microsoft BASIC interpreters have been unsupported for decades and do not run natively on 64-bit Windows."
   }
  }
 }

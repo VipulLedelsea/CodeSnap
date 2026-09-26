@@ -101,7 +101,20 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
         return {"entities": 0, "relations": 0, "skipped": True}
     store.clear_artifact(artifact_id)
     code = artifact["transcription"]
-    parsed = _parse_deterministic(code, artifact)
+    parsed = _parse_deterministic(code, artifact, prefer_llm=client is not None)
+    if parsed is None and client is not None:
+        try:
+            structure = extract_structure(client, code, filename=artifact["name"], language=artifact["language"])
+        except Exception as exc:
+            store.log_run("structure", artifact_id=artifact_id, prompt_version=PROMPT_VERSION, ok=False,
+                          error=f"{type(exc).__name__}: {exc}")
+            parsed = _parse_deterministic(code, artifact)
+            if parsed is None:
+                store.set_status(artifact_id, "failed")
+                raise
+            parsed["fallback"] = f"{type(exc).__name__}"
+        else:
+            return _apply_llm(store, artifact_id, artifact, code, structure)
     if parsed is not None:
         counts = apply_structure(store, artifact_id, parsed["structure"], artifact["name"], len(code.splitlines()))
         store.log_run("structure", artifact_id=artifact_id, model=parsed["parser"], prompt_version=parsed["parser"],
@@ -116,12 +129,24 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
                       error=f"{type(exc).__name__}: {exc}")
         store.set_status(artifact_id, "failed")
         raise
+    return _apply_llm(store, artifact_id, artifact, code, structure)
+
+
+def _apply_llm(store, artifact_id, artifact, code, structure):
     for call in structure["calls"]:
         store.log_run("structure", artifact_id=artifact_id, model=call["model"], prompt_version=PROMPT_VERSION,
                       input_tokens=call["input_tokens"], output_tokens=call["output_tokens"], ms=call["ms"],
                       cost=usage_cost(call["model"], call["input_tokens"], call["output_tokens"]),
                       ok=call.get("stop_reason") != "max_tokens",
                       error="output truncated (max_tokens)" if call.get("stop_reason") == "max_tokens" else None)
+    if not structure.get("file_attrs"):
+        try:
+            from core import langpacks
+            det = langpacks.parse(code, artifact["name"], artifact.get("language") or "")
+            if det and det.get("file_attrs"):
+                structure["file_attrs"] = det["file_attrs"]
+        except Exception:
+            pass
     counts = apply_structure(store, artifact_id, structure, artifact["name"], len(code.splitlines()))
     store.set_status(artifact_id, "structured")
     _relink(store)
@@ -136,17 +161,26 @@ def _relink(store):
         return None
 
 
-def _parse_deterministic(code: str, artifact: dict):
+def _parse_deterministic(code: str, artifact: dict, prefer_llm: bool = False):
     import time
     from core.cobol.parser import PARSER_VERSION as COBOL_VERSION, parse as parse_cobol_family
     from core.extractors import PARSER_VERSION as EXTRACTORS_VERSION, parse_artifact
     from core.langs.structure import PARSER_VERSION as TS_VERSION, parse_source
     began = time.monotonic()
     atype = artifact.get("artifact_type") or ""
+    from core import langpacks
     extractors = (EXTRACTORS_VERSION, lambda c, n, l: parse_artifact(c, n, l, atype))
-    chain = [(COBOL_VERSION, parse_cobol_family), (TS_VERSION, parse_source), extractors]
-    if atype in ("sql", "db_schema", "config", "api", "web", "ui_screen") or code.lstrip().startswith("{\n  \"codesnap_ui_screen\""):
-        chain = [extractors] + chain[:2]
+    cobol = (COBOL_VERSION, lambda c, n, l: langpacks.enrich_cobol(c, parse_cobol_family(c, n, l)))
+    packs = (langpacks.PARSER_VERSION, lambda c, n, l: langpacks.parse(c, n, l, skip_llm_first=prefer_llm))
+    chain = [cobol, (TS_VERSION, parse_source), packs, extractors]
+    if code.lstrip().startswith("{\n  \"codesnap_ui_screen\""):
+        chain = [extractors] + chain[:3]
+    elif atype in ("sql", "db_schema", "config", "api", "web", "ui_screen"):
+        try:
+            first = langpacks.claims(code, artifact["name"], artifact.get("language") or "", atype)
+        except Exception:
+            first = False
+        chain = ([packs, extractors] if first else [extractors, packs]) + chain[:2]
     for version, fn in chain:
         try:
             structure = fn(code, artifact["name"], artifact.get("language") or "")

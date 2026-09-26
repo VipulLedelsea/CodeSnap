@@ -16,11 +16,40 @@ SQL_WORDS = re.compile(r"\b(SELECT\s.+\sFROM|INSERT\s+INTO|UPDATE\s+[\w.\[\]]+\s
 _LITERAL = re.compile(r'@?"(?:\\.|""|[^"\\])*"')
 
 
-def family(filename: str, language: str = "") -> str:
+PACK_IDS = {"vb6", "vba", "vbnet", "vbscript", "rpg", "cl", "natural", "pli", "asm", "rexx", "clist", "easytrieve", "sas",
+            "plsql", "tsql", "powerbuilder", "coldfusion", "php", "perl", "shell", "batch", "powershell", "python",
+            "javascript", "delphi", "foxpro", "informix4gl", "progress", "fortran", "basic"}
+VB_LIKE = {"vb", "vb6", "vba", "vbnet", "vbscript", "basic", "web"}
+CODE |= PACK_IDS - {"plsql", "tsql"}
+
+
+def family(filename: str, language: str = "", text: str = "") -> str:
     ext = PurePath(filename or "").suffix.lower().lstrip(".")
     if ext in _EXT_FAMILY:
         return _EXT_FAMILY[ext]
-    return _LANG_FAMILY.get((language or "").lower(), "other")
+    if text:
+        try:
+            from core.langpacks import AMBIGUOUS_EXTS, pack_for
+            if ext in AMBIGUOUS_EXTS:
+                p = pack_for(filename, language, text)
+                if p:
+                    return "js" if p["id"] == "javascript" else p["id"]
+        except Exception:
+            pass
+    fam = _LANG_FAMILY.get((language or "").lower())
+    if fam:
+        return fam
+    try:
+        from core.langpacks import EXT_INDEX, _by_name
+    except Exception:
+        return "other"
+    named = _by_name(language)
+    cands = EXT_INDEX.get(ext) or []
+    if named and (not cands or named in cands):
+        return "js" if named["id"] == "javascript" else named["id"]
+    if cands:
+        return "js" if cands[0]["id"] == "javascript" else cands[0]["id"]
+    return "other"
 
 
 def _strip_c(lines):
@@ -93,7 +122,11 @@ def code_lines(text: str, fam: str) -> list:
     if fam in ("props",):
         return ["" if l.strip().startswith(("#", ";", "!")) else l for l in lines]
     if fam == "vb":
-        return [re.sub(r"'.*$", "", l) for l in lines]
+        from core.langpacks import strip_comments
+        return strip_comments(text or "", "vbnet")
+    if fam in PACK_IDS:
+        from core.langpacks import strip_comments
+        return strip_comments(text or "", fam)
     return lines
 
 
@@ -110,7 +143,7 @@ def mask_snippet(line: str) -> str:
 
 
 LINE_RULES = [
-    ("SEC-CRED", {"cs", "java", "cpp", "js", "vb", "web"}, "high",
+    ("SEC-CRED", {"cs", "java", "cpp", "js", "vb", "web"} | PACK_IDS, "high",
      r'''(?<![\w.])\w*(password|passwd|pwd|secret|apikey|api_key|accesskey|access_key)\w*\s*(=|:|==|\.Equals\()\s*@?["'][^"'\s]{3,}["']''',
      "credential literal in code"),
     ("SEC-CRED", {"cobol"}, "high", r"(PASSWORD|PASSWD|PWD)[\w-]*\s+PIC\s+\S+\s+VALUE\s+['\"][^'\"]{2,}['\"]",
@@ -138,7 +171,7 @@ LINE_RULES = [
      "weak hash or cipher"),
     ("SEC-CRYPTO", {"java"}, "medium", r'''Cipher\.getInstance\s*\(\s*"(AES"|[^"]*/ECB/)''', "AES in ECB mode (Java's default when no mode is given)"),
     ("SEC-CRYPTO", {"cpp"}, "medium", r"\b(MD5_Init|MD5Init|DES_ecb_encrypt|DES_set_key|CALG_MD5|CALG_DES|CALG_RC4|CALG_SHA1)\b", "weak hash or cipher"),
-    ("SEC-TLS", CODE | {"config", "props", "json"}, "medium", r'''["'=>\s](http|ftp|telnet)://(?!(localhost|127\.0\.0\.1|www\.w3\.org|schemas\.|java\.sun\.com|xmlns\.jcp\.org|tempuri\.org))[\w.-]+''',
+    ("SEC-TLS", CODE | {"config", "props", "json"}, "medium", r'''["'=>\s](http|ftp|telnet)://(?!(localhost|127\.0\.0\.1|www\.w3\.org|schemas\.|java\.sun\.com|xmlns\.|tempuri\.org))[\w.-]+''',
      "plain-text protocol endpoint"),
     ("SEC-TLS", {"cs", "config", "props", "json", "java"}, "medium", r"Encrypt\s*=\s*(False|no)\b|TrustServerCertificate\s*=\s*(True|yes)\b", "database connection without verified encryption"),
     ("SEC-TLS", {"config"}, "medium", r'''<security\s+mode\s*=\s*["']None["']|requireSSL\s*=\s*["']false["']''', "transport security disabled"),
@@ -157,6 +190,67 @@ LINE_RULES = [
      "exception details shown to the user"),
     ("SEC-CONF", {"java"}, "low", r"\.printStackTrace\s*\(\s*(response\.getWriter\(\)|out)\s*\)", "stack trace written to the response"),
     ("SEC-MEM", {"cpp"}, "high", r"\bgets\s*\(", "gets() cannot limit input length"),
+    # ---- legacy language packs (M3.5)
+    ("SEC-SQLI", VB_LIKE, "high", r'''"[^"]*\b(SELECT\s|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|WHERE\s)[^"]*"\s*&\s*(?!vbCrLf|vbNewLine|vbTab|")[A-Za-z_(]''',
+     "SQL text concatenated with & (VB / VBScript)"),
+    ("SEC-SQLI", VB_LIKE, "high", r'''(SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^"\n]*"\s*&\s*Request(\.(Form|QueryString))?\s*\(''',
+     "request value concatenated into SQL"),
+    ("SEC-CMD", VB_LIKE, "high", r"\bShell\s*\(?\s*[^\"\n]*&|\.Run\b\s*\(?\s*[^\n]*&\s*\w|\.Exec\s*\([^)]*&", "OS command built by concatenation"),
+    ("SEC-CMD", {"vbscript", "web"}, "medium", r"(?<![.\w])(Execute|ExecuteGlobal|Eval)\s*\(?\s*(?!\")[A-Za-z_]", "VBScript Execute/Eval of a runtime string"),
+    ("SEC-XSS", VB_LIKE, "high", r"Response\.Write\b[^\n]*&\s*Request\s*(\.|\()", "request value written straight to the response"),
+    ("SEC-SQLI", {"php"}, "high", r"\b(mysql_query|mysqli_query|pg_query|mssql_query|odbc_exec|->query|->exec)\s*\([^;]*\$_(GET|POST|REQUEST|COOKIE)",
+     "request value passed straight into a query"),
+    ("SEC-SQLI", {"php"}, "high", r'''"[^"]*\b(SELECT\s|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|WHERE\s)[^"]*(\$\w+|"\s*\.\s*\$\w+)|'[^']*\b(SELECT\s|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|WHERE\s)[^']*'\s*\.\s*\$\w+''',
+     "SQL text built from PHP variables"),
+    ("SEC-PATH", {"php"}, "high", r"\b(include|require)(_once)?\s*\(?\s*[^;]*\$_(GET|POST|REQUEST|COOKIE)", "file include from request input"),
+    ("SEC-CMD", {"php"}, "high", r"\b(system|exec|shell_exec|passthru|popen|proc_open)\s*\([^;]*\$", "OS command built from a variable"),
+    ("SEC-CMD", {"php"}, "medium", r"\beval\s*\(|preg_replace\s*\(\s*['\"][^'\"]*/e['\"]", "eval() / preg_replace /e code execution"),
+    ("SEC-XSS", {"php"}, "high", r"\b(echo|print)\b[^;]*\$_(GET|POST|REQUEST|COOKIE)", "request value echoed without encoding"),
+    ("SEC-CRYPTO", {"php", "perl", "python", "coldfusion"}, "medium", r"\b(md5|sha1|crypt)\s*\(\s*\$?\w*(pass|pwd)", "weak hash used for passwords"),
+    ("SEC-CMD", {"perl"}, "high", r"\b(system|exec)\s*\(?\s*\"[^\"]*\$\w|`[^`]*\$\w|\bopen\s*\(?\s*\w+\s*,\s*\"[^\"]*\$\w+[^\"]*\|\"",
+     "shell command interpolates a variable"),
+    ("SEC-SQLI", {"perl"}, "high", r'''\b(prepare|do|selectrow_\w+|selectall_\w+)\s*\(\s*"[^"]*\b(SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^"]*\$\w''',
+     "SQL text interpolates a Perl variable (use placeholders)"),
+    ("SEC-CRED", {"php"}, "high", r'''\b(mysql_connect|mysqli_connect|mssql_connect|new\s+PDO|new\s+mysqli)\s*\([^)]*,\s*["'][^"']*["']\s*,\s*["'][^"'$]{3,}["']''',
+     "database password hard-coded in the connect call"),
+    ("SEC-CRED", {"perl"}, "high", r'''DBI->connect\s*\([^)]*,\s*["'][^"']*["']\s*,\s*["'][^"'$]{3,}["']''', "database password hard-coded in DBI->connect"),
+    ("SEC-CRED", {"foxpro"}, "high", r'''SQLCONNECT\s*\([^)]*,\s*["'][^"']*["']\s*,\s*["'][^"']{2,}["']''', "database password hard-coded in SQLCONNECT"),
+    ("SEC-SQLI", {"foxpro", "informix4gl", "progress"}, "high", r'''["'][^"']*\b(SELECT\s|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|WHERE\s)[^"']*["']\s*(\+|\|\|)\s*[A-Za-z_]''',
+     "SQL text concatenated with a variable"),
+    ("SEC-CMD", {"shell"}, "medium", r"(^|[;&|]\s*)eval\s", "eval of a constructed command"),
+    ("SEC-CRED", {"shell", "batch", "powershell"}, "high",
+     r"\b(sqlplus|isql|sqlcmd|osql|bcp|mysql|db2)\b[^|\n]*(\s-P\s*\S+|\s-p\S+|\s\w+/\S+@\w+)", "database password on the command line"),
+    ("SEC-CRED", {"batch"}, "high", r"(?i)net\s+use\s+\S+\s+\S+\s+/user:", "share password in a batch file"),
+    ("SEC-TLS", {"shell", "batch", "perl", "python", "rexx", "clist"}, "medium", r"(?<![\w-])(ftp|telnet)(\s|$|\.exe|\s+-)|Net::FTP|ftplib",
+     "plain FTP / Telnet transfer"),
+    ("SEC-CMD", {"powershell"}, "medium", r"\b(Invoke-Expression|iex)\b", "Invoke-Expression of a constructed string"),
+    ("SEC-CRED", {"powershell"}, "high", r'''ConvertTo-SecureString\s+["'][^"']+["']\s+-AsPlainText|-Password\s+["'][^"']{3,}["']''',
+     "plain-text password in script"),
+    ("SEC-CMD", {"rpg", "cl"}, "medium", r"\bQCMDEXC\b[^;\n]*(\+|%trim|\*CAT|\*TCAT|\*BCAT)", "system command string built at run time (QCMDEXC)"),
+    ("SEC-SQLDYN", {"rpg", "pli", "informix4gl", "powerbuilder", "natural"}, "medium",
+     r"\b(PREPARE\s+\S+\s+FROM|EXECUTE\s+IMMEDIATE)\b", "dynamic SQL — confirm the statement text is not built from user input"),
+    ("SEC-SQLI", {"plsql"}, "high", r"\bEXECUTE\s+IMMEDIATE\b[^;]*\|\||\bOPEN\s+\w+\s+FOR\s+[^;]*\|\||DBMS_SQL\.PARSE\s*\([^;]*\|\|",
+     "dynamic SQL concatenated with ||"),
+    ("SEC-CRED", {"plsql", "tsql", "sql"}, "high", r"\bIDENTIFIED\s+BY\s+\"?\w{3,}|\bPASSWORD\s*=\s*N?'[^']{3,}'", "password in SQL source"),
+    ("SEC-AUTH", {"plsql", "tsql", "sql"}, "medium", r"\bGRANT\b[^;]*\bTO\s+PUBLIC\b", "privileges granted to PUBLIC"),
+    ("SEC-CMD", {"tsql", "sql"}, "high", r"\bxp_cmdshell\b", "xp_cmdshell runs OS commands from SQL"),
+    ("SEC-SQLI", {"tsql", "sql"}, "high", r"\bEXEC(UTE)?\s*\(\s*@\w+|\bEXEC(UTE)?\s*\([^)]*\+\s*@\w+", "dynamic SQL built by concatenation (EXEC(@sql))"),
+    ("SEC-SQLDYN", {"tsql", "sql"}, "medium", r"\bsp_executesql\s+@\w+", "dynamic SQL via sp_executesql — confirm it is parameterised"),
+    ("SEC-CRED", {"sas"}, "high", r'''\b(password|pw|pwd|dbpass)\s*=\s*["']?(?!\{sas\d+\})[^"'\s;)&%]{3,}''', "database password in SAS code (use PROC PWENCODE / authdomain)"),
+    ("SEC-CMD", {"sas"}, "medium", r"^\s*X\s+['\"]|%SYSEXEC\b|CALL\s+SYSTEM\s*\(|\bPIPE\s+['\"]", "SAS runs operating-system commands"),
+    ("SEC-SQLI", {"coldfusion"}, "high", r"\b(WHERE|AND|OR|VALUES|SET|IN)\b[^<\n]*#(?!\s)(url|form|cookie|arguments|attributes)?\.?\w+#(?![^<]*cfqueryparam)",
+     "variable interpolated into a cfquery without cfqueryparam"),
+    ("SEC-CMD", {"coldfusion"}, "medium", r"<cfexecute\b", "cfexecute runs OS commands"),
+    ("SEC-XSS", {"coldfusion"}, "medium", r"^(?!.*\b(WHERE|AND|OR|VALUES|SET)\b).*#(url|form|cookie)\.\w+#", "request value output without encodeForHTML"),
+    ("SEC-SQLI", {"delphi"}, "high", r"(SQL\.(Add|Text)\s*(\(|:=)|CommandText\s*:=)\s*'[^']*\b(SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^']*'\s*\+",
+     "SQL text concatenated with + (Delphi)"),
+    ("SEC-SQLI", {"foxpro"}, "high", r"SQLEXEC\s*\([^)]*(\+\s*\w|&\w)", "SQL pass-through built by concatenation / macro substitution"),
+    ("SEC-CRED", {"powerbuilder"}, "high", r'''SQLCA\.(DBPass|LogPass)\s*=\s*"[^"]{2,}"''', "database password hard-coded in SQLCA"),
+    ("SEC-SQLI", {"python"}, "high", r'''\.execute\s*\(\s*[fr]?["'][^"']*\b(SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^"']*["']\s*(%|\+|\.format)|\.execute\s*\(\s*f["'][^"']*\{''',
+     "SQL text built with string formatting (use parameters)"),
+    ("SEC-CMD", {"python"}, "medium", r"\bos\.(system|popen)\s*\(|subprocess\.\w+\([^)]*shell\s*=\s*True|\bcommands\.getoutput\(", "shell command execution"),
+    ("SEC-DESER", {"python"}, "high", r"\b(pickle|cPickle)\.loads?\s*\(|yaml\.load\s*\((?![^)]*Loader)", "unsafe deserialization"),
+    ("SEC-CMD", {"rexx", "clist"}, "medium", r"\bINTERPRET\b|ADDRESS\s+TSO\s+[^'\"\n]*\w", "command string interpreted at run time"),
     ("SEC-MEM", {"cpp"}, "medium", r"\b(strcpy|strcat|sprintf|vsprintf|wsprintf[AW]?|lstrcpy[AW]?|lstrcat[AW]?|_mbscpy)\s*\(", "unbounded string copy / format"),
     ("SEC-MEM", {"cpp"}, "medium", r'''\b(scanf|sscanf|fscanf)\s*\([^;]*"[^"]*%s''', "%s read without a width limit"),
 ]
@@ -212,7 +306,7 @@ def _sql_concat(lines: list, fam: str) -> list:
 
 
 def scan_text(text: str, filename: str, language: str = "") -> list:
-    fam = family(filename, language)
+    fam = family(filename, language, text)
     raw = (text or "").splitlines()
     lines = code_lines(text, fam)
     out, seen = [], set()

@@ -143,7 +143,7 @@ def _code(store, ctx, sensitive_artifacts, has_pii):
         if not text.strip():
             continue
         if art["id"] not in getattr(ctx, "no_pii_arts", set()) and text_has_student_data(
-                code_lines(text, family(art["name"], art.get("language") or ""))):
+                code_lines(text, family(art["name"], art.get("language") or "", text))):
             sensitive_artifacts.add(art["id"])
         for h in scan_text(text, art["name"], art.get("language") or ""):
             hits.append({**h, "artifact_id": art["id"]})

@@ -351,7 +351,21 @@ ICONS = {"users": ("USR", "#2E7DB0"), "screen": ("UI", "#2E7DB0"), "cobol": ("CB
          "java": ("JV", "#D9822B"), "cpp": ("C++", "#2A8C8C"), "web": ("WEB", "#2E7DB0"), "js": ("JS", "#B38F00"),
          "code": ("SRC", "#857A70"), "api": ("API", "#3F51B5"), "transaction": ("TX", "#B3261E"), "job": ("JOB", "#8A4A2C"),
          "database": ("DB", "#3B8F5E"), "table": ("TBL", "#3B8F5E"), "file": ("FILE", "#6E6E73"),
-         "external": ("EXT", "#6E6E73"), "missing": ("?", "#A99C90")}
+         "external": ("EXT", "#6E6E73"), "missing": ("?", "#A99C90"),
+         "ibmi": ("RPG", "#1F6F8B"), "natural": ("NAT", "#6B5B95"), "vb": ("VB", "#5C4B9B"), "script": ("SH", "#4E6E58"),
+         "4gl": ("4GL", "#8C6D1F"), "webscript": ("PHP", "#4F5B93"), "cfml": ("CFM", "#4F5B93"), "pli": ("PL/I", "#A0522D"), "asm": ("ASM", "#7A4A3A"),
+         "report": ("RPT", "#6A7F2A"), "sqlproc": ("SQL", "#3B8F5E"), "etl": ("ETL", "#2F6E9E"), "fortran": ("F77", "#556B8E")}
+PACK_GROUPS = {
+    "ibmi": ("g-ibmi", "IBM i (RPG / CL)", "ibmi"), "natural": ("g-natural", "Natural / Adabas", "natural"),
+    "vb": ("g-vb", "Visual Basic / VBA", "vb"), "vbscript": ("g-vbs", "VBScript / Classic ASP", "vb"),
+    "script": ("g-scripts", "Scripts & job control", "script"), "4gl": ("g-4gl", "4GL / client-server", "4gl"),
+    "webscript": ("g-webscript", "Web scripting (PHP / ColdFusion)", "webscript"), "pli": ("g-pli", "PL/I", "pli"),
+    "asm": ("g-asm", "Assembler / IMS", "asm"), "report": ("g-report", "Reporting (SAS / Easytrieve)", "report"),
+    "sql": ("g-sqlproc", "Stored procedures (PL/SQL / T-SQL)", "sqlproc"), "etl": ("g-etl", "ETL packages (SSIS)", "etl"),
+    "fortran": ("g-fortran", "Fortran", "fortran"), "js": ("g-js", "JavaScript", "js"), "cs": ("g-cs", "C# / .NET", "cs"),
+}
+SCREEN_ONLY_PACKS = {"oracle_forms", "dfm", "xaml", "datawindow", "informix_form", "ispf_panel", "ims_mfs", "ims_dbd"}
+TERMINAL_TECH = {"ISPF panel", "IMS MFS"}
 STATUS_CHIP = {"eol": ("#FDE2E1", "#B3261E"), "extended": ("#FFF1D6", "#8A5A00"), "legacy": ("#FFF1D6", "#8A5A00"),
                "ending": ("#FFF1D6", "#8A5A00"), "supported": ("#E3F5E8", "#1F7A3A"), "unknown": ("#EFEFF2", "#6E6E73")}
 SEV_CHIP = {"critical": ("#7A1020", "#7A1020"), "high": ("#FDE2E1", "#A4161A"), "medium": ("#FFF1D6", "#8A5A00"),
@@ -390,12 +404,16 @@ def architecture(store) -> dict:
     for aid, a in sorted(m.arts.items(), key=lambda kv: kv[1]["name"]):
         fam = family(a["name"], a.get("language") or "")
         lang = (a.get("language") or "").lower()
-        if a.get("artifact_type") not in code_types or fam in ("config", "props", "json", "sql", "web"):
+        file_ent = next((e for e in m.ents.values() if e["kind"] == "file" and e["artifact_id"] == aid), None)
+        prof = ((file_ent or {}).get("attrs") or {}).get("profile") or {}
+        proc_sql = fam in ("plsql", "tsql") or (fam == "sql" and prof.get("pack") in ("plsql", "tsql"))
+        if (a.get("artifact_type") not in code_types and not proc_sql) or fam in ("config", "props", "json", "web") or \
+                (fam == "sql" and not proc_sql):
             continue
         if "bms" in lang or "jcl" in lang or a["name"].lower().endswith((".bms", ".jcl")):
             continue
-        file_ent = next((e for e in m.ents.values() if e["kind"] == "file" and e["artifact_id"] == aid), None)
-        prof = ((file_ent or {}).get("attrs") or {}).get("profile") or {}
+        if prof.get("pack") in SCREEN_ONLY_PACKS:
+            continue
         owned = [e for e in m.ents.values() if m.in_file(e["id"], aid)]
         cics = any(e["kind"] == "transaction" for e in owned) or "EXEC CICS" in (a.get("transcription") or "").upper()
         if fam == "cobol":
@@ -408,6 +426,12 @@ def architecture(store) -> dict:
             gid, gt, ic = "g-cpp", "C / C++", "cpp"
         elif fam == "js":
             gid, gt, ic = "g-js", "JavaScript", "js"
+        elif proc_sql:
+            gid, gt, ic = PACK_GROUPS["sql"]
+        elif prof.get("family") in PACK_GROUPS:
+            gid, gt, ic = PACK_GROUPS[prof["family"]]
+            if fam == "coldfusion":
+                ic = "cfml"
         else:
             gid, gt, ic = "g-code", "Other code", "code"
         units = sum(1 for e in owned if e["kind"] in ("class", "interface", "program"))
@@ -430,8 +454,12 @@ def architecture(store) -> dict:
                 gid, gt = "g-scr-bms", "CICS / BMS screens"
             elif src.get("artifact_type") == "ui_screen":
                 gid, gt = "g-scr-app", "Captured app screens"
-            elif fam == "web" or attrs.get("technology") == "web":
+            elif fam == "web" or attrs.get("technology") == "web" or fam in ("php", "coldfusion", "vbscript"):
                 gid, gt = "g-scr-web", "Web pages"
+            elif attrs.get("technology") in TERMINAL_TECH:
+                gid, gt = "g-scr-term", "Terminal screens (ISPF / IMS)"
+            elif attrs.get("technology"):
+                gid, gt = "g-scr-client", "Desktop / client-server screens"
             else:
                 gid, gt = "g-scr-bms", "CICS / BMS screens"
             node_of[e["id"]] = put("presentation", gid, gt, {"id": nid, "title": _short(e["name"], 30), "icon": _icon("screen"),

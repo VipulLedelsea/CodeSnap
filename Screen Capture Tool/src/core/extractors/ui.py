@@ -17,7 +17,9 @@ Use the record_screen tool. Include:
 - title: the screen/window/page title as shown (or a short descriptive title if none is shown)
 - screen_type: form | list | report | menu | dialog | error | login | dashboard | terminal (3270/5250 green screen)
 - technology_hints: what the UI appears to be built with, from visible evidence only (e.g. "3270 terminal",
-  "WinForms", "ASP.NET Web Forms", "Java Swing", "Internet Explorer only", "Silverlight", "modern web")
+  "WinForms", "ASP.NET Web Forms", "Java Swing", "Internet Explorer only", "Silverlight", "modern web",
+  "5250 green screen", "Oracle Forms", "PowerBuilder", "MS Access form", "Visual Basic 6", "Delphi",
+  "Visual FoxPro", "Crystal Reports 2016" — include a version only when it is visible)
 - fields: every visible input or display field: label (as shown), kind, required (marked * or similar),
   read_only, and notes (e.g. "no visible label", "truncated", "free-text code")
 - actions: buttons, links, menu items, PF keys: label, kind
@@ -117,7 +119,7 @@ def parse_ui_json(text: str, filename: str = "") -> dict | None:
                                input=False, action=True))
     profile = {"language": "UI screen", "frameworks": data.get("technology_hints") or [],
                "legacy_markers": [h for h in (data.get("technology_hints") or [])
-                                  if re.search(r"3270|5250|terminal|silverlight|activex|internet explorer|flash|vb6", h, re.I)],
+                                  if re.search(r"3270|5250|terminal|silverlight|activex|internet explorer|flash|vb6|visual basic 6|oracle forms|powerbuilder|foxpro|access|delphi|crystal", h, re.I)],
                "settings": {"fields": len(data.get("fields") or []), "actions": len(data.get("actions") or []),
                             "issues": len(data.get("issues") or [])}}
     return {"entities": entities, "relations": relations, "file_attrs": {"profile": profile}}

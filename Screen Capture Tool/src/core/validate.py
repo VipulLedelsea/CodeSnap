@@ -74,6 +74,10 @@ def _check_python(path: Path):
         ast.parse(src, filename=str(path))
         return _result(True, True, "python ast.parse")
     except SyntaxError as e:
+        import re as _re
+        if _re.search(r"^\s*print\s+[^(=\s]|except\s+\w+\s*,\s*\w+\s*:|^\s*exec\s+[\"']|\bur?\"|<>", src, _re.M):
+            return _result(False, False, "python ast.parse",
+                           note="Python 2 source - the Python 3 parser cannot check it; structure parsed, left unverified")
         lines = src.splitlines()
         snippet = lines[e.lineno - 1].strip() if e.lineno and 1 <= e.lineno <= len(lines) else ""
         loc = f"line {e.lineno}" + (f", col {e.offset}" if e.offset else "")
@@ -193,11 +197,52 @@ def _check_json(path: Path):
 _CHECKERS.update({"xml": _check_xml, "config": _check_xml, "json": _check_json})
 
 
+def _check_php(path: Path):
+    php = _which("php")
+    if not php:
+        return _check_structure(path)
+    rc, out = _run([php, "-l", str(path)])
+    return _result(True, rc == 0, "php -l", errors="" if rc == 0 else out)
+
+
+def _check_shell(path: Path):
+    ext = path.suffix.lower().lstrip(".")
+    shell = _which("ksh") if ext == "ksh" else None
+    shell = shell or (_which("bash") if ext in ("sh", "bash", "ksh") else None)
+    if not shell or ext == "csh":
+        return _check_structure(path)
+    rc, out = _run([shell, "-n", str(path)])
+    return _result(True, rc == 0, f"{Path(shell).name} -n", errors=out)
+
+
+def _check_structure(path: Path):
+    """Legacy languages with no compiler on the Mac (RPG, Natural, PL/I, VB6, ...): balanced-block check only."""
+    from core import langpacks
+    try:
+        text = path.read_text(errors="replace")
+    except OSError as exc:
+        return _result(False, False, "", note=str(exc))
+    pack = langpacks.pack_for(path.name, "", text)
+    if pack is None:
+        return _result(False, False, "", note=f"no checker for {path.suffix or 'this file'}")
+    if not pack.get("blocks"):
+        return _result(False, False, "codesnap-structure",
+                       note=f"no {pack['label']} compiler on this Mac; structure parsed, syntax left unverified")
+    ok, errors, _ = langpacks.check(text, path.name)
+    return _result(True, ok, f"codesnap-structure ({pack['label']} block balance)", errors=errors,
+                   note="structural check only - not a compiler")
+
+
+_CHECKERS.update({"php": _check_php, "php3": _check_php, "php4": _check_php, "php5": _check_php, "phtml": _check_php,
+                  "sh": _check_shell, "bash": _check_shell, "ksh": _check_shell, "csh": _check_shell,
+                  "xaml": _check_xml, "dtsx": _check_xml})
+
+
 def check_source(path) -> dict:
     """Syntax/compile-check a source file by extension. Never runs the program."""
     path = Path(path)
     ext = path.suffix.lower().lstrip(".")
     checker = _CHECKERS.get(ext)
     if checker is None:
-        return _result(False, False, "", note=f"no checker for .{ext}")
+        return _check_structure(path)
     return checker(path)

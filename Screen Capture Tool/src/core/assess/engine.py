@@ -96,7 +96,11 @@ def _facts(components):
     total = sum(max(1, c["metrics"]["lines"]) for c in components) or 1
     no_path_lines = sum(max(1, c["metrics"]["lines"]) for c in components if _no_path(c))
     cobol_lines = sum(max(1, c["metrics"]["lines"]) for c in components if c["metrics"]["family"] == "cobol")
+    hard = lambda c: [f["title"] for f in c["findings"] if f["category"] == "eol" and f["severity"] == "high"
+                      and (f.get("refs") or {}).get("eol_status") == "eol" and f.get("status") != "dismissed"]
+    eol_lines = sum(max(1, c["metrics"]["lines"]) for c in components if hard(c))
     return {"no_path": [t for c in components for t in _no_path(c)], "no_path_share": no_path_lines / total,
+            "eol_hard": [t for c in components for t in hard(c)], "eol_share": eol_lines / total,
             "cobol_share": cobol_lines / total,
             "sec_high": sum(1 for c in components for f in c["findings"]
                             if f["category"] in ("security", "vulnerability") and f["severity"] in ("critical", "high"))}

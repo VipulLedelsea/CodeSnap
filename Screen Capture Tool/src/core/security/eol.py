@@ -102,6 +102,9 @@ def curated_status(entry: dict, data: dict, today: date | None = None) -> dict:
         product = data["products"][entry["product"]]
         cycle = next(c for c in product["cycles"] if c["cycle"] == entry["cycle"])
         return {**cycle_status(cycle, today), "url": product["url"], "cycle": cycle["cycle"]}
+    if entry.get("status") == "auto":
+        out = cycle_status({"eol": entry.get("eol"), "extended": entry.get("extended")}, today)
+        return {**out, "url": entry["url"], "note": entry.get("note")}
     out = {"status": entry["status"], "url": entry["url"], "note": entry.get("note")}
     if entry.get("eol"):
         out["eol"] = entry["eol"]
@@ -121,6 +124,20 @@ _JAVA_LEVELS = {"Java 5 generics/annotations": "5", "Java 7 try-with-resources/d
                 "Java 8 lambdas/streams": "8", "Java 10+ var": "10"}
 _CS_LEVELS = {"C# 2.0 generics": ".NET Framework 2.0+", "C# 3.0 LINQ/var": ".NET Framework 3.5+",
               "C# 5.0 async": ".NET Framework 4.5+", "C# 6+ features": ".NET Framework 4.6+ / Roslyn"}
+
+
+_HINT_CURATED = [(r"visual basic 6|\bvb6\b", "vb6"), (r"oracle forms", "oracle-forms"), (r"powerbuilder", "powerbuilder"),
+                 (r"foxpro", "visual-foxpro"), (r"\baccess\b", "ms-access"), (r"delphi", "delphi-bde"),
+                 (r"crystal reports", "crystal-reports"), (r"5250|as/?400|ibm i\b", "product:ibm-i:"),
+                 (r"coldfusion", "product:coldfusion:"), (r"angularjs", "angularjs1")]
+
+
+def _first_evidence(profile: dict) -> list:
+    ev = profile.get("evidence") or {}
+    for label in profile.get("legacy_markers") or []:
+        if ev.get(label):
+            return list(ev[label])[:1]
+    return []
 
 
 def _lines_for(profile: dict, label: str) -> list:
@@ -168,6 +185,26 @@ def technologies(profile: dict) -> list:
         lines = [n for k, v in (profile.get("evidence") or {}).items() if k.startswith(("pre-standard", "no std"))
                  for n in v]
         add(curated="prestd-cpp", label=profile["dialect"], lines=sorted(set(lines))[:5], basis="C++ dialect signals")
+    for t in profile.get("techs") or []:
+        key = t.get("curated")
+        label = t.get("label") or (key or t.get("product") or "").replace("-", " ")
+        add(t.get("product") if not key else None, t.get("version"), curated=key, label=label,
+            lines=_first_evidence(profile), confidence="unconfirmed" if t.get("unconfirmed") or (
+                t.get("product") and not t.get("version")) else "confirmed",
+            basis=f"{profile.get('language') or 'code'} source detected" + (
+                f" ({', '.join(profile.get('legacy_markers')[:2])})" if profile.get("legacy_markers") else ""))
+    if profile.get("language") == "UI screen":
+        for hint in profile.get("frameworks") or []:
+            for pattern, key in _HINT_CURATED:
+                if re.search(pattern, hint, re.I):
+                    if key.startswith("product:"):
+                        _, prod, ver = key.split(":")
+                        m = re.search(r"\b(\d+\.\d+|(?:19|20)\d\d)\b", hint)
+                        add(prod, m.group(1) if m else (ver or None), label=hint, confidence="unconfirmed",
+                            basis="visible in a screenshot")
+                    else:
+                        add(curated=key, label=hint, confidence="unconfirmed", basis="visible in a screenshot")
+                    break
     lang = profile.get("language")
     level = profile.get("level_signal")
     if lang == "Java":

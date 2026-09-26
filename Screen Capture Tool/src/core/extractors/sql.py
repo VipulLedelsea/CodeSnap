@@ -184,7 +184,7 @@ def parse_sql(text: str, filename: str = "") -> dict:
             relations.append(rel("reads", name, f"table:{t}", line, verb=routine))
         for t in sorted(writes):
             relations.append(rel("writes", name, f"table:{t}", line, verb=routine))
-        for call in re.finditer(rf"\b(?:EXEC(?:UTE)?|CALL)\s+({QNAME})", body, re.I):
+        for call in re.finditer(rf"\b(?:EXEC(?:UTE)?|CALL)\s+(?!IMMEDIATE\b)({QNAME})(?![\w\]`])(?!\s*\.\.)", body, re.I):
             target = clean_ident(call.group(1))
             if target not in ("SQL", "IMMEDIATE"):
                 relations.append(rel("calls", name, f"function:{target}", line_of(sql, m.end() + call.start())))
