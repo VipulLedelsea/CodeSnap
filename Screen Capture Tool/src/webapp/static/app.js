@@ -841,6 +841,7 @@ async function loadProgram() {
   if ($("progMapBox").open) loadProgramMap();
   if ($("progSecBox").open) loadProgramFindings();
   if ($("progAssessBox").open) loadAssessment();
+  if ($("progDiagBox").open) loadDiagrams();
 }
 async function loadArtifact(el) {
   const box = el.querySelector(".pf-detail");
@@ -1029,6 +1030,27 @@ async function runAssessment() {
   } catch (e) { $("progAssess").textContent = e.message; }
   btn.disabled = false; btn.textContent = "Run assessment";
 }
+function showDiagram() {
+  const id = $("progDiagSelect").value;
+  const base = `/api/programs/${encodeURIComponent(_program)}/diagrams`;
+  $("progDiag").innerHTML = id ? `<a href="${base}/${encodeURIComponent(id)}.svg" target="_blank" rel="noopener"><img src="${base}/${encodeURIComponent(id)}.svg?t=${Date.now()}" alt="diagram"></a>` : "";
+}
+async function loadDiagrams() {
+  const base = `/api/programs/${encodeURIComponent(_program)}/diagrams`;
+  $("progDiagVsdx").href = `${base}/export/vsdx`;
+  $("progDiagDrawio").href = `${base}/export/drawio`;
+  $("progDiagZip").href = `${base}/export/zip`;
+  try {
+    const d = await _json(base);
+    const keep = $("progDiagSelect").value;
+    const label = { context: "Context", component: "Components", class: "Class", data: "Data model", sequence: "Interaction" };
+    $("progDiagSelect").innerHTML = d.diagrams.map(x => `<option value="${_attr(x.id)}">${escapeHtml((label[x.kind] || x.kind) + " — " + x.title.split(" — ").slice(1).join(" — "))} (${x.nodes})</option>`).join("");
+    if (keep && d.diagrams.some(x => x.id === keep)) $("progDiagSelect").value = keep;
+    const c = d.coverage;
+    $("progDiagSummary").innerHTML = `Diagrams <small class="project-hint">${d.diagrams.length} · ${c.shown}/${c.entities} entities shown</small>`;
+    showDiagram();
+  } catch (e) { $("progDiag").textContent = e.message; }
+}
 async function loadProgramMap() {
   const box = $("progMap");
   try {
@@ -1091,6 +1113,8 @@ document.querySelectorAll("#kindSeg .seg-opt").forEach(b => b.addEventListener("
   }
 }));
 
+$("progDiagBox").addEventListener("toggle", () => { if ($("progDiagBox").open) loadDiagrams(); });
+$("progDiagSelect").addEventListener("change", showDiagram);
 $("progAssessBox").addEventListener("toggle", () => { if ($("progAssessBox").open) loadAssessment(); });
 $("progAssessRun").addEventListener("click", runAssessment);
 $("progSecBox").addEventListener("toggle", () => { if ($("progSecBox").open) loadProgramFindings(); });

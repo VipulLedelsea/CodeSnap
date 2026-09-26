@@ -621,3 +621,7 @@ body.dark .seg-opt{ color:#B6B6BE; }
 .mx.low{background:#e3f5e8}.mx.medium{background:#fff1d6}.mx.high{background:#fde2e1}.mx.critical{background:#f4b4b0;font-weight:700}
 .as-tbl{width:100%;border-collapse:collapse;font-size:12px}.as-tbl th,.as-tbl td{text-align:left;padding:4px 6px;border-bottom:1px solid rgba(0,0,0,.06)}
 .as-tbl input{width:100%;min-width:120px;font-size:12px}.as-phase{margin:6px 0}.as-item{font-size:12px;padding-left:12px}
+
+.diag-view{overflow:auto;max-height:70vh;border:1px solid rgba(0,0,0,.08);border-radius:8px;background:#fff}
+.diag-view img{display:block;max-width:none}
+#progDiagSelect{max-width:420px}

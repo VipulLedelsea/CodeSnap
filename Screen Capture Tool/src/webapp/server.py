@@ -335,6 +335,53 @@ def api_program_assess_inputs(slug: str, payload: dict = Body(...)):
         return {"ok": True, "inputs": inputs, "assessment": run_assessment(store, scan=False)}
 
 
+def _diagrams(store):
+    from core.diagrams import all_diagrams
+    return all_diagrams(store)
+
+
+@app.get("/api/programs/{slug}/diagrams")
+def api_program_diagrams(slug: str):
+    from core.diagrams import diagram_coverage
+    from core.diagrams.export import summary
+    with _open_program(slug) as store:
+        ds = _diagrams(store)
+        return {"diagrams": summary(ds), "coverage": diagram_coverage(store, ds)}
+
+
+@app.get("/api/programs/{slug}/diagrams/export/{fmt}")
+def api_program_diagrams_export(slug: str, fmt: str):
+    from core.diagrams import drawio, vsdx
+    from core.diagrams.export import bundle
+    with _open_program(slug) as store:
+        ds = _diagrams(store)
+        name = store.info["name"]
+        if fmt == "vsdx":
+            body, mt = vsdx(ds, f"{name} diagrams"), "application/vnd.ms-visio.drawing"
+        elif fmt == "drawio":
+            body, mt = drawio(ds).encode(), "application/xml"
+        elif fmt == "zip":
+            body, mt = bundle(store, ds), "application/zip"
+        else:
+            raise HTTPException(status_code=404, detail="Use vsdx, drawio or zip.")
+    return Response(body, media_type=mt,
+                    headers={"Content-Disposition": f'attachment; filename="{slug}_diagrams.{fmt}"'})
+
+
+@app.get("/api/programs/{slug}/diagrams/{diagram_id}.{fmt}")
+def api_program_diagram(slug: str, diagram_id: str, fmt: str):
+    from core.diagrams import png, svg
+    with _open_program(slug) as store:
+        d = next((x for x in _diagrams(store) if x["id"] == diagram_id), None)
+    if d is None:
+        raise HTTPException(status_code=404, detail="No such diagram.")
+    if fmt == "svg":
+        return Response(svg(d), media_type="image/svg+xml")
+    if fmt == "png":
+        return Response(png(d), media_type="image/png")
+    raise HTTPException(status_code=404, detail="Use svg or png.")
+
+
 @app.get("/api/programs/{slug}/coverage")
 def api_program_coverage(slug: str):
     with _open_program(slug) as store:

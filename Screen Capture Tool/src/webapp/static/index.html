@@ -57,6 +57,15 @@
           <div class="prog-files" id="progFiles"></div>
           <div class="prog-section-label" id="progMissingLabel">Referenced but not captured</div>
           <div class="prog-missing" id="progMissing"></div>
+          <details class="prog-map" id="progDiagBox"><summary id="progDiagSummary">Diagrams</summary>
+            <div class="sec-bar">
+              <select id="progDiagSelect"></select>
+              <a class="btn-secondary" id="progDiagVsdx" href="#">Visio (.vsdx)</a>
+              <a class="btn-link" id="progDiagDrawio" href="#">draw.io</a>
+              <a class="btn-link" id="progDiagZip" href="#">All (zip: SVG + PNG + Visio)</a>
+            </div>
+            <div class="diag-view" id="progDiag"></div>
+          </details>
           <details class="prog-map" id="progAssessBox"><summary id="progAssessSummary">Assessment &amp; verdict</summary>
             <div class="sec-bar">
               <button class="btn-primary" id="progAssessRun" type="button">Run assessment</button>
