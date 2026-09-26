@@ -138,6 +138,9 @@ class _Walker:
             if _CONN.search(lit):
                 target = connection_target(lit)
                 if target:
+                    if not any(e["kind"] == "data_store" and e["name"] == target.upper() for e in self.entities):
+                        self.entities.append(_entity("data_store", target.upper(), None, _line(node), _line(node),
+                                                     store_type="database", defined_by="connection string"))
                     self.relations.append(_rel("connects_to", source, f"data_store:{target.upper()}", _line(node),
                                                connection=mask_connection(lit)[:200], store_type="database",
                                                hardcoded_secret=bool(_SECRET.search(lit) and not re.search(

@@ -870,6 +870,10 @@ function profileHtml(p) {
     const lines = (p.evidence || {})[m];
     return escapeHtml(m) + (lines && lines.length ? ` <small>(L${lines.join(", L")})</small>` : "");
   }).join("; "));
+  if ((p.libraries || []).length) bits.push("Libraries: " + p.libraries.map(escapeHtml).join(", "));
+  const st = p.settings || {};
+  const flags = Object.keys(st).map(k => `${escapeHtml(k)}=${escapeHtml(String(st[k]))}`);
+  if (flags.length) bits.push("Settings: " + flags.join(", "));
   return bits.length ? `<div class="pf-profile">${escapeHtml(p.language || "")} · ${bits.join(" · ")}</div>` : "";
 }
 async function loadProgramMap() {

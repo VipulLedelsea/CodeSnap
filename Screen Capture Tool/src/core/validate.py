@@ -171,6 +171,28 @@ _CHECKERS.update({"cbl": _check_cobol, "cob": _check_cobol, "cpy": _check_cobol}
 _CHECKERS.update({ext: _check_legacy for ext in ("cpp", "cc", "cxx", "hpp", "hh", "hxx", "cs", "java")})
 
 
+def _check_xml(path: Path):
+    import xml.etree.ElementTree as ET
+    try:
+        ET.parse(path)
+        return _result(True, True, "xml parser")
+    except ET.ParseError as e:
+        line, col = e.position
+        return _result(True, False, "xml parser", errors=f"{path.name}:{line}:{col + 1}: {e}")
+
+
+def _check_json(path: Path):
+    import json as _json
+    try:
+        _json.loads(path.read_text())
+        return _result(True, True, "json parser")
+    except ValueError as e:
+        return _result(True, False, "json parser", errors=f"{path.name}:{getattr(e, 'lineno', '?')}: {e}")
+
+
+_CHECKERS.update({"xml": _check_xml, "config": _check_xml, "json": _check_json})
+
+
 def check_source(path) -> dict:
     """Syntax/compile-check a source file by extension. Never runs the program."""
     path = Path(path)

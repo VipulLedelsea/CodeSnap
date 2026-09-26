@@ -8,7 +8,9 @@ from .extract import PROMPT_VERSION, extract_structure
 from .kinds import ENTITY_KINDS, RELATION_KINDS
 
 STRUCTURED_TYPES = {"code", "sql", "db_schema", "config", "api", "job", "web", "ui_screen"}
-TYPE_BY_EXTENSION = {"bms": "ui_screen", "jcl": "job", "sql": "sql", "ddl": "db_schema"}
+TYPE_BY_EXTENSION = {"bms": "ui_screen", "jcl": "job", "sql": "sql", "ddl": "db_schema", "config": "config",
+                     "xml": "config", "properties": "config", "ini": "config", "cfg": "config", "conf": "config",
+                     "json": "config", "yaml": "config", "yml": "config", "env": "config"}
 
 
 def artifact_type_for(report: dict, is_code: bool) -> str:
@@ -125,9 +127,11 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
 def _parse_deterministic(code: str, artifact: dict):
     import time
     from core.cobol.parser import PARSER_VERSION as COBOL_VERSION, parse as parse_cobol_family
+    from core.extractors import PARSER_VERSION as EXTRACTORS_VERSION, parse_artifact
     from core.langs.structure import PARSER_VERSION as TS_VERSION, parse_source
     began = time.monotonic()
-    for version, fn in ((COBOL_VERSION, parse_cobol_family), (TS_VERSION, parse_source)):
+    for version, fn in ((COBOL_VERSION, parse_cobol_family), (TS_VERSION, parse_source),
+                        (EXTRACTORS_VERSION, parse_artifact)):
         try:
             structure = fn(code, artifact["name"], artifact.get("language") or "")
         except Exception:
