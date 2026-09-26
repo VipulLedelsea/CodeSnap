@@ -596,12 +596,16 @@ def run_team_fast(client, ctx, goal=None, verbose=True, audit=None, max_iters=No
     audit.append("analyze"); _pub("analyze", stage="classify")
     audit.append("repair"); _pub("repair", stage="fix")
     indent_lang = _indent_sensitive(language, extension)
+    from core.cobol import detect_kind, lint_columns, merge_column_review, review_columns
+    column_lang = detect_kind(code0, language, extension) in ("cobol", "copybook")
     with ThreadPoolExecutor(max_workers=3) as pool:
         f_an = pool.submit(_analyst_enrich, client, numbered, base)
         f_de = pool.submit(agent_decoder, client, code0, extension, language)
         f_rv = pool.submit(analysis.review_indentation, client, getattr(ctx, "images", []), language) if indent_lang else None
+        f_col = pool.submit(review_columns, client, getattr(ctx, "images", []), code0) if column_lang else None
         an = f_an.result(); de = f_de.result()
         indent_issues = f_rv.result() if f_rv is not None else []
+        column_seen = f_col.result() if f_col is not None else []
 
     code = de.get("code", code0)          # Decoder ships the fixed code if the error-only fix compiled
     # Stage 3 — Diagrammer draws the REPAIRED code (waits for the Decoder on purpose)
@@ -622,6 +626,8 @@ def run_team_fast(client, ctx, goal=None, verbose=True, audit=None, max_iters=No
         if _expl:
             compile_errors = _expl + "\n\nCompiler details:\n" + compile_errors
     errors = _merge_indent_review(compile_errors, indent_issues, code)
+    if column_lang:
+        errors = merge_column_review(errors, lint_columns(code0), column_seen, code0)
     diagrams = di or ""
 
     report_md = _assemble(language, overview, errors, code, tech, extension, True,
