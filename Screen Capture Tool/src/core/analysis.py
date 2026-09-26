@@ -189,6 +189,7 @@ EXTRACT_SYSTEM_PROMPT = (
     "  - It is CORRECT and REQUIRED to output invalid, non-runnable code if that is what is "
     "on screen. Producing clean code from broken input is a FAILURE.\n"
     "Output PLAIN TEXT only — no Markdown: no # headings, no ``` code fences, no - bullets. "
+    "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. "
     "Do NOT include the editor's line-number gutter, fold arrows, breakpoint dots, minimaps, "
     "scrollbars, tab bars, or status bars — only the content itself, keeping its own indentation. "
     "If several windows are visible, transcribe ONLY the primary code/document (the focused "
@@ -226,6 +227,7 @@ EXTRACT_JSON_SYSTEM_PROMPT = (
     'written>, "suggested": <what you think it should be>}. This is where your instinct to fix '
     "things goes: note it HERE, but do NOT change raw_transcription. Empty array if nothing looked "
     "off.\n"
+    "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. "
     "Do NOT include the editor's line-number gutter, fold arrows, breakpoint dots, minimaps, "
     "scrollbars, tab bars, or status bars \u2014 only the content itself. If several windows are "
     "visible, transcribe ONLY the primary focused editor pane; ignore other windows, the dock, and "
@@ -263,6 +265,7 @@ EXTRACT_INDENT_SYSTEM_PROMPT = (
     '  "corrections_applied": an array of {"line": <1-based index>, "saw": <exact text>, '
     '"suggested": <what you think it should be>} for anything that looked wrong \u2014 your outlet; '
     "do NOT change raw_transcription. Empty array if nothing looked off.\n"
+    "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. "
     "Ignore the editor's line-number gutter, fold arrows, minimaps, scrollbars, tabs, and status "
     "bars. Transcribe ONLY the primary focused editor pane. For a line cut off at the edge, end its "
     "text with [CUT OFF]. If there is no meaningful text, return "
@@ -556,6 +559,11 @@ def clean_source(text: str) -> str:
     only strips transcription/formatting noise, never changes the code itself."""
     if not text or not text.strip():
         return text or ""
+    from core.cobol import is_column_sensitive
+    if is_column_sensitive(_FENCE_RE.sub(lambda m: m.group(1), text)):
+        blocks = _FENCE_RE.findall(text)
+        text = "\n\n".join(blocks) if blocks else _re.sub(r"^[ \t]*```.*$", "", text, flags=_re.M)
+        return "\n".join(l.expandtabs(8).rstrip() for l in text.split("\n")).strip("\n")
     blocks = _FENCE_RE.findall(text)
     if blocks:
         cleaned = [_strip_gutter(b).strip("\n") for b in blocks]
@@ -610,7 +618,8 @@ def merge_frames(raw_parts: list):
     candidates = [stitched] + parts
     clean = [c for c in candidates if c.strip() and not _has_dup_headers(c)]
     best = max(clean or candidates, key=lambda c: len(c.splitlines())) if candidates else stitched
-    return _fix_leading_indent(best), parts
+    from core.cobol import is_column_sensitive
+    return (best if is_column_sensitive(best) else _fix_leading_indent(best)), parts
 
 
 def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8) -> "list | None":

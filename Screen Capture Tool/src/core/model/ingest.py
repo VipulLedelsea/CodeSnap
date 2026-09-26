@@ -5,7 +5,16 @@ from pathlib import Path
 from .extract import PROMPT_VERSION, extract_structure
 from .kinds import ENTITY_KINDS, RELATION_KINDS
 
-STRUCTURED_TYPES = {"code", "sql", "db_schema", "config", "api", "job", "web"}
+STRUCTURED_TYPES = {"code", "sql", "db_schema", "config", "api", "job", "web", "ui_screen"}
+TYPE_BY_EXTENSION = {"bms": "ui_screen", "jcl": "job", "sql": "sql", "ddl": "db_schema"}
+
+
+def artifact_type_for(report: dict, is_code: bool) -> str:
+    if report.get("artifact_type"):
+        return report["artifact_type"]
+    if not is_code:
+        return "other"
+    return TYPE_BY_EXTENSION.get((report.get("extension") or "").lower().lstrip("."), "code")
 
 
 def artifact_name(report: dict, fallback: str = "capture") -> str:
@@ -108,7 +117,7 @@ def ingest_capture(store, client, images, report: dict, *, session_id: int | Non
     is_code = report.get("is_code", True) and bool((report.get("code") or "").strip())
     artifact_id = store.add_artifact(
         name or artifact_name(report),
-        report.get("artifact_type") or ("code" if is_code else "other"),
+        artifact_type_for(report, is_code),
         report.get("language", ""),
         report.get("code", ""),
         evidence_ids=evidence_ids,

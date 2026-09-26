@@ -108,9 +108,18 @@ def _analyst_enrich(client, text: str, base: dict) -> dict:
     return out
 
 
+def _apply_legacy_kind(base: dict, code: str) -> dict:
+    from core.cobol import KINDS, detect_kind
+    kind = detect_kind(code, base.get("language", ""), base.get("extension", ""))
+    if kind:
+        language, extension = KINDS[kind]
+        base = {**base, "is_code": True, "language": language, "extension": extension}
+    return base
+
+
 def agent_analyze(client, marked_text: str) -> dict:
     """Analyst (Sonnet). Classifies and writes the overview + tech-stack review."""
-    base = analysis.synthesize_final(client, marked_text)  # reliable is_code/lang/ext/overview baseline
+    base = _apply_legacy_kind(analysis.synthesize_final(client, marked_text), marked_text)
     return _analyst_enrich(client, marked_text, base)
 
 
@@ -562,7 +571,7 @@ def run_team_fast(client, ctx, goal=None, verbose=True, audit=None, max_iters=No
     code0 = ex["code"]
     numbered = ex.get("numbered", "") or code0
     corrections = ex.get("corrections", [])
-    base = analysis.synthesize_final(client, numbered)      # is_code / language / extension for the fan-out
+    base = _apply_legacy_kind(analysis.synthesize_final(client, numbered), code0)
     is_code = bool(base.get("is_code", False))
     language = base.get("language", "") or ""
     extension = base.get("extension", "") or "txt"

@@ -260,6 +260,8 @@ class App:
         self._analysis_lock.acquire()   # serialise overlapping analyses (captures stay non-blocking)
         self._analysing = True
         try:
+            if self.program:
+                self._share_copybooks()
             audit = []
             goal = (f"There are {len(imgs)} screenshots of one scrolled document/code, in order "
                     f"(consecutive shots overlap). Produce the best verified output.")
@@ -284,6 +286,14 @@ class App:
             self._analysing = False
             self._analysis_lock.release()
             print("\n[idle] Cmd+Shift+1 for a new burst, Cmd+Shift+9 to quit.")
+
+    def _share_copybooks(self):
+        from core.model import ProgramStore
+        try:
+            with ProgramStore.open(self.program) as store:
+                os.environ["CODESNAP_COPYBOOK_DIRS"] = str(store.export_copybooks())
+        except Exception as exc:  # noqa: BLE001
+            print(f"Copybook export skipped: {exc}", file=sys.stderr)
 
     def _ingest_into_program(self, imgs, ctx):
         from core import status

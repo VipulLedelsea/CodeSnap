@@ -157,6 +157,14 @@ def looks_truncated(errors: str) -> bool:
     return any(m in e for m in _TRUNCATION_MARKERS)
 
 
+def _check_cobol(path: Path):
+    from core.cobol import check_cobol
+    return check_cobol(path)
+
+
+_CHECKERS.update({"cbl": _check_cobol, "cob": _check_cobol, "cpy": _check_cobol})
+
+
 def check_source(path) -> dict:
     """Syntax/compile-check a source file by extension. Never runs the program."""
     path = Path(path)

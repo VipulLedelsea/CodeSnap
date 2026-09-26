@@ -202,6 +202,18 @@ class ProgramStore:
             db.execute("UPDATE entity SET key = ?, name = ?, updated = ? WHERE key = ?",
                        (new_key, new_name, _now(), old_key))
 
+    def export_copybooks(self) -> Path:
+        target = self.path / "copybooks"
+        target.mkdir(exist_ok=True)
+        for artifact in self.artifacts():
+            name = artifact["name"]
+            if not (name.lower().endswith((".cpy", ".copy")) or "copybook" in (artifact["language"] or "").lower()):
+                continue
+            stem = Path(name).stem
+            for variant in {stem, stem.upper()}:
+                (target / f"{variant}.cpy").write_text(artifact["transcription"] or "")
+        return target
+
     def artifact(self, artifact_id: int) -> dict | None:
         return self._one("SELECT * FROM artifact WHERE id = ?", (artifact_id,))
 
