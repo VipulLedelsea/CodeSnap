@@ -839,6 +839,7 @@ async function loadProgram() {
   }).join("") : `<p class="project-hint" style="margin:0">${c.entities ? "Nothing missing so far." : "No structure extracted yet — use Re-extract on a file."}</p>`;
   if ($("progFlowsBox").open) loadProgramFlows();
   if ($("progMapBox").open) loadProgramMap();
+  if ($("progSecBox").open) loadProgramFindings();
 }
 async function loadArtifact(el) {
   const box = el.querySelector(".pf-detail");
@@ -900,6 +901,65 @@ async function loadProgramFlows() {
     box.innerHTML = `<p class="project-hint">${d.total} flow(s)</p>` + d.flows.map(f =>
       `<div class="pf-flow"><b>${escapeHtml(f.entry)}</b> <small>${escapeHtml(f.entry_kind)}</small> → ${f.steps.map(s => escapeHtml(s.to)).join(" → ")} <small>(${escapeHtml(f.access || "")} ${escapeHtml(f.target_kind)})</small></div>`).join("");
   } catch (e) { box.textContent = e.message; }
+}
+const _SEV = ["critical", "high", "medium", "low", "info"];
+let _findings = [];
+function _secSummary(sum) {
+  const bits = _SEV.filter(k => (sum.by_severity || {})[k]).map(k => `<span class="sev ${k}">${sum.by_severity[k]} ${k}</span>`);
+  return bits.length ? bits.join(" ") : `<span class="project-hint">No findings.</span>`;
+}
+function _refTags(r) {
+  const out = [];
+  if (r.cve) out.push(r.cve);
+  if (r.cwe) out.push(r.cwe);
+  (r.nist || []).forEach(n => out.push("NIST " + n));
+  if (r.ferpa) out.push("FERPA");
+  if (r.mn_gdpa) out.push("MN ch.13");
+  if (r.owasp) out.push(r.owasp.split(" ")[0]);
+  return out.map(t => `<span class="ref">${escapeHtml(t)}</span>`).join("");
+}
+function renderFindings() {
+  const box = $("progSec");
+  const cat = $("progSecFilter").value;
+  const rows = _findings.filter(f => !cat || f.category === cat)
+    .sort((a, b) => _SEV.indexOf(a.severity) - _SEV.indexOf(b.severity));
+  if (!rows.length) { box.innerHTML = `<p class="project-hint">${_findings.length ? "Nothing in this category." : "Not scanned yet — Run scan (no API cost)."}</p>`; return; }
+  const base = `/api/programs/${encodeURIComponent(_program)}`;
+  box.innerHTML = rows.map(f => {
+    const ev = (f.evidence || []).map(e => `<div class="sec-ev"><b>${escapeHtml(e.file || "")}${e.line ? ":" + e.line : ""}</b>${e.snippet ? ` <code>${escapeHtml(e.snippet)}</code>` : ""}${(e.screenshots || []).slice(0, 3).map(id => ` <a href="${base}/evidence/${id}" target="_blank" rel="noopener">frame</a>`).join("")}</div>`).join("");
+    const refs = f.refs || {};
+    return `<details class="sec-f ${f.status === "dismissed" ? "dismissed" : ""}" data-id="${f.id}"><summary><span class="sev ${_attr(f.severity)}">${escapeHtml(f.severity)}</span> ${escapeHtml(f.title)}</summary>
+      <div class="sec-d"><p>${escapeHtml(f.detail || "")}</p>${ev}
+      <div class="sec-refs">${_refTags(refs)}</div>
+      <div class="sec-src">Source: ${escapeHtml(f.source || "")}</div>
+      <div class="sec-actions">${["open", "accepted", "dismissed", "fixed"].map(s => `<button class="btn-link${f.status === s ? " on" : ""}" data-status="${s}" type="button">${s}</button>`).join(" ")}</div></div></details>`;
+  }).join("");
+  box.querySelectorAll(".sec-actions button").forEach(b => b.addEventListener("click", async () => {
+    const id = b.closest(".sec-f").dataset.id;
+    try {
+      const d = await _json(`${base}/findings/${id}/status`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: b.dataset.status }) });
+      _findings = _findings.map(f => f.id === d.finding.id ? d.finding : f);
+      renderFindings();
+    } catch (e) { alert(e.message); }
+  }));
+}
+async function loadProgramFindings() {
+  try {
+    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/findings`);
+    _findings = d.findings.filter(f => ["security", "eol", "vulnerability", "privacy"].includes(f.category));
+    $("progSecSummary").innerHTML = `Security &amp; end-of-life ${_secSummary(d.summary)}`;
+    renderFindings();
+  } catch (e) { $("progSec").textContent = e.message; }
+}
+async function runSecurityScan() {
+  const btn = $("progSecScan");
+  btn.disabled = true; btn.textContent = "Scanning…";
+  try {
+    const online = $("progSecOnline").checked ? "true" : "false";
+    await _json(`/api/programs/${encodeURIComponent(_program)}/security/scan?online=${online}`, { method: "POST" });
+    await loadProgramFindings();
+  } catch (e) { $("progSec").textContent = e.message; }
+  btn.disabled = false; btn.textContent = "Run scan";
 }
 async function loadProgramMap() {
   const box = $("progMap");
@@ -963,6 +1023,9 @@ document.querySelectorAll("#kindSeg .seg-opt").forEach(b => b.addEventListener("
   }
 }));
 
+$("progSecBox").addEventListener("toggle", () => { if ($("progSecBox").open) loadProgramFindings(); });
+$("progSecScan").addEventListener("click", runSecurityScan);
+$("progSecFilter").addEventListener("change", renderFindings);
 $("progFlowsBox").addEventListener("toggle", () => { if ($("progFlowsBox").open) loadProgramFlows(); });
 $("progRelink").addEventListener("click", async () => {
   try { const r = await _json(`/api/programs/${encodeURIComponent(_program)}/relink`, { method: "POST" });

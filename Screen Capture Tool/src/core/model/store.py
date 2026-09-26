@@ -25,7 +25,7 @@ def _row(row) -> dict | None:
     if row is None:
         return None
     out = dict(row)
-    for field in ("attrs", "payload", "evidence"):
+    for field in ("attrs", "payload", "evidence", "refs"):
         if field in out and isinstance(out[field], str):
             out[field] = json.loads(out[field])
     return out
@@ -437,18 +437,33 @@ class ProgramStore:
         return rows
 
     def add_finding(self, category: str, severity: str, title: str, *, detail: str = "", source: str = "",
-                    target_type: str | None = None, target_id: int | None = None, evidence=()) -> int:
+                    target_type: str | None = None, target_id: int | None = None, evidence=(), rule: str | None = None,
+                    refs: dict | None = None, status: str = "open", origin: str = "auto") -> int:
         with self.transaction() as db:
             return db.execute(
                 "INSERT INTO finding(target_type, target_id, category, severity, title, detail, source, evidence, "
-                "created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (target_type, target_id, category, severity, title, detail, source, json.dumps(list(evidence)), _now()),
+                "created, rule, refs, status, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (target_type, target_id, category, severity, title, detail, source, json.dumps(list(evidence)), _now(),
+                 rule, json.dumps(refs or {}), status, origin),
             ).lastrowid
 
     def findings(self, category: str | None = None) -> list:
         if category:
             return self._all("SELECT * FROM finding WHERE category = ? ORDER BY id", (category,))
         return self._all("SELECT * FROM finding ORDER BY id")
+
+    def finding(self, finding_id: int) -> dict | None:
+        return self._one("SELECT * FROM finding WHERE id = ?", (finding_id,))
+
+    def clear_findings(self, categories, origin: str = "auto") -> int:
+        cats = list(categories)
+        with self.transaction() as db:
+            return db.execute(f"DELETE FROM finding WHERE origin = ? AND category IN ({','.join('?' * len(cats))})",
+                              (origin, *cats)).rowcount
+
+    def set_finding_status(self, finding_id: int, status: str):
+        with self.transaction() as db:
+            db.execute("UPDATE finding SET status = ? WHERE id = ?", (status, finding_id))
 
     def add_correction(self, target_type: str, target_id: int | None, op: str, payload: dict | None = None,
                        note: str = "") -> int:

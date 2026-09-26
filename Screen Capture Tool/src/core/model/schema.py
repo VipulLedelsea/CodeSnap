@@ -1,4 +1,4 @@
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MIGRATIONS = {
     1: """
@@ -147,6 +147,14 @@ CREATE TABLE run (
 );
 """,
 }
+
+MIGRATIONS[2] = """
+ALTER TABLE finding ADD COLUMN rule TEXT;
+ALTER TABLE finding ADD COLUMN refs TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE finding ADD COLUMN status TEXT NOT NULL DEFAULT 'open';
+ALTER TABLE finding ADD COLUMN origin TEXT NOT NULL DEFAULT 'auto';
+CREATE INDEX IF NOT EXISTS finding_category ON finding(category);
+"""
 
 
 def current_version(db) -> int:

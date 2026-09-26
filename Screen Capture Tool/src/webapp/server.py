@@ -270,6 +270,46 @@ def api_program_flows(slug: str, limit: int = 500):
     return {"flows": flows[:limit], "total": len(flows)}
 
 
+@app.post("/api/programs/{slug}/security/scan")
+def api_program_security_scan(slug: str, online: bool = False):
+    from core.security import run_scan
+    with _open_program(slug) as store:
+        result = run_scan(store, online=online, cache_dir=store.path / "cache" / "osv")
+        return {"ok": True, **result, "findings": store.findings()}
+
+
+@app.get("/api/programs/{slug}/findings")
+def api_program_findings(slug: str, category: str | None = None):
+    from core.security import summary
+    with _open_program(slug) as store:
+        return {"findings": store.findings(category), "summary": summary(store)}
+
+
+@app.post("/api/programs/{slug}/findings/{finding_id}/status")
+def api_program_finding_status(slug: str, finding_id: int, payload: dict = Body(...)):
+    status_ = str((payload or {}).get("status", "")).strip()
+    if status_ not in ("open", "accepted", "dismissed", "fixed"):
+        return JSONResponse({"error": "status must be open, accepted, dismissed or fixed"}, status_code=400)
+    with _open_program(slug) as store:
+        if store.finding(finding_id) is None:
+            raise HTTPException(status_code=404, detail="No such finding.")
+        store.set_finding_status(finding_id, status_)
+        return {"ok": True, "finding": store.finding(finding_id)}
+
+
+@app.get("/api/programs/{slug}/technologies")
+def api_program_technologies(slug: str):
+    from core.security import technologies
+    with _open_program(slug) as store:
+        return {"technologies": technologies(store)}
+
+
+@app.post("/api/eol/refresh")
+def api_eol_refresh():
+    from core.security import eol
+    return eol.refresh()
+
+
 @app.get("/api/programs/{slug}/coverage")
 def api_program_coverage(slug: str):
     with _open_program(slug) as store:

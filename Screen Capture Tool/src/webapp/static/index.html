@@ -57,6 +57,14 @@
           <div class="prog-files" id="progFiles"></div>
           <div class="prog-section-label" id="progMissingLabel">Referenced but not captured</div>
           <div class="prog-missing" id="progMissing"></div>
+          <details class="prog-map" id="progSecBox"><summary id="progSecSummary">Security &amp; end-of-life</summary>
+            <div class="sec-bar">
+              <button class="btn-secondary" id="progSecScan" type="button">Run scan</button>
+              <label class="sec-online"><input type="checkbox" id="progSecOnline"> Look up CVEs online (OSV)</label>
+              <select id="progSecFilter"><option value="">All</option><option value="security">Code &amp; config</option><option value="eol">End-of-life</option><option value="vulnerability">CVEs</option><option value="privacy">Student data</option></select>
+            </div>
+            <div id="progSec"></div>
+          </details>
           <details class="prog-map" id="progFlowsBox"><summary>Flows (entry point → data)</summary><div id="progFlows"></div></details>
           <details class="prog-map" id="progMapBox"><summary>Dependency map</summary><div id="progMap"></div></details>
           <div class="project-actions">

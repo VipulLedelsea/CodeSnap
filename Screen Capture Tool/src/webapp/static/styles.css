@@ -594,3 +594,15 @@ body.dark .seg-opt{ color:#B6B6BE; }
 .pm-cat.missing_code{ color:#B42318; border-color:#F3C4BE; }
 .pm-cat.external{ color:#1D5FA8; border-color:#C4D8F0; }
 .pf-flow{ font-size:12.5px; padding:3px 0; line-height:1.5; }
+
+.sec-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.sec-online{font-size:12px;color:#6E6E73;display:flex;gap:4px;align-items:center}
+.sev{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;text-transform:uppercase;letter-spacing:.02em}
+.sev.critical{background:#7a1020;color:#fff}.sev.high{background:#fde2e1;color:#a4161a}
+.sev.medium{background:#fff1d6;color:#8a5a00}.sev.low{background:#e8f1fb;color:#1d4f86}.sev.info{background:#EFEFF2;color:#6E6E73}
+.sec-f{border-bottom:1px solid rgba(0,0,0,.06);padding:6px 0}.sec-f summary{cursor:pointer;font-size:13px}
+.sec-f.dismissed summary{opacity:.5;text-decoration:line-through}
+.sec-d{padding:6px 0 4px 12px;font-size:12px}.sec-d p{margin:0 0 6px}
+.sec-ev{margin:2px 0;overflow-wrap:anywhere}.sec-ev code{font-size:11px;background:#F4F4F6;padding:1px 4px;border-radius:4px}
+.sec-refs{margin:6px 0;display:flex;flex-wrap:wrap;gap:4px}.ref{font-size:10.5px;background:#F0EEF8;color:#4b3f8a;padding:1px 6px;border-radius:8px}
+.sec-src{color:#6E6E73;font-size:11px;overflow-wrap:anywhere}.sec-actions{margin-top:4px}.sec-actions .on{font-weight:700;text-decoration:underline}
