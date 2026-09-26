@@ -17,10 +17,11 @@ import itertools
 import json
 import sys
 import threading
+import os as _os
 import time
 from pathlib import Path
 
-MODEL = "claude-sonnet-4-6"
+MODEL = _os.environ.get("CODESNAP_MODEL", "claude-opus-5-5")
 # Per-image extraction is an OCR-like task — use a cheaper/faster model to cut cost.
 # Reasoning steps (classify, fix) keep MODEL. Change if this model isn't available.
 EXTRACT_MODEL = MODEL  # Sonnet for extraction: follows the verbatim/no-correct rule far better than Haiku (higher cost)
