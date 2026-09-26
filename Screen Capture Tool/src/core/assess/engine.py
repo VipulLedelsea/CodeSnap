@@ -25,7 +25,10 @@ def _components(store):
     findings = store.findings()
     comps = {}
     for aid, a in arts.items():
-        m = text_metrics(a.get("transcription") or "", a["name"], a.get("language") or "")
+        try:
+            m = text_metrics(a.get("transcription") or "", a["name"], a.get("language") or "")
+        except Exception:
+            m = {"lines": len((a.get("transcription") or "").splitlines()), "decisions": 0, "gotos": 0, "family": "other"}
         comps[aid] = {"id": aid, "name": a["name"], "artifact": a, "file": files.get(aid), "metrics": m,
                       "units": [e for e in ents.values() if owner.get(e["id"]) == aid and e["kind"] in UNIT_KINDS],
                       "findings": [], "fan_out_set": set(), "fan_in_set": set(), "writes": False, "entry": False,
@@ -120,7 +123,15 @@ def run_assessment(store, *, scan: bool = True, online: bool = False, today=None
         c["scores"] = score_component(c)
     prog = program_scores(components)
     coverage = store.coverage()
+    from core.model.health import pipeline_health
+    health = pipeline_health(store)
     facts = _facts(components)
+    facts["components"] = len(components)
+    facts["high_risk"] = 0
+    for c in components:
+        ci = comp_inputs.get(c["name"]) or {}
+        imp = max(1, min(5, int(ci.get("impact") or ci.get("criticality") or default_impact(c)[0])))
+        facts["high_risk"] += risk_level(likelihood(c["scores"])[0] * imp) in ("high", "critical")
     verdict = disposition(prog, facts, inputs.get("program") or {}) if components else None
     matrix = [[[] for _ in range(5)] for _ in range(5)]
     comp_out = []
@@ -161,7 +172,7 @@ def run_assessment(store, *, scan: bool = True, online: bool = False, today=None
         "total_risk": {"level": total_risk, "counts": {lvl: levels.count(lvl) for lvl in ("critical", "high", "medium", "low")}},
         "matrix": {"rows": "likelihood 5→1", "cols": "impact 1→5", "cells": matrix},
         "components": comp_out, "solutions": items, "roadmap": plan,
-        "confidence": confidence(coverage, components, inputs), "security": security_scan.summary(store),
+        "confidence": confidence(coverage, components, inputs, health), "health": health, "security": security_scan.summary(store),
         "facts": {k: v for k, v in facts.items() if k != "no_path"} | {"no_path": sorted(set(facts["no_path"]))},
     }
     store.set_meta("assessment", result)

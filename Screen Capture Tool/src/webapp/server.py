@@ -110,6 +110,13 @@ def api_session_start(single: bool = False, idle_stop: float | None = None, regi
         return JSONResponse({"error": f"Unknown program: {program}"}, status_code=404)
     if capture_kind not in ("code", "screen"):
         return JSONResponse({"error": "capture_kind must be code or screen"}, status_code=400)
+    if program:
+        from core.usage import program_budget
+        with _open_program(program) as store:
+            limit, spent = program_budget(store), store.usage()["cost"]
+        if limit and spent >= limit:
+            return JSONResponse({"error": f"API budget reached for this program (${spent:.2f} of ${limit:.2f}). "
+                                          f"Raise the budget to keep capturing."}, status_code=402)
     started = _session.start(single=single, idle_stop=idle_stop, region=region, project_mode=project_mode,
                              program=program, capture_kind=capture_kind)
     return {"running": _session.running(), "started": started, "single": single,
@@ -484,6 +491,27 @@ def api_program_entity_search(slug: str, q: str = "", limit: int = 25):
                             "no_pii", "pii", "hardcoded_secret", "store_type", "aliases")},
                         "file": src[0]["artifact_name"] if src else None, "relations": rels[:30]})
         return {"entities": out}
+
+
+@app.get("/api/programs/{slug}/health")
+def api_program_health(slug: str):
+    from core.model.health import pipeline_health
+    with _open_program(slug) as store:
+        return pipeline_health(store)
+
+
+@app.post("/api/programs/{slug}/budget")
+def api_program_budget(slug: str, body: dict = Body(...)):
+    try:
+        value = float(body.get("budget_usd") or 0)
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "budget must be a number"}, status_code=400)
+    if value < 0:
+        return JSONResponse({"error": "budget must be zero or more (0 = no limit)"}, status_code=400)
+    from core.model.health import pipeline_health
+    with _open_program(slug) as store:
+        store.set_meta("budget_usd", value or None)
+        return pipeline_health(store)["budget"]
 
 
 @app.get("/api/programs/{slug}/coverage")

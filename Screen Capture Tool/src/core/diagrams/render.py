@@ -258,7 +258,7 @@ def png(scene: dict, scale: float = 2.0) -> bytes:
                 tx = x + (w - tw) / 2 if b["align"] == "center" else x + S(PAD)
                 d.text((tx, ty), str(line), fill=MUTED if italic else INK, font=font)
     buf = io.BytesIO()
-    img.save(buf, "PNG", optimize=True)
+    img.save(buf, "PNG", compress_level=6)
     return buf.getvalue()
 
 

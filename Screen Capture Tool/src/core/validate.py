@@ -73,6 +73,8 @@ def _check_python(path: Path):
     try:
         ast.parse(src, filename=str(path))
         return _result(True, True, "python ast.parse")
+    except ValueError as e:
+        return _result(True, False, "python ast.parse", errors=f"ValueError: {e}")
     except SyntaxError as e:
         import re as _re
         if _re.search(r"^\s*print\s+[^(=\s]|except\s+\w+\s*,\s*\w+\s*:|^\s*exec\s+[\"']|\bur?\"|<>", src, _re.M):

@@ -72,10 +72,17 @@ def disposition(scores: dict, facts: dict, inputs: dict) -> dict:
     if P < 60 and D >= 45:
         return pick("replatform", f"Supportability {P}/100: runtime or libraries past end of life but have an upgrade path",
                     f"Code is workable (tech debt {D}/100)")
-    if S < 70 or D < 60 or H < 60:
+    legacy_share = max(facts.get("eol_share", 0), facts.get("no_path_share", 0))
+    if legacy_share >= 0.2 and facts.get("components", 1) > 1 and D >= 45:
+        return pick("replatform", f"{round(legacy_share * 100)}% of the code runs on end-of-life or dead-end technology: "
+                    + "; ".join(sorted(set((facts.get("no_path") or []) + (facts.get("eol_hard") or [])))[:3]),
+                    "Rebuild or move those components (see component dispositions); keep the rest")
+    if S < 70 or D < 60 or H < 60 or facts.get("sec_high") or facts.get("high_risk"):
         why = []
-        if S < 70:
+        if S < 70 or facts.get("sec_high"):
             why.append(f"Security {S}/100 ({facts.get('sec_high', 0)} critical/high finding(s))")
+        if facts.get("high_risk"):
+            why.append(f"{facts['high_risk']} component(s) at high or critical risk")
         if D < 60:
             why.append(f"Tech debt {D}/100")
         if H < 60:
@@ -85,7 +92,7 @@ def disposition(scores: dict, facts: dict, inputs: dict) -> dict:
                 "No critical or high security findings open" if not facts.get("sec_high") else None)
 
 
-def confidence(coverage: dict, components: list, inputs: dict) -> dict:
+def confidence(coverage: dict, components: list, inputs: dict, health: dict | None = None) -> dict:
     ratio = coverage.get("resolved_ratio")
     files = len(components)
     missing = (coverage.get("missing_counts") or {}).get("missing_code", 0)
@@ -106,6 +113,16 @@ def confidence(coverage: dict, components: list, inputs: dict) -> dict:
         notes.append(f"{unconfirmed} technology version(s) unconfirmed")
         if level == "high":
             level = "medium"
+    health = health or {}
+    rank = {"high": 2, "medium": 1, "low": 0}
+    cap = lambda lvl: lvl if rank[lvl] < rank[level] else level
+    partial, failed = health.get("partial") or [], health.get("failed") or []
+    if partial:
+        notes.append(f"{len(partial)} file(s) look partially captured: " + ", ".join(p["name"] for p in partial[:4]))
+        level = cap("low" if len(partial) >= max(2, 0.2 * max(1, files)) else "medium")
+    if failed:
+        notes.append(f"{len(failed)} file(s) could not be analysed: " + ", ".join(p["name"] for p in failed[:4]))
+        level = cap("low" if len(failed) >= max(2, 0.2 * max(1, files)) else "medium")
     if not (inputs.get("components") or {}):
         notes.append("business criticality not entered — impact uses defaults")
     return {"level": level, "resolved_ratio": ratio, "notes": notes}

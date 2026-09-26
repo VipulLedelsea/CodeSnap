@@ -639,3 +639,12 @@ body.dark .seg-opt{ color:#B6B6BE; }
 .fix-row.undone{opacity:.5;text-decoration:line-through}.fix-impact{margin:10px 0;padding:10px 12px;border-radius:8px;background:#F3F7FB;font-size:12.5px}
 .fix-impact ul{margin:4px 0 0;padding-left:18px}.sec-sev{font-size:11px;margin-left:6px}
 .fix-ask{margin:6px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px}.fix-ask input{font-size:12px;padding:4px 6px;min-width:160px}
+
+.prog-health{ margin:6px 0 10px; font-size:12.5px; }
+.prog-health .ph-line{ padding:6px 10px; border-radius:8px; border:0.5px solid var(--line); border-left:3px solid var(--line); }
+.prog-health .ph-line.ok{ border-left-color:#2E9E57; }
+.prog-health .ph-line.attention{ border-left-color:#D99A00; }
+.prog-health .ph-line.errors{ border-left-color:#C0392B; }
+.prog-health .ph-row{ padding:3px 10px; }
+.pm-cat.partial, .pm-cat.invalid{ color:#A86A00; border-color:#EBCB8B; }
+.pm-cat.failed{ color:#B42318; border-color:#F3C4BE; }

@@ -3,6 +3,8 @@ import json
 import re
 import zipfile
 
+from core import robust
+
 from .build import all_diagrams, diagram_coverage
 from .render import drawio, png, svg, vsdx
 
@@ -37,8 +39,8 @@ def save(store) -> dict:
     diagrams = all_diagrams(store)
     out = store.exports_dir / "diagrams"
     out.mkdir(parents=True, exist_ok=True)
-    (out / f"{store.info['slug']}_diagrams.vsdx").write_bytes(vsdx(diagrams, f"{store.info['name']} diagrams"))
-    (out / f"{store.info['slug']}_diagrams.drawio").write_text(drawio(diagrams))
+    robust.write_bytes(out / f"{store.info['slug']}_diagrams.vsdx", vsdx(diagrams, f"{store.info['name']} diagrams"))
+    robust.write_text(out / f"{store.info['slug']}_diagrams.drawio", drawio(diagrams))
     for d in diagrams:
-        (out / f"{_fname(d)}.svg").write_text(svg(d))
+        robust.write_text(out / f"{_fname(d)}.svg", svg(d))
     return {"dir": str(out), "diagrams": summary(diagrams), "coverage": diagram_coverage(store, diagrams)}

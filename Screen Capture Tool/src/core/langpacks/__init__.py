@@ -158,6 +158,10 @@ def parse(text: str, filename: str = "", language: str = "", skip_llm_first: boo
     out = parse_with(pack, text, filename)
     if pack["id"] == "vb6":
         _vb6_forms(text, out)
+    if pack["id"] == "delphi":
+        _pascal_uses(text, out)
+    if pack["id"] == "natural":
+        _natural_views(text, out)
     if pack["id"] in ("powershell", "batch"):
         local = {e["name"].lower() for e in out["entities"]}
         out["relations"] = [r for r in out["relations"] if r["kind"] != "calls" or ":" not in r["target"]
@@ -174,6 +178,32 @@ def parse(text: str, filename: str = "", language: str = "", skip_llm_first: boo
         pass
     out["lang"] = pack["id"]
     return out
+
+
+def _pascal_uses(text, out):
+    body = re.sub(r"\{[^}]*\}|\(\*.*?\*\)|//[^\n]*", " ", text or "", flags=re.S)
+    container = out["entities"][0]["name"]
+    have = {r["target"] for r in out["relations"] if r["kind"] == "includes"}
+    for m in re.finditer(r"\buses\b(.*?);", body, re.I | re.S):
+        line = (text or "")[: m.start()].count("\n") + 1
+        for name in re.findall(r"[A-Za-z_][\w.]*", re.sub(r"\bin\s+'[^']*'", "", m.group(1))):
+            if f"module:{name}" not in have:
+                have.add(f"module:{name}")
+                out["relations"].append({"kind": "includes", "source": container, "target": f"module:{name}", "target_kind": None,
+                                         "line": line, "attrs": {}})
+
+
+def _natural_views(text, out):
+    views = {m.group(1).upper(): m.group(2).upper()
+             for m in re.finditer(r"^\s*(?:\d{4}\s+)?\d\s+([\w#-]+)\s+VIEW\s+OF\s+([\w-]+)", text or "", re.M | re.I)}
+    if not views:
+        return
+    for r in out["relations"]:
+        t = r["target"]
+        if t.startswith("data_store:") and t.split(":", 1)[1].upper() in views:
+            r["target"] = "data_store:" + views[t.split(":", 1)[1].upper()]
+            r["attrs"] = {**(r.get("attrs") or {}), "view": t.split(":", 1)[1]}
+    out["entities"] = [e for e in out["entities"] if not (e["kind"] == "data_store" and e["name"].upper() in views)]
 
 
 def _vb6_forms(text, out):

@@ -296,6 +296,7 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
                                  ("Missing code references", str(len(missing))),
                                  ("External resources", str((cov.get("missing_counts") or {}).get("external", 0)))]},
         {"type": "bullets", "items": a["confidence"]["notes"]},
+        *_health_blocks(a.get("health") or {}),
         {"type": "h", "text": "Referenced but not captured"},
         {"type": "bullets", "items": [f"{m['kind']} {m['name']} — used by "
                                       + ", ".join(sorted({r.get('artifact') or r['name'] for r in m['referenced_by']})[:3])
@@ -317,3 +318,13 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
     ]})
     return {"program": name, "slug": store.info["slug"], "client": client, "prepared_by": prepared_by,
             "date": (today or date.today()).strftime("%B %d, %Y"), "verdict": v, "assessment": a, "sections": sections}
+
+
+def _health_blocks(h: dict) -> list:
+    rows = [[p["name"], "Partially captured", "; ".join(p["reasons"])[:220]] for p in h.get("partial") or []]
+    rows += [[p["name"], "Not analysed", p["reason"]] for p in h.get("failed") or []]
+    rows += [[p["name"], f"Syntax check failed ({p['tool']})", p["error"]] for p in h.get("invalid") or []]
+    if not rows:
+        return []
+    return [{"type": "h", "text": "Files to recapture or review"},
+            {"type": "table", "head": ["File", "Issue", "Detail"], "rows": rows[:60], "small": True}]

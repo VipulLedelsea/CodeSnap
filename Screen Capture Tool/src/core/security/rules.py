@@ -144,7 +144,7 @@ def mask_snippet(line: str) -> str:
 
 LINE_RULES = [
     ("SEC-CRED", {"cs", "java", "cpp", "js", "vb", "web"} | PACK_IDS, "high",
-     r'''(?<![\w.])\w*(password|passwd|pwd|secret|apikey|api_key|accesskey|access_key)\w*\s*(=|:|==|\.Equals\()\s*@?["'][^"'\s]{3,}["']''',
+     r'''(?<![\w.])\w{0,40}?(password|passwd|pwd|secret|apikey|api_key|accesskey|access_key)\w{0,40}\s*(=|:|==|\.Equals\()\s*@?["'][^"'\s]{3,}["']''',
      "credential literal in code"),
     ("SEC-CRED", {"cobol"}, "high", r"(PASSWORD|PASSWD|PWD)[\w-]*\s+PIC\s+\S+\s+VALUE\s+['\"][^'\"]{2,}['\"]",
      "password stored in a VALUE clause"),
@@ -195,7 +195,7 @@ LINE_RULES = [
      "SQL text concatenated with & (VB / VBScript)"),
     ("SEC-SQLI", VB_LIKE, "high", r'''(SELECT|INSERT|UPDATE|DELETE|WHERE)\b[^"\n]*"\s*&\s*Request(\.(Form|QueryString))?\s*\(''',
      "request value concatenated into SQL"),
-    ("SEC-CMD", VB_LIKE, "high", r"\bShell\s*\(?\s*[^\"\n]*&|\.Run\b\s*\(?\s*[^\n]*&\s*\w|\.Exec\s*\([^)]*&", "OS command built by concatenation"),
+    ("SEC-CMD", VB_LIKE, "high", r"\bShell\b\s*\(?[^\n]*&\s*[A-Za-z_(]|\.Run\b\s*\(?\s*[^\n]*&\s*\w|\.Exec\s*\([^)]*&", "OS command built by concatenation"),
     ("SEC-CMD", {"vbscript", "web"}, "medium", r"(?<![.\w])(Execute|ExecuteGlobal|Eval)\s*\(?\s*(?!\")[A-Za-z_]", "VBScript Execute/Eval of a runtime string"),
     ("SEC-XSS", VB_LIKE, "high", r"Response\.Write\b[^\n]*&\s*Request\s*(\.|\()", "request value written straight to the response"),
     ("SEC-SQLI", {"php"}, "high", r"\b(mysql_query|mysqli_query|pg_query|mssql_query|odbc_exec|->query|->exec)\s*\([^;]*\$_(GET|POST|REQUEST|COOKIE)",
@@ -220,7 +220,7 @@ LINE_RULES = [
     ("SEC-CMD", {"shell"}, "medium", r"(^|[;&|]\s*)eval\s", "eval of a constructed command"),
     ("SEC-CRED", {"shell", "batch", "powershell"}, "high",
      r"\b(sqlplus|isql|sqlcmd|osql|bcp|mysql|db2)\b[^|\n]*(\s-P\s*\S+|\s-p\S+|\s\w+/\S+@\w+)", "database password on the command line"),
-    ("SEC-CRED", {"batch"}, "high", r"(?i)net\s+use\s+\S+\s+\S+\s+/user:", "share password in a batch file"),
+    ("SEC-CRED", {"batch"}, "high", r"(?i)net\s+use\s+(?:[A-Z*]:\s+)?\\\\\S+\s+(?!/)\S+(?:\s|$)", "share password in a batch file"),
     ("SEC-TLS", {"shell", "batch", "perl", "python", "rexx", "clist"}, "medium", r"(?<![\w-])(ftp|telnet)(\s|$|\.exe|\s+-)|Net::FTP|ftplib",
      "plain FTP / Telnet transfer"),
     ("SEC-CMD", {"powershell"}, "medium", r"\b(Invoke-Expression|iex)\b", "Invoke-Expression of a constructed string"),
@@ -305,6 +305,16 @@ def _sql_concat(lines: list, fam: str) -> list:
     return hits
 
 
+MAX_LINE = 2000
+
+
+def _windows(line: str) -> list:
+    if len(line) <= MAX_LINE:
+        return [line]
+    step = MAX_LINE - 200
+    return [line[i:i + MAX_LINE] for i in range(0, len(line), step)]
+
+
 def scan_text(text: str, filename: str, language: str = "") -> list:
     fam = family(filename, language, text)
     raw = (text or "").splitlines()
@@ -323,10 +333,11 @@ def scan_text(text: str, filename: str, language: str = "") -> list:
     for n, line in enumerate(lines, 1):
         if not line.strip():
             continue
+        windows = _windows(line)
         for rid, fams, sev, rx, desc in _COMPILED:
-            if fam in fams and rx.search(line):
+            if fam in fams and any(rx.search(w) for w in windows):
                 add(rid, sev, n, desc)
-    for n, reason in _sql_concat(lines, fam):
+    for n, reason in _sql_concat([l if len(l) <= MAX_LINE else l[:MAX_LINE] for l in lines], fam):
         add("SEC-SQLI", "high", n, reason)
     return out
 

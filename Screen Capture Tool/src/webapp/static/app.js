@@ -804,6 +804,36 @@ async function loadPrograms(select) {
   await loadProgram();
 }
 function _stat(n, label) { return `<div class="prog-stat"><b>${n}</b><span>${label}</span></div>`; }
+async function loadHealth() {
+  const box = $("progHealth");
+  let h;
+  try { h = await _json("/api/programs/" + encodeURIComponent(_program) + "/health"); }
+  catch (e) { box.innerHTML = ""; return; }
+  const b = h.budget || {};
+  const budget = b.limit ? `API budget: <b>$${b.spent.toFixed(2)}</b> of $${b.limit.toFixed(2)}${b.remaining <= 0 ? " — <b>reached</b>" : ""}`
+    : `API spend: <b>$${(b.spent || 0).toFixed(2)}</b> · no budget set`;
+  const rows = [
+    ...h.failed.map(f => ["failed", f.name, f.reason]),
+    ...h.partial.map(f => ["partial", f.name, f.reasons.join("; ")]),
+    ...h.invalid.map(f => ["invalid", f.name, `${f.tool}: ${f.error}`]),
+  ];
+  const label = { failed: "not analysed", partial: "partial capture", invalid: "syntax check failed" };
+  const api = h.api.failures ? ` · ${h.api.failures} API error(s)${h.api.fallbacks ? `, ${h.api.fallbacks} recovered by local parser` : ""}` : "";
+  box.innerHTML = `<div class="ph-line ${_attr(h.status)}"><b>Pipeline:</b> ${rows.length ? new Set(rows.map(r => r[1])).size + " file(s) need attention" : "all " + h.files + " files analysed"}${api} · ${budget}
+      <button class="btn-link" id="progBudgetEdit" type="button">set budget</button></div>` +
+    rows.map(r => `<div class="ph-row"><span class="pm-cat ${_attr(r[0])}">${label[r[0]]}</span> <b>${escapeHtml(r[1])}</b> <small>${escapeHtml(r[2])}</small></div>`).join("");
+  $("progBudgetEdit").addEventListener("click", () => {
+    inlineAsk(box, [{ name: "v", label: "API budget for this program, USD (0 = no limit)", value: String(b.limit || "") }]).then(async res => {
+      if (!res) return;
+      const n = parseFloat(res.v || "0");
+      if (isNaN(n) || n < 0) { toast("Enter a number, e.g. 25"); return; }
+      try { await _json("/api/programs/" + encodeURIComponent(_program) + "/budget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ budget_usd: n }) }); }
+      catch (e) { toast(e.message); return; }
+      loadHealth();
+    });
+  });
+}
+
 async function loadProgram() {
   const body = $("progBody");
   if (!_program) { body.style.display = "none"; $("progSub").textContent = "Pick a program to build its model across captures, or capture single files."; return; }
@@ -830,6 +860,7 @@ async function loadProgram() {
       </summary>
       <div class="pf-detail"></div>
     </details>`).join("") : `<p class="project-hint" style="margin:0">No files yet — start a capture.</p>`;
+  loadHealth();
   document.querySelectorAll("#progFiles .prog-file").forEach(el =>
     el.addEventListener("toggle", () => { if (el.open) loadArtifact(el); }));
   const mc = c.missing_counts || {};

@@ -1,6 +1,8 @@
 import hashlib
 import json
 import shutil
+
+from core import robust
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -146,7 +148,7 @@ class ProgramStore:
             ).lastrowid
 
     def add_evidence(self, src, session_id: int | None = None, phash: str | None = None, ext: str = "png") -> int:
-        data = src if isinstance(src, (bytes, bytearray)) else Path(src).read_bytes()
+        data = src if isinstance(src, (bytes, bytearray)) else robust.read_bytes(src)
         if not isinstance(src, (bytes, bytearray)):
             ext = Path(src).suffix.lstrip(".") or ext
         digest = hashlib.sha256(data).hexdigest()
@@ -155,9 +157,9 @@ class ProgramStore:
             return existing["id"]
         dest = self.evidence_dir / f"{digest}.{ext}"
         if isinstance(src, (bytes, bytearray)):
-            dest.write_bytes(data)
+            robust.write_bytes(dest, data)
         else:
-            shutil.copyfile(src, dest)
+            robust.copyfile(src, dest)
         width, height = _image_size(dest)
         with self.transaction() as db:
             return db.execute(

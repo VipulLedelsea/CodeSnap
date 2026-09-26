@@ -5,7 +5,7 @@ from core.langs.structure import connection_target, mask_connection
 from core.security.rules import SQL_WORDS
 
 SQL_READ = re.compile(r"\b(?:FROM|JOIN)\s+([A-Z_#@$\[][\w#@$\].]*)", re.I)
-SQL_WRITE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE\s+TABLE)\s+([A-Z_#@$\[][\w#@$\].]*)", re.I)
+SQL_WRITE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE\s+TABLE|CREATE\s+TABLE(?=\s+[\w#@$.\[\]]+\s+AS\b))\s+([A-Z_#@$\[][\w#@$\].]*)", re.I)
 SQL_SKIP = {"DUAL", "SYSIBM.SYSDUMMY1", "SELECT", "WHERE", "SET", "VALUES", "TABLE", "(", "LATERAL", "UNNEST"}
 CONN = re.compile(r"(Data Source|Server|Initial Catalog|Database|Provider|DSN|Driver|Uid|User ID)\s*=|jdbc:[a-z0-9]+:", re.I)
 
@@ -104,6 +104,31 @@ def parse_with(pack, text: str, filename: str = "") -> dict:
                 end = _unit_end(lines, n, pack, kind)
                 units.append({"kind": kind, "name": name, "start": n, "end": end})
                 break
+    for rx in pack.get("screen_defs", []):
+        for n, line in enumerate(lines, 1):
+            m = re.search(rx, line, flags)
+            if m and ("screen", m.group("name")) not in seen_ent:
+                seen_ent.add(("screen", m.group("name")))
+                entities.append(entity("screen", m.group("name"), None, n, None, technology=pack["label"]))
+    scope = pack.get("unit_scope")
+    for u in units:
+        if u["end"] is None and scope == "brace":
+            depth, opened = 0, False
+            for j in range(u["start"] - 1, len(lines)):
+                depth += lines[j].count("{") - lines[j].count("}")
+                opened = opened or "{" in lines[j]
+                if opened and depth <= 0:
+                    u["end"] = j + 1
+                    break
+        elif u["end"] is None and scope == "indent":
+            base = len(lines[u["start"] - 1]) - len(lines[u["start"] - 1].lstrip())
+            end = u["start"]
+            for j in range(u["start"], len(lines)):
+                if lines[j].strip():
+                    if len(lines[j]) - len(lines[j].lstrip()) <= base:
+                        break
+                    end = j + 1
+            u["end"] = end
     for i, u in enumerate(units):
         if u["end"] is None:
             nxt = next((v["start"] - 1 for v in units[i + 1:] if v["kind"] == u["kind"] or v["kind"] in ("function", "class")), None)
@@ -159,6 +184,20 @@ def parse_with(pack, text: str, filename: str = "") -> dict:
                 fields += 1
                 entities.append(entity("field", m.group("name"), src if src != container else container, n, n,
                                        type=(m.groupdict().get("type") or None)))
+    local = pack.get("local_calls")
+    if local and units:
+        names = {u["name"] for u in units if u["kind"] in ("function", "paragraph")}
+        starts = {u["start"] for u in units}
+        for n, line in enumerate(lines, 1):
+            if n in starts:
+                continue
+            for name in names:
+                if local == "paren":
+                    hit = re.search(rf"(?<![\w$>.:-]){re.escape(name)}\s*\(", line)
+                else:
+                    hit = re.match(rf"^\s*{re.escape(name)}(\s|$|;)", line)
+                if hit and owner(n) != name:
+                    relations.append(rel("calls", owner(n), f"function:{name}", n))
     sql_text = []
     for rx in pack.get("sql_blocks", []):
         joined = "\n".join(lines)

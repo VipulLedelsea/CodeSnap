@@ -72,10 +72,43 @@ def step_for(system) -> str:
     return "other"
 
 
+class BudgetExceeded(RuntimeError):
+    pass
+
+
+class Budget:
+    """Per-program API spend cap. `spent` is what the program had already spent when the budget was attached."""
+
+    def __init__(self, limit: float, spent: float = 0.0, warn_at: float = 0.8, on_warn=None):
+        self.limit, self.base, self.warn_at, self.on_warn = float(limit), float(spent or 0), warn_at, on_warn
+        self.warned = False
+
+    def check(self, tracker):
+        total = self.base + tracker.total_cost
+        if total >= self.limit:
+            raise BudgetExceeded(f"API budget reached: ${total:.2f} of ${self.limit:.2f} spent on this program. "
+                                 f"Raise the budget in the program settings to continue.")
+        if not self.warned and total >= self.warn_at * self.limit:
+            self.warned = True
+            if self.on_warn:
+                self.on_warn(total, self.limit)
+
+
+def program_budget(store):
+    import os
+    limit = store.get_meta("budget_usd")
+    if limit in (None, "", 0):
+        env = os.environ.get("CODESNAP_PROGRAM_BUDGET_USD")
+        limit = float(env) if env else None
+    return float(limit) if limit else None
+
+
 class UsageTracker:
     def __init__(self):
         self._lock = threading.Lock()
         self._records = []
+        self.total_cost = 0.0
+        self.budget = None
         self._local = threading.local()
         self.default_bucket = None
 
@@ -97,6 +130,7 @@ class UsageTracker:
                "ok": ok, "error": error}
         with self._lock:
             self._records.append(rec)
+            self.total_cost += rec["cost"] or 0
         return rec
 
     def take(self, bucket=None, everything=False):
@@ -135,6 +169,8 @@ class _TrackedMessages:
         self._tracker = tracker
 
     def create(self, **kwargs):
+        if self._tracker.budget is not None:
+            self._tracker.budget.check(self._tracker)
         began = time.monotonic()
         step = step_for(kwargs.get("system"))
         try:

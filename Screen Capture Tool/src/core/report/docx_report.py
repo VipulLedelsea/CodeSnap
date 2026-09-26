@@ -69,7 +69,10 @@ def _diagram(doc, d, width):
     scale = 2.0 if d["width"] < 2400 else 1.4
     max_h = 6.3
     w_in = min(width, d["width"] / 96, max_h * d["width"] / max(d["height"], 1))
-    doc.add_picture(io.BytesIO(png(d, scale=scale)), width=Inches(w_in))
+    try:
+        doc.add_picture(io.BytesIO(png(d, scale=scale)), width=Inches(w_in))
+    except Exception as exc:
+        _runs(doc.add_paragraph(), f"*Diagram could not be rendered ({type(exc).__name__}); see the Visio file.*", 9, MUTED)
     cap = doc.add_paragraph()
     _runs(cap, f"**{d['title']}.** {DIAGRAM_NOTES.get(d['kind'], '')}", 8, MUTED)
 

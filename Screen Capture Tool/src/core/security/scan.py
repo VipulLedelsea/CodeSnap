@@ -145,7 +145,13 @@ def _code(store, ctx, sensitive_artifacts, has_pii):
         if art["id"] not in getattr(ctx, "no_pii_arts", set()) and text_has_student_data(
                 code_lines(text, family(art["name"], art.get("language") or "", text))):
             sensitive_artifacts.add(art["id"])
-        for h in scan_text(text, art["name"], art.get("language") or ""):
+        try:
+            found = scan_text(text, art["name"], art.get("language") or "")
+        except Exception as exc:
+            store.log_run("security_scan", artifact_id=art["id"], prompt_version="security-v1", ok=False,
+                          error=f"code rules failed on {art['name']}: {type(exc).__name__}: {exc}")
+            found = []
+        for h in found:
             hits.append({**h, "artifact_id": art["id"]})
     seen = {(h["artifact_id"], h["line"], h["rule"]) for h in hits}
     for ent in store.entities("config_item"):

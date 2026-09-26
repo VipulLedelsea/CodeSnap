@@ -84,6 +84,22 @@ def _phash(data: bytes):
         return None
 
 
+def attach_budget(tracker, slug):
+    from core import status
+    from core.model import ProgramStore
+    from core.usage import Budget, program_budget
+    try:
+        with ProgramStore.open(slug) as store:
+            limit, spent = program_budget(store), store.usage()["cost"]
+    except Exception:
+        return None
+    if not limit:
+        return None
+    tracker.budget = Budget(limit, spent, on_warn=lambda t, l: status.publish(
+        f"API spend for this program is ${t:.2f} of the ${l:.2f} budget", "info"))
+    return tracker.budget
+
+
 class App:
     """Run state + API client + background reader pool."""
 
@@ -688,6 +704,8 @@ def main() -> int:
     app.project_mode = args.project_mode or bool(args.program)
     app.program = args.program
     app.capture_kind = args.capture_kind
+    if app.program:
+        attach_budget(app.tracker, app.program)
     if args.region:
         try:
             app.region = tuple(float(x) for x in args.region.split(","))

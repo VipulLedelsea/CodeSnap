@@ -21,6 +21,7 @@ import os as _os
 import time
 from pathlib import Path
 
+from core import robust as _robust
 from core.langpacks.formats import PROMPT_CLAUSE as _LEGACY_FORMAT_CLAUSE
 
 MODEL = _os.environ.get("CODESNAP_MODEL", "claude-opus-5-5")
@@ -119,7 +120,7 @@ def _spinner(stop_event: threading.Event) -> None:
 def analyse_images(client, image_paths: list) -> dict:
     content = []
     for path in image_paths:
-        b64 = base64.standard_b64encode(path.read_bytes()).decode()
+        b64 = base64.standard_b64encode(_robust.read_bytes(path)).decode()
         content.append({
             "type": "image",
             "source": {"type": "base64", "media_type": _media_type(path), "data": b64},
@@ -309,7 +310,7 @@ def extract_structured_indent(client, path: Path) -> dict:
     """Experimental (#2b): indent-aware extraction \u2014 the model reports leading-space
     COUNTS per line instead of reproducing indentation by feel. A/B this against
     extract_structured() on the fidelity eval before adopting."""
-    b64 = base64.standard_b64encode(path.read_bytes()).decode()
+    b64 = base64.standard_b64encode(_robust.read_bytes(path)).decode()
     msg = client.messages.create(
         model=EXTRACT_MODEL,
         max_tokens=4096,
@@ -331,7 +332,7 @@ def extract_structured(client, path: Path) -> dict:
     urge to 'fix' broken code somewhere to go \u2014 so raw stays faithful. raw is what the
     compiler checks; corrections is an advisory second signal for the report.
     """
-    b64 = base64.standard_b64encode(path.read_bytes()).decode()
+    b64 = base64.standard_b64encode(_robust.read_bytes(path)).decode()
     msg = client.messages.create(
         model=EXTRACT_MODEL,
         max_tokens=4096,
@@ -348,7 +349,7 @@ def extract_structured(client, path: Path) -> dict:
 def extract_legacy(client, path: Path) -> str:
     """Pre-#2 extraction: the old text-only prompt (no JSON, no corrections outlet).
     Kept ONLY so the fidelity eval can measure a true before/after against #2."""
-    b64 = base64.standard_b64encode(path.read_bytes()).decode()
+    b64 = base64.standard_b64encode(_robust.read_bytes(path)).decode()
     msg = client.messages.create(
         model=EXTRACT_MODEL,
         max_tokens=4096,
@@ -687,7 +688,7 @@ def analyse_incremental(client, image_paths: list, cache_dir: Path = None) -> di
     parts = []
     n = len(image_paths)
     for i, path in enumerate(image_paths, 1):
-        data = path.read_bytes()
+        data = _robust.read_bytes(path)
         digest = hashlib.sha256(data).hexdigest()
         cache_file = (cache_dir / f"{digest}.md") if cache_dir is not None else None
 
@@ -728,7 +729,7 @@ def analyse_incremental(client, image_paths: list, cache_dir: Path = None) -> di
 
 def cache_path_for(path: Path, cache_dir: Path) -> Path:
     """Content-addressed cache location for an image's extracted text."""
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256(_robust.read_bytes(path)).hexdigest()
     return cache_dir / f"{digest}.md"
 
 
@@ -882,7 +883,7 @@ def review_indentation(client, image_paths, language: str = "") -> list:
     for p in imgs:
         try:
             p = Path(p)
-            b64 = base64.standard_b64encode(p.read_bytes()).decode()
+            b64 = base64.standard_b64encode(_robust.read_bytes(p)).decode()
             content.append({"type": "image", "source": {"type": "base64",
                             "media_type": _media_type(p), "data": b64}})
         except Exception:  # noqa: BLE001

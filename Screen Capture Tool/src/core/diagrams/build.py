@@ -51,7 +51,7 @@ class _Model:
 
 
 def context(store) -> dict:
-    m = _Model(store)
+    m = _model(store)
     name = store.info["name"]
     kinds = {}
     for e in m.ents.values():
@@ -104,7 +104,7 @@ def context(store) -> dict:
 
 
 def components(store) -> dict:
-    m = _Model(store)
+    m = _model(store)
     nodes, edges, agg = {}, [], {}
     for aid, a in m.arts.items():
         nodes[f"a{aid}"] = {"id": f"a{aid}", "title": a["name"], "stereotype": a.get("language") or a.get("artifact_type"),
@@ -196,7 +196,7 @@ def _class_node(m, e, full=False):
 
 
 def classes(store, artifact_id=None) -> dict:
-    m = _Model(store)
+    m = _model(store)
     chosen = {e["id"] for e in m.ents.values() if e["kind"] in CLASS_KINDS
               and (artifact_id is None or m.in_file(e["id"], artifact_id))}
     edges, agg = [], {}
@@ -242,7 +242,7 @@ def classes(store, artifact_id=None) -> dict:
 
 
 def data_model(store) -> dict:
-    m = _Model(store)
+    m = _model(store)
     tables = [e for e in m.ents.values() if e["kind"] == "table"]
     nodes, edges, seen = [], [], set()
     for t in sorted(tables, key=lambda t: t["name"]):
@@ -305,17 +305,32 @@ def interactions(store, limit=40) -> list:
     return out
 
 
+def _model(store):
+    return getattr(store, "_diagram_model", None) or _Model(store)
+
+
 def all_diagrams(store, per_file=True) -> list:
+    store._diagram_model = _Model(store)
+    try:
+        return _all_diagrams(store, per_file)
+    finally:
+        store._diagram_model = None
+
+
+def _all_diagrams(store, per_file=True) -> list:
     out = [architecture(store), context(store), components(store), classes(store)]
     if any(e["kind"] == "table" for e in store.entities("table")):
         out.append(data_model(store))
     if per_file:
-        m = _Model(store)
+        m = _model(store)
         for aid, a in m.arts.items():
             n = sum(1 for e in m.ents.values() if m.in_file(e["id"], aid) and (
                 e["kind"] in CLASS_KINDS or (e["kind"] == "function" and m.top(e["id"]) is None)))
             if n >= 1:
-                out.append(classes(store, aid))
+                try:
+                    out.append(classes(store, aid))
+                except Exception:
+                    continue
     uf = user_flow(store)
     if uf and uf["nodes"]:
         out.append(uf)
@@ -380,7 +395,7 @@ def _icon(key):
 def architecture(store) -> dict:
     from core.security.rules import family
     from core.security.scan import summary as sec_summary, technologies
-    m = _Model(store)
+    m = _model(store)
     name = store.info["name"]
     assessment = store.get_meta("assessment") or {}
     risk = {c["artifact_id"]: c["risk"]["level"] for c in assessment.get("components") or []}
@@ -585,7 +600,7 @@ def architecture(store) -> dict:
 
 def user_flow(store) -> dict | None:
     from core.uireview.flows import canonical_screens, journeys
-    m = _Model(store)
+    m = _model(store)
     canon = canonical_screens(store, m.ents, m.rels)
     fl = journeys(store)
     by_name = {}

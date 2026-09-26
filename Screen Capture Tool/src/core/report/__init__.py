@@ -1,6 +1,7 @@
 import io
 import zipfile
 
+from core import robust
 from core.diagrams import all_diagrams, drawio, vsdx
 
 from . import docx_report, html
@@ -37,7 +38,7 @@ def package(store, **kw) -> dict:
     out = store.exports_dir / "report"
     out.mkdir(parents=True, exist_ok=True)
     for name, data in files.items():
-        (out / name).write_bytes(data)
+        robust.write_bytes(out / name, data)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for name, data in files.items():
