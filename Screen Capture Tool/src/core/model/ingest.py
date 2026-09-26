@@ -81,7 +81,7 @@ def apply_structure(store, artifact_id: int, structure: dict, filename: str, tot
         from_id = local.get(source) or local.get(source.split(".")[-1]) or file_id
         to_id = local.get(target) or target
         store.add_relation(kind, from_id, to_id, artifact_id=artifact_id, line=item.get("line"),
-                           target_kind=target_kind)
+                           target_kind=target_kind, attrs=item.get("attrs") or None)
         relations += 1
     return {"entities": created, "relations": relations}
 
@@ -94,6 +94,13 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
         return {"entities": 0, "relations": 0, "skipped": True}
     store.clear_artifact(artifact_id)
     code = artifact["transcription"]
+    parsed = _parse_deterministic(code, artifact)
+    if parsed is not None:
+        counts = apply_structure(store, artifact_id, parsed["structure"], artifact["name"], len(code.splitlines()))
+        store.log_run("structure", artifact_id=artifact_id, model=parsed["parser"], prompt_version=parsed["parser"],
+                      input_tokens=0, output_tokens=0, ms=parsed["ms"])
+        store.set_status(artifact_id, "structured")
+        return {**counts, "parser": parsed["parser"]}
     try:
         structure = extract_structure(client, code, filename=artifact["name"], language=artifact["language"])
     except Exception as exc:
@@ -109,6 +116,19 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
     counts = apply_structure(store, artifact_id, structure, artifact["name"], len(code.splitlines()))
     store.set_status(artifact_id, "structured")
     return counts
+
+
+def _parse_deterministic(code: str, artifact: dict):
+    import time
+    from core.cobol.parser import PARSER_VERSION, parse
+    began = time.monotonic()
+    try:
+        structure = parse(code, artifact["name"], artifact.get("language") or "")
+    except Exception:
+        return None
+    if structure is None:
+        return None
+    return {"structure": structure, "parser": PARSER_VERSION, "ms": int((time.monotonic() - began) * 1000)}
 
 
 def ingest_capture(store, client, images, report: dict, *, session_id: int | None = None,
