@@ -9,6 +9,8 @@ from .kinds import ENTITY_KINDS, RELATION_KINDS
 
 STRUCTURED_TYPES = {"code", "sql", "db_schema", "config", "api", "job", "web", "ui_screen"}
 TYPE_BY_EXTENSION = {"bms": "ui_screen", "jcl": "job", "sql": "sql", "ddl": "db_schema", "config": "config",
+                     "html": "web", "htm": "web", "aspx": "web", "ascx": "web", "asp": "web", "jsp": "web",
+                     "jspx": "web", "xhtml": "web", "cshtml": "web", "wsdl": "api", "sps": "job",
                      "xml": "config", "properties": "config", "ini": "config", "cfg": "config", "conf": "config",
                      "json": "config", "yaml": "config", "yml": "config", "env": "config"}
 
@@ -130,8 +132,12 @@ def _parse_deterministic(code: str, artifact: dict):
     from core.extractors import PARSER_VERSION as EXTRACTORS_VERSION, parse_artifact
     from core.langs.structure import PARSER_VERSION as TS_VERSION, parse_source
     began = time.monotonic()
-    for version, fn in ((COBOL_VERSION, parse_cobol_family), (TS_VERSION, parse_source),
-                        (EXTRACTORS_VERSION, parse_artifact)):
+    atype = artifact.get("artifact_type") or ""
+    extractors = (EXTRACTORS_VERSION, lambda c, n, l: parse_artifact(c, n, l, atype))
+    chain = [(COBOL_VERSION, parse_cobol_family), (TS_VERSION, parse_source), extractors]
+    if atype in ("sql", "db_schema", "config", "api", "web", "ui_screen") or code.lstrip().startswith("{\n  \"codesnap_ui_screen\""):
+        chain = [extractors] + chain[:2]
+    for version, fn in chain:
         try:
             structure = fn(code, artifact["name"], artifact.get("language") or "")
         except Exception:

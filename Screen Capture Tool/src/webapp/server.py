@@ -105,14 +105,16 @@ def api_pending_download(name: str):
 
 @app.post("/api/session/start")
 def api_session_start(single: bool = False, idle_stop: float | None = None, region: str | None = None,
-                      project_mode: bool = False, program: str | None = None):
+                      project_mode: bool = False, program: str | None = None, capture_kind: str = "code"):
     if program and not _program_exists(program):
         return JSONResponse({"error": f"Unknown program: {program}"}, status_code=404)
+    if capture_kind not in ("code", "screen"):
+        return JSONResponse({"error": "capture_kind must be code or screen"}, status_code=400)
     started = _session.start(single=single, idle_stop=idle_stop, region=region, project_mode=project_mode,
-                             program=program)
+                             program=program, capture_kind=capture_kind)
     return {"running": _session.running(), "started": started, "single": single,
             "idle_stop": idle_stop, "region": region, "project_mode": project_mode or bool(program),
-            "program": program}
+            "program": program, "capture_kind": capture_kind}
 
 
 def _program_exists(slug: str) -> bool:
@@ -201,6 +203,34 @@ def api_program_artifact_rename(slug: str, artifact_id: int, payload: dict = Bod
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
         return {"ok": True, "artifact": _artifact_summary(store, store.artifact(artifact_id))}
+
+
+@app.post("/api/programs/{slug}/artifacts/{artifact_id}/type")
+def api_program_artifact_type(slug: str, artifact_id: int, payload: dict = Body(...)):
+    from core.model import ARTIFACT_TYPES, ingest_artifact
+    atype = str((payload or {}).get("artifact_type", ""))
+    if atype not in ARTIFACT_TYPES:
+        return JSONResponse({"error": f"Unknown type: {atype}"}, status_code=400)
+    with _open_program(slug) as store:
+        if store.artifact(artifact_id) is None:
+            raise HTTPException(status_code=404, detail="No such file in this program.")
+        store.set_artifact_type(artifact_id, atype)
+        try:
+            counts = ingest_artifact(store, _LazyClient(), artifact_id)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"Re-extraction failed: {exc}"}, status_code=500)
+        return {"ok": True, **counts, "artifact": _artifact_summary(store, store.artifact(artifact_id))}
+
+
+class _LazyClient:
+    def __init__(self):
+        self._client = None
+
+    @property
+    def messages(self):
+        if self._client is None:
+            self._client = _client()
+        return self._client.messages
 
 
 @app.post("/api/programs/{slug}/artifacts/{artifact_id}/reextract")

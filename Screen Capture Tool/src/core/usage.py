@@ -49,8 +49,9 @@ def _step_table():
             from core.cobol.columns import COLUMN_REVIEW_SYSTEM
             from core.model.extract import STRUCTURE_SYSTEM
             from core.project import PROJECT_SYSTEM
+            from core.extractors.ui import UI_SYSTEM
             table += [(COLUMN_REVIEW_SYSTEM, "column_review"), (STRUCTURE_SYSTEM, "structure"),
-                      (PROJECT_SYSTEM, "project_map")]
+                      (PROJECT_SYSTEM, "project_map"), (UI_SYSTEM, "ui_screen")]
         except Exception:
             pass
         _STEPS = {text: name for text, name in table if isinstance(text, str)}

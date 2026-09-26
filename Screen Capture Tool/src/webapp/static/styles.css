@@ -586,3 +586,7 @@ body.dark .seg-opt{ color:#B6B6BE; }
 .prog-cost b{ color:var(--text); font-weight:600; }
 .pf-profile{ font-size:12.5px; color:var(--muted); line-height:1.6; }
 .pf-profile b{ color:var(--text); font-weight:600; }
+.kind-row{ display:flex; align-items:center; gap:12px; margin-top:14px; flex-wrap:wrap; }
+.kind-label{ font-size:13px; color:var(--muted); }
+.pf-type{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted); }
+.pf-type select{ padding:4px 8px; border:0.5px solid var(--line); border-radius:8px; font-size:12.5px; background:var(--panel); color:var(--text); }

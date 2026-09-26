@@ -231,6 +231,12 @@ class ProgramStore:
             (artifact_id,),
         )
 
+    def set_artifact_type(self, artifact_id: int, artifact_type: str):
+        check_kind(artifact_type, ARTIFACT_TYPES, "artifact type")
+        with self.transaction() as db:
+            db.execute("UPDATE artifact SET artifact_type = ?, updated = ? WHERE id = ?",
+                       (artifact_type, _now(), artifact_id))
+
     def set_status(self, artifact_id: int, status: str):
         check_kind(status, ARTIFACT_STATUSES, "artifact status")
         with self.transaction() as db:

@@ -103,6 +103,7 @@ class App:
         self.region = None                        # (L,T,W,H) fractions to capture only the code area; None = full screen
         self.project_mode = False                 # project mode: capture many files back-to-back (analysis runs in the background)
         self.program = None
+        self.capture_kind = "code"
         self._analysing = False                   # True while a capture is being analysed (single-file gate)
         self.team_mode = True                     # DEFAULT: multi-agent team (A2A). --single flips to backup single-agent.
         self._ready_event = threading.Event()     # set by Cmd+Shift+7 to advance an owned session
@@ -275,12 +276,15 @@ class App:
             audit = []
             goal = (f"There are {len(imgs)} screenshots of one scrolled document/code, in order "
                     f"(consecutive shots overlap). Produce the best verified output.")
-            if self.team_mode:
-                runner = run_team if getattr(self, "sequential_team", False) else run_team_fast
+            if self.capture_kind == "screen":
+                self._analyse_screen(imgs, ctx)
             else:
-                runner = run_agent
-            final, _ = runner(self.client, ctx, goal=goal, verbose=True, audit=audit)
-            print(f"\n{'=' * 60}\n{final}\n{'=' * 60}")
+                if self.team_mode:
+                    runner = run_team if getattr(self, "sequential_team", False) else run_team_fast
+                else:
+                    runner = run_agent
+                final, _ = runner(self.client, ctx, goal=goal, verbose=True, audit=audit)
+                print(f"\n{'=' * 60}\n{final}\n{'=' * 60}")
             records = self.tracker.take(bucket)
             self._report_usage(records)
             if self.program:
@@ -307,6 +311,21 @@ class App:
                 os.environ["CODESNAP_COPYBOOK_DIRS"] = str(store.export_copybooks())
         except Exception as exc:  # noqa: BLE001
             print(f"Copybook export skipped: {exc}", file=sys.stderr)
+
+    def _analyse_screen(self, imgs, ctx):
+        import re as _re
+        from core import status
+        from core.extractors.ui import extract_ui_screen, screen_name, to_transcription
+        status.publish("Reading the application screen", "tool", stage="read")
+        screen = extract_ui_screen(self.client, imgs)
+        title = screen_name(screen)
+        stem = _re.sub(r"[^A-Za-z0-9_]+", "_", title).strip("_") or "Screen"
+        ctx.last_report = {"is_code": True, "artifact_type": "ui_screen", "code": to_transcription(screen),
+                           "extension": "screen", "language": "UI screen", "errors": "None", "code_name": stem,
+                           "validation_tool": "n/a"}
+        fields, actions = len(screen.get("fields") or []), len(screen.get("actions") or [])
+        print(f"[screen] {title}: {fields} fields, {actions} actions, {len(screen.get('issues') or [])} issues")
+        status.publish(f"Screen read: {title} ({fields} fields, {actions} actions)", "done", stage="done")
 
     def _report_usage(self, records):
         from core import status
@@ -635,6 +654,8 @@ def main() -> int:
     ap.add_argument("--region", default=None, help="Capture only a screen sub-rectangle: \"L,T,W,H\" as fractions 0-1 (left,top,width,height).")
     ap.add_argument("--project-mode", action="store_true", dest="project_mode", help="Project mode: capture many files back-to-back; analysis runs in the background.")
     ap.add_argument("--program", default=None, help="Program slug: add each analysed file to that program's model.")
+    ap.add_argument("--capture-kind", default="code", choices=["code", "screen"], dest="capture_kind",
+                    help="code (default) transcribes source; screen documents a running application screen.")
     args = ap.parse_args()
     load_env()
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -666,6 +687,7 @@ def main() -> int:
     app.idle_stop = args.idle_stop
     app.project_mode = args.project_mode or bool(args.program)
     app.program = args.program
+    app.capture_kind = args.capture_kind
     if args.region:
         try:
             app.region = tuple(float(x) for x in args.region.split(","))

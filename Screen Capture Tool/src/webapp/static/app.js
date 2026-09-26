@@ -1,5 +1,6 @@
 const $ = (id) => document.getElementById(id);
 let _program = "";
+let _captureKind = "code";
 if (window.mermaid) { try { mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" }); } catch (e) {} }
 
 const ANALYZING_MSGS = [
@@ -425,6 +426,7 @@ $("startBtn").addEventListener("click", async () => {
     if (pickedRegion) params.set("region", pickedRegion);
     if (_projMode) params.set("project_mode", "true");
     if (_program) params.set("program", _program);
+    if (_captureKind !== "code") params.set("capture_kind", _captureKind);
     const qs = params.toString();
     await fetch("/api/session/start" + (qs ? "?" + qs : ""), { method: "POST" });
     const manual = idle === 0;
@@ -841,6 +843,8 @@ async function loadArtifact(el) {
   const base = `/api/programs/${encodeURIComponent(_program)}`;
   const errs = d.artifact.validation_ok === 0 ? `<div class="project-hint">Compiler: ${escapeHtml((d.artifact.validation_errors || "").slice(0, 300))}</div>` : "";
   box.innerHTML = `
+    <div class="pf-type">Type <select class="pf-type-select">${ARTIFACT_TYPES.map(t =>
+      `<option value="${t}"${t === d.artifact.artifact_type ? " selected" : ""}>${TYPE_LABELS[t] || t}</option>`).join("")}</select></div>
     <div class="pf-rename"><input type="text" value="${_attr(d.artifact.name)}" spellcheck="false">
       <button class="btn-link pf-save" type="button">Rename</button>
       <button class="btn-link pf-re" type="button">Re-extract</button></div>
@@ -848,6 +852,12 @@ async function loadArtifact(el) {
     ${profileHtml(d.profile)}
     <div class="pf-entities">${d.entities.map(e => `<div>${escapeHtml(e.name)} <i>${escapeHtml(e.kind)}${e.line_start ? " · L" + e.line_start : ""}</i></div>`).join("") || "<div><i>No entities extracted.</i></div>"}</div>
     <div class="pf-frames">${d.evidence.map(ev => `<a href="${base}/evidence/${ev.id}" target="_blank" rel="noopener"><img src="${base}/evidence/${ev.id}" alt="frame ${ev.ord + 1}" loading="lazy"></a>`).join("")}</div>`;
+  box.querySelector(".pf-type-select").addEventListener("change", async (ev) => {
+    try {
+      const r = await _json(`${base}/artifacts/${el.dataset.id}/type`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_type: ev.target.value }) });
+      toast(`Re-read as ${TYPE_LABELS[ev.target.value] || ev.target.value}: ${r.entities || 0} entities.`); loadProgram();
+    } catch (e) { toast(e.message); }
+  });
   box.querySelector(".pf-save").addEventListener("click", async () => {
     const name = box.querySelector("input").value.trim();
     try { await _json(`${base}/artifacts/${el.dataset.id}/rename`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }); toast("Renamed."); loadProgram(); }
@@ -922,3 +932,18 @@ $("progImport").addEventListener("click", async (ev) => {
   ev.target.textContent = "Import past reports"; ev.target.disabled = false;
 });
 loadPrograms();
+
+const ARTIFACT_TYPES = ["code", "sql", "db_schema", "config", "web", "api", "ui_screen", "job", "other"];
+const TYPE_LABELS = { code: "Source code", sql: "SQL", db_schema: "DB schema", config: "Config", web: "Web page",
+  api: "API definition", ui_screen: "App screen", job: "Batch job / SPSS", other: "Other" };
+document.querySelectorAll("#kindSeg .seg-opt").forEach(b => b.addEventListener("click", async () => {
+  _captureKind = b.dataset.kind;
+  document.querySelectorAll("#kindSeg .seg-opt").forEach(x => x.classList.toggle("active", x === b));
+  $("kindHint").textContent = _captureKind === "screen"
+    ? "A running app's screen: fields, buttons, messages (no data values)" : "Source code, SQL, config, web pages";
+  if (sessionRunning) {
+    await fetch("/api/session/stop", { method: "POST" });
+    toast("Capture mode changed — press Start capture again.");
+    pollStatus();
+  }
+}));
