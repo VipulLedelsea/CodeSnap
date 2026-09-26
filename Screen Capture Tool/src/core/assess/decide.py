@@ -51,10 +51,10 @@ def disposition(scores: dict, facts: dict, inputs: dict) -> dict:
         return pick("retire", "Marked by staff as no longer needed" + (f": {inputs['retire']}" if isinstance(inputs["retire"], str) else ""))
     no_path = facts.get("no_path") or []
     no_path_share = facts.get("no_path_share", 0)
-    if inputs.get("cots") and (D < 60 or P < 50 or no_path):
-        return pick("replace", f"Staff noted an off-the-shelf / shared option: {inputs['cots']}" if isinstance(inputs["cots"], str)
+    if inputs.get("cots"):
+        return pick("replace", f"Staff decision — off-the-shelf / shared option: {inputs['cots']}" if isinstance(inputs["cots"], str)
                     else "Staff noted an off-the-shelf / shared option exists",
-                    f"Tech debt {D}/100, supportability {P}/100")
+                    f"Scores at time of decision: tech debt {D}/100, supportability {P}/100, security {S}/100")
     if no_path and (no_path_share >= 0.5 or D < 45 or H < 50):
         return pick("rearchitect", "Built on technology with no supported upgrade path: " + "; ".join(sorted(set(no_path))[:4]),
                     f"{round(no_path_share * 100)}% of code lines are on that technology" if no_path_share else None,

@@ -146,7 +146,9 @@ def components(store) -> dict:
     if len(edges) > 25:
         for e in edges:
             e["label"] = ""
-    scene = layered(list(nodes.values()), edges, "LR", sinks=sinks, straight=True, per_row=12)
+    n = len(nodes)
+    scene = layered(list(nodes.values()), edges, "LR", sinks=sinks, straight=True,
+                    per_row=max(12, -(-n // 6)), max_ranks=5 if n > 30 else None)
     return {"id": "components", "kind": "component", "title": f"Components & data — {store.info['name']}", **scene}
 
 
@@ -233,7 +235,8 @@ def classes(store, artifact_id=None) -> dict:
             funcs = [_short(e["name"].split(".")[-1] + "()", 52) for e in free if e["kind"] == "function"]
             nodes.insert(0, {"id": f"f{artifact_id}", "title": m.arts[artifact_id]["name"], "stereotype": "file scope",
                              "kind": "component", "sections": [fields, funcs]})
-    scene = layered(nodes, edges, "TB", straight=len(edges) > 12)
+    scene = layered(nodes, edges, "TB", straight=len(edges) > 12, per_row=max(7, -(-len(nodes) // 6)),
+                    max_ranks=5 if len(nodes) > 30 else None)
     title = "Classes & programs" + (f" — {m.arts[artifact_id]['name']}" if artifact_id else f" — {store.info['name']}")
     return {"id": f"class-{artifact_id}" if artifact_id else "class", "kind": "class", "title": title, **scene}
 

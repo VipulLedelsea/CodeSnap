@@ -120,7 +120,8 @@ def _eol(store, ctx, data, today, online, cache_dir):
                 note = "" if v.get("confirmed") else " Version not confirmed — verify."
                 err = f" ({found['error']})" if found.get("error") else ""
                 store.add_finding(
-                    "vulnerability", v["severity"], f"{v['id']} in {g['name']} {version or g.get('cycle') or ''}".strip(),
+                    "vulnerability", v["severity"],
+                    f"{v['id']} in {g['name']} {version or ('' if g.get('curated') else g.get('cycle') or '')}".strip(),
                     detail=f"{v['summary']}.{note}", source=f"{v['source']}{err} ({v['url']})", target_type="artifact",
                     target_id=g["evidence"][0]["artifact_id"], evidence=g["evidence"][:20], rule="CVE",
                     refs=refs_for("CVE", extra={"cve": v["id"], "aliases": v.get("aliases")}))

@@ -382,6 +382,23 @@ def api_program_diagram(slug: str, diagram_id: str, fmt: str):
     raise HTTPException(status_code=404, detail="Use svg or png.")
 
 
+@app.get("/api/programs/{slug}/report.{fmt}")
+def api_program_report(slug: str, fmt: str, rescan: bool = True, client: str | None = None):
+    from core import report as rep
+    with _open_program(slug) as store:
+        if fmt == "html":
+            return HTMLResponse(rep.html_report(store, rescan=rescan, client=client))
+        if fmt == "docx":
+            body = rep.docx_bytes(store, rescan=rescan, client=client)
+            mt = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        elif fmt == "zip":
+            body, mt = rep.package(store, rescan=rescan, client=client)["zip"], "application/zip"
+        else:
+            raise HTTPException(status_code=404, detail="Use html, docx or zip.")
+    name = f"{slug}_holistic_review.{fmt}" if fmt != "zip" else f"{slug}_holistic_review_package.zip"
+    return Response(body, media_type=mt, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @app.get("/api/programs/{slug}/coverage")
 def api_program_coverage(slug: str):
     with _open_program(slug) as store:

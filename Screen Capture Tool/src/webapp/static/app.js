@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 let _program = "";
 let _captureKind = "code";
+let _view = "codesnap";
 if (window.mermaid) { try { mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" }); } catch (e) {} }
 
 const ANALYZING_MSGS = [
@@ -425,8 +426,11 @@ $("startBtn").addEventListener("click", async () => {
     if (idle !== null) params.set("idle_stop", String(idle));
     if (pickedRegion) params.set("region", pickedRegion);
     if (_projMode) params.set("project_mode", "true");
-    if (_program) params.set("program", _program);
-    if (_captureKind !== "code") params.set("capture_kind", _captureKind);
+    if (_view === "review") {
+      if (!_program) { toast("Pick or create a program first."); return; }
+      params.set("program", _program);
+    }
+    if (_view === "review" && _captureKind !== "code") params.set("capture_kind", _captureKind);
     const qs = params.toString();
     await fetch("/api/session/start" + (qs ? "?" + qs : ""), { method: "POST" });
     const manual = idle === 0;
@@ -842,6 +846,10 @@ async function loadProgram() {
   if ($("progSecBox").open) loadProgramFindings();
   if ($("progAssessBox").open) loadAssessment();
   if ($("progDiagBox").open) loadDiagrams();
+  const rb = `/api/programs/${encodeURIComponent(_program)}/report`;
+  $("progReportHtml").href = `${rb}.html`;
+  $("progReportDocx").href = `${rb}.docx`;
+  $("progReportZip").href = `${rb}.zip`;
 }
 async function loadArtifact(el) {
   const box = el.querySelector(".pf-detail");
@@ -1063,7 +1071,7 @@ $("progSelect").addEventListener("change", async (e) => {
   _program = e.target.value; _progStore(_program);
   if (_projMode) setProjectMode(false);
   await loadProgram();
-  toast(_program ? "Captures will be added to this program." : "Single-file mode.");
+  toast(_program ? "Captures will be added to this program." : "No program selected.");
 });
 $("progNewBtn").addEventListener("click", () => { $("progNew").style.display = "flex"; $("progNewName").focus(); });
 $("progNewCancel").addEventListener("click", () => { $("progNew").style.display = "none"; });
@@ -1126,3 +1134,28 @@ $("progRelink").addEventListener("click", async () => {
         toast(`Linked: ${r.merged} merged, ${r.jcl + r.config + r.screens + r.translated} new links.`); loadProgram(); }
   catch (e) { toast(e.message); }
 });
+
+function _viewStore(v) {
+  try { if (v === undefined) return localStorage.getItem("codesnap.view") || "codesnap"; localStorage.setItem("codesnap.view", v); } catch (e) {}
+  return v || "codesnap";
+}
+function setView(v) {
+  _view = v === "review" ? "review" : "codesnap";
+  _viewStore(_view);
+  document.querySelectorAll(".sidebar .nav-item[data-view]").forEach(n => n.classList.toggle("active", n.dataset.view === _view));
+  $("viewReview").style.display = _view === "review" ? "" : "none";
+  $("viewCodesnap").style.display = _view === "codesnap" ? "" : "none";
+  $(_view === "review" ? "startSlotReview" : "startSlotCodesnap").after($("captureBlock"));
+  document.querySelector(".kind-row").style.display = _view === "review" ? "" : "none";
+  if (_view === "codesnap" && _captureKind !== "code") document.querySelector('#kindSeg .seg-opt[data-kind="code"]').click();
+  $("startSub").textContent = _view === "review"
+    ? (_program ? "Each capture is added to the selected program." : "Pick or create a program above, then capture its files and screens.")
+    : "Capture, scroll for more, and it builds the report.";
+  document.title = _view === "review" ? "Ledelsea — Platform Holistic Review" : "Ledelsea — CodeSnap";
+}
+document.querySelectorAll(".sidebar .nav-item[data-view]").forEach(n => n.addEventListener("click", e => {
+  e.preventDefault();
+  setView(n.dataset.view);
+}));
+$("progSelect").addEventListener("change", () => { if (_view === "review") setView("review"); });
+setView(location.hash === "#review" ? "review" : location.hash === "#codesnap" ? "codesnap" : _viewStore());

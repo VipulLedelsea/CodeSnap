@@ -58,10 +58,13 @@ def _ranks(ids, edges):
     return rank, dag
 
 
-def layered(nodes: list, edges: list, direction="TB", sinks=None, straight=False, per_row=None) -> dict:
+def layered(nodes: list, edges: list, direction="TB", sinks=None, straight=False, per_row=None, max_ranks=None) -> dict:
     ids = [n["id"] for n in nodes]
     pairs = [(e["from"], e["to"]) for e in edges]
     rank, _ = _ranks(ids, pairs)
+    if max_ranks:
+        for i in ids:
+            rank[i] = min(rank[i], max_ranks - 1)
     if sinks:
         top = max([rank[i] for i in ids if i not in sinks] or [0]) + 1
         for i in ids:
@@ -305,7 +308,7 @@ def lanes(lane_specs: list, edges: list, bars: list, title_h=30) -> dict:
         lane_boxes.append({"id": lane["id"], "x": x, "y": top, "w": lane_w + 2 * GPAD, "title": lane["title"],
                            "bottom": y})
         x += lane_w + 2 * GPAD + LANE_GAP
-    total_w = x - LANE_GAP
+    total_w = max(x - LANE_GAP, 420)
     bottom = max([l["bottom"] for l in lane_boxes] or [top + 100])
     groups[:0] = [{"id": l["id"], "x": l["x"], "y": l["y"], "w": l["w"], "h": bottom - l["y"], "title": l["title"],
                    "style": "lane", "dashed": True} for l in lane_boxes]
