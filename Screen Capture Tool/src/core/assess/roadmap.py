@@ -15,6 +15,20 @@ FIXES = {
     "SEC-MEM": ("Replace unsafe C functions", "Swap gets/strcpy/sprintf for bounded versions (fgets, strncpy_s, snprintf).", 0.05, 0.2),
     "SEC-PII": ("Protect student data", "Inventory student fields, restrict access, encrypt at rest, log disclosures (FERPA).", 0.5, 1.5),
 }
+UI_FIXES = [
+    ("ACC-TERMINAL", "Web front end for 3270 screens", "Put an accessible web UI over the CICS transactions (or rebuild the screens) — terminals cannot meet WCAG 2.1 AA.", 2.0, 6.0, "modernize"),
+    ("ACC-", "Fix accessibility (WCAG 2.1 AA)", "Add labels, text alternatives, page titles/language, keyboard access and contrast fixes; test with a screen reader.", 0.05, 0.2, None),
+    ("UIB-CRASH", "Stop system failures reaching users", "Trace the abend/exception shown on screen, fix the cause, and show a friendly, logged error instead.", 0.5, 2.0, "stabilize"),
+    ("USE-", "Usability fixes", "Clear labels and buttons, input validation, confirmation steps for consequential actions, legends for codes.", 0.05, 0.25, "remediate"),
+    ("UIB-", "Usability fixes", "Clear labels and buttons, input validation, confirmation steps for consequential actions, legends for codes.", 0.05, 0.25, "remediate"),
+    ("UIS-", "Harden UI security", "POST sensitive forms, add anti-forgery tokens, mask passwords and student identifiers, remove trusted values from hidden fields.", 0.1, 0.5, None),
+    ("WEB-HTTPS", "Enforce HTTPS / modern TLS", "Redirect all HTTP to HTTPS, TLS 1.2+ only, valid certificate, then enable HSTS.", 0.5, 2.0, "stabilize"),
+    ("WEB-CERT", "Enforce HTTPS / modern TLS", "Redirect all HTTP to HTTPS, TLS 1.2+ only, valid certificate, then enable HSTS.", 0.5, 2.0, "stabilize"),
+    ("WEB-TLS", "Enforce HTTPS / modern TLS", "Redirect all HTTP to HTTPS, TLS 1.2+ only, valid certificate, then enable HSTS.", 0.5, 2.0, "stabilize"),
+    ("WEB-EOL", "Upgrade live site platform & libraries", "Move the web server OS/runtime and front-end libraries to supported versions.", 1.0, 3.0, "remediate"),
+    ("WEB-CVE", "Upgrade live site platform & libraries", "Move the web server OS/runtime and front-end libraries to supported versions.", 0.0, 0.0, "remediate"),
+    ("WEB-", "Harden web server configuration", "Add security headers (HSTS, CSP, frame-ancestors, nosniff, Referrer-Policy), secure cookie flags, hide version banners.", 0.1, 0.3, "remediate"),
+]
 FIXED_COST = {"SEC-CRED": (0.5, 1.0), "SEC-PII": (1.0, 2.0), "SEC-TLS": (0.5, 1.0), "SEC-AUTH": (0.5, 1.0)}
 EOL_FIX = [
     (".NET Framework", "Retarget to .NET Framework 4.8.1", "In-place retarget and regression test; plan the move to modern .NET separately.", 1.0, 2.0, 0.3, 0.6, "remediate"),
@@ -77,6 +91,15 @@ def solutions(components: list, program: dict) -> list:
                 title, action, lo, hi = FIXES[rule]
                 phase = "stabilize" if f["severity"] in ("critical", "high") or rule == "SEC-PII" else "remediate"
                 add(f"{rule}:{phase}", title, action, phase, lo, hi, c["name"], [f["id"]], "security")
+            elif f["category"] in ("accessibility", "usability", "ui_security", "website"):
+                for prefix, title, action, lo, hi, phase in UI_FIXES:
+                    if (rule or "").startswith(prefix):
+                        ph = phase or ("stabilize" if f["severity"] in ("critical", "high") else "remediate")
+                        key = f"UI:{title}:{ph}"
+                        first = key not in items
+                        add(key, title, action, ph, lo + (0.5 if first and prefix.startswith("WEB-") and hi < 1 else 0),
+                            hi + (1.0 if first and prefix.startswith("WEB-") and hi < 1 else 0), c["name"], [f["id"]], "ui")
+                        break
             elif f["category"] == "eol" and (f.get("refs") or {}).get("eol_status") in ("eol", "extended", "legacy", "ending"):
                 for name, title, action, lo, hi, per_lo, per_hi, phase in EOL_FIX:
                     if name.lower() in f["title"].lower():

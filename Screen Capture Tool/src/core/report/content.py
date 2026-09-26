@@ -14,6 +14,7 @@ DIAGRAM_NOTES = {
     "component": "Every captured file, what it depends on, and the data it reads and writes. Dashed = referenced but not captured.",
     "class": "Classes and COBOL programs with their fields and routines; inheritance, calls and copybook includes.",
     "data": "Tables with columns and keys. Dashed tables are used by code but no DDL was captured.",
+    "userflow": "How users move between screens (links, form submits, CICS XCTL/LINK). Dashed = screen referenced but not captured.",
     "sequence": "Step-by-step flow from an entry point through the code to the data it touches (line numbers from the source).",
 }
 
@@ -186,6 +187,61 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
         {"type": "bullets", "items": [f"{f['title']} — {f['detail'].split('. Treat')[0]}" for f in pii]
          or ["No student data fields were identified in the captured files."]},
     ]})
+
+    ui_cats = {"accessibility": "Accessibility", "usability": "Usability", "ui_security": "UI security",
+               "website": "Website"}
+    ui_f = [f for f in findings if f["category"] in ui_cats]
+    site = store.get_meta("site_scan")
+    flows = store.get_meta("ui_flows") or {}
+
+    def ui_rows(cats):
+        rows = []
+        for f in sorted([f for f in ui_f if f["category"] in cats], key=lambda f: (SEV_ORDER.index(f["severity"]), f["title"])):
+            r = f.get("refs") or {}
+            std = r.get("wcag") and f"WCAG {r['wcag']}" or ", ".join(x for x in [r.get("cve"), r.get("cwe")] if x)
+            if r.get("ferpa"):
+                std += ", FERPA"
+            rows.append([f["severity"].title(), f["title"].split(":")[0], _loc(f.get("evidence")), f["detail"][:110], std,
+                         "vision" if "vision" in (f.get("source") or "") else ("live" if (f.get("source") or "").startswith("live") else "source")])
+        return rows
+
+    ui_blocks = [
+        {"type": "kv", "items": [(v, f"{sum(1 for f in ui_f if f['category'] == k)}") for k, v in ui_cats.items()]},
+        {"type": "p", "text": "Page source (HTML/ASPX/JSP) is checked against WCAG 2.1 AA / Section 508 rules and for "
+                              "UI-level security issues; captured app screens are checked for visible errors, unlabeled "
+                              "fields and student data shown in full. Items marked **vision** were observed by the screen "
+                              "reader model and should be confirmed by a person; **live** items come from the website scan."},
+        {"type": "h", "text": "Accessibility"},
+        {"type": "table", "head": ["Severity", "Issue", "Location", "Detail", "Standard", "From"],
+         "rows": ui_rows({"accessibility"}), "sev_col": 0, "small": True},
+        {"type": "h", "text": "Usability & visible bugs"},
+        {"type": "table", "head": ["Severity", "Issue", "Location", "Detail", "Standard", "From"],
+         "rows": ui_rows({"usability"}), "sev_col": 0, "small": True},
+        {"type": "h", "text": "UI & website security"},
+        {"type": "table", "head": ["Severity", "Issue", "Location", "Detail", "Standard", "From"],
+         "rows": ui_rows({"ui_security", "website"}), "sev_col": 0, "small": True},
+        {"type": "h", "text": "Live website scan"},
+    ]
+    if site:
+        hdr = site.get("headers") or {}
+        ui_blocks.append({"type": "kv", "items": [
+            ("Site", site.get("final_url") or site.get("start") or ""), ("TLS", ((site.get("tls") or {}).get("version") or "none")),
+            ("Pages scanned", str(sum(1 for p in site.get("pages") or [] if p.get("status") and p["status"] < 400))),
+            ("Server", hdr.get("server", "—")), ("Scanned", (site.get("scanned") or "")[:10]),
+            ("Libraries", str(len(site.get("libraries") or [])))]})
+    else:
+        ui_blocks.append({"type": "p", "text": "No live scan has been run. Enter the program's URL in the UI & website "
+                                               "panel to add TLS, header, cookie and page checks."})
+    ui_blocks.append({"type": "h", "text": "User journeys"})
+    ui_blocks.append({"type": "bullets", "items": [
+        " → ".join(s_["screen"] + ("" if s_["captured"] else " (not captured)") for s_ in j["steps"])
+        for j in (flows.get("journeys") or [])[:20]] or ["No multi-screen journeys found in the captured screens."]})
+    if flows.get("dead_ends") or flows.get("orphans"):
+        ui_blocks.append({"type": "bullets", "items": (
+            [f"Links to screens not captured: {', '.join(flows['dead_ends'][:10])}"] if flows.get("dead_ends") else []) + (
+            [f"Standalone screens (no navigation captured): {', '.join(flows['orphans'][:10])}"] if flows.get("orphans") else [])})
+    ui_blocks.append({"type": "diagram", "id": "userflow", "caption": "User flow"})
+    sections.append({"id": "ui", "title": "UI, process & website review", "blocks": ui_blocks})
 
     sections.append({"id": "eol", "title": "End-of-life & supportability", "blocks": [
         {"type": "p", "text": "Support dates come from a bundled endoflife.date snapshot plus vendor notices for "

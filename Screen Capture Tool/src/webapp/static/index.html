@@ -74,6 +74,16 @@
             </div>
             <div id="progAssess"></div>
           </details>
+          <details class="prog-map" id="progUiBox"><summary id="progUiSummary">UI, process &amp; website</summary>
+            <div class="sec-bar">
+              <button class="btn-secondary" id="progUiRun" type="button">Review UI</button>
+              <input type="url" id="progUiUrl" placeholder="https://program-site.mn.gov (optional live scan)" spellcheck="false">
+              <input type="number" id="progUiPages" min="1" max="50" value="10" title="Max pages to crawl">
+              <button class="btn-link" id="progUiScan" type="button">Scan site</button>
+              <select id="progUiFilter"><option value="">All</option><option value="accessibility">Accessibility</option><option value="usability">Usability</option><option value="ui_security">UI security</option><option value="website">Website</option></select>
+            </div>
+            <div id="progUi"></div>
+          </details>
           <details class="prog-map" id="progSecBox"><summary id="progSecSummary">Security &amp; end-of-life</summary>
             <div class="sec-bar">
               <button class="btn-secondary" id="progSecScan" type="button">Run scan</button>

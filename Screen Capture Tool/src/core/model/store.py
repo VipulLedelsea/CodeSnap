@@ -468,11 +468,15 @@ class ProgramStore:
     def finding(self, finding_id: int) -> dict | None:
         return self._one("SELECT * FROM finding WHERE id = ?", (finding_id,))
 
-    def clear_findings(self, categories, origin: str = "auto") -> int:
+    def clear_findings(self, categories, origin: str = "auto", keep_source_prefix: str | None = None) -> int:
         cats = list(categories)
+        sql = f"DELETE FROM finding WHERE origin = ? AND category IN ({','.join('?' * len(cats))})"
+        args = [origin, *cats]
+        if keep_source_prefix:
+            sql += " AND source NOT LIKE ?"
+            args.append(keep_source_prefix + "%")
         with self.transaction() as db:
-            return db.execute(f"DELETE FROM finding WHERE origin = ? AND category IN ({','.join('?' * len(cats))})",
-                              (origin, *cats)).rowcount
+            return db.execute(sql, args).rowcount
 
     def set_finding_status(self, finding_id: int, status: str):
         with self.transaction() as db:

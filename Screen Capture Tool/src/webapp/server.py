@@ -399,6 +399,21 @@ def api_program_report(slug: str, fmt: str, rescan: bool = True, client: str | N
     return Response(body, media_type=mt, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@app.post("/api/programs/{slug}/ui/review")
+def api_program_ui_review(slug: str, site_url: str | None = None, max_pages: int = 10):
+    from core.uireview import run_ui_review
+    with _open_program(slug) as store:
+        return {"ok": True, **run_ui_review(store, site_url=site_url or None, max_pages=max(1, min(max_pages, 50)))}
+
+
+@app.get("/api/programs/{slug}/ui")
+def api_program_ui(slug: str):
+    from core.uireview import CATEGORIES, summary
+    with _open_program(slug) as store:
+        return {"summary": summary(store), "site": store.get_meta("site_scan"), "flows": store.get_meta("ui_flows"),
+                "findings": [f for f in store.findings() if f["category"] in CATEGORIES]}
+
+
 @app.get("/api/programs/{slug}/coverage")
 def api_program_coverage(slug: str):
     with _open_program(slug) as store:

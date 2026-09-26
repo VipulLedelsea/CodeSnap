@@ -2,9 +2,10 @@ import re
 
 from core.security.rules import code_lines, family
 
-DIMENSIONS = ("health", "tech_debt", "security", "supportability", "complexity", "coupling")
+DIMENSIONS = ("health", "tech_debt", "security", "supportability", "complexity", "coupling", "ux")
 LABELS = {"health": "Health", "tech_debt": "Tech debt", "security": "Security", "supportability": "Supportability",
-          "complexity": "Complexity", "coupling": "Coupling"}
+          "complexity": "Complexity", "coupling": "Coupling", "ux": "UX & accessibility"}
+UX_POINTS = {"accessibility": {"high": 15, "medium": 6, "low": 2}, "usability": {"high": 12, "medium": 5, "low": 2}}
 SEC_POINTS = {"critical": 25, "high": 15, "medium": 7, "low": 3, "info": 0}
 EOL_POINTS = {"eol": 35, "extended": 20, "legacy": 20, "ending": 15, "unknown": 3}
 _DECISION = {
@@ -91,7 +92,8 @@ def score_component(c: dict) -> dict:
 
     sec = s["security"]
     for f in c["findings"]:
-        if f["category"] in ("security", "vulnerability"):
+        if f["category"] in ("security", "vulnerability", "ui_security") or (
+                f["category"] == "website" and f.get("rule") != "WEB-EOL"):
             sec.deduct(SEC_POINTS.get(f["severity"], 0), f["rule"] or f["category"], f["title"], {"finding": f["id"]})
     if c["student_data"] and any(f["category"] == "security" and f["severity"] in ("critical", "high")
                                  for f in c["findings"]):
@@ -99,7 +101,7 @@ def score_component(c: dict) -> dict:
 
     sup = s["supportability"]
     for f in c["findings"]:
-        if f["category"] == "eol":
+        if f["category"] == "eol" or f.get("rule") == "WEB-EOL":
             status = (f.get("refs") or {}).get("eol_status")
             pts = EOL_POINTS.get(status, 0) * (0.5 if "not confirmed" in (f.get("detail") or "") else 1)
             sup.deduct(pts, "SUP-EOL", f["title"], {"finding": f["id"]})
@@ -137,11 +139,17 @@ def score_component(c: dict) -> dict:
     if c["external"]:
         k.deduct(5 * len(c["external"]), "CPL-EXTERNAL", "connects to external systems/stores: "
                  + ", ".join(sorted(c["external"])[:4]), cap=20)
+    ux = s["ux"]
+    for f in c["findings"]:
+        pts = UX_POINTS.get(f["category"], {}).get(f["severity"], 0)
+        if f.get("rule") == "ACC-TERMINAL":
+            pts = 20
+        ux.deduct(pts, f.get("rule") or f["category"], f["title"], {"finding": f["id"]})
     return {dim: sc.out() for dim, sc in s.items()}
 
 
-WEIGHTS = {"health": 0.15, "tech_debt": 0.2, "security": 0.25, "supportability": 0.2, "complexity": 0.1,
-           "coupling": 0.1}
+WEIGHTS = {"health": 0.15, "tech_debt": 0.18, "security": 0.24, "supportability": 0.18, "complexity": 0.08,
+           "coupling": 0.07, "ux": 0.1}
 
 
 def overall(scores: dict) -> int:

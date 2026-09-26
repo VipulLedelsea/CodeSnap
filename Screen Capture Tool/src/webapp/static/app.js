@@ -846,6 +846,7 @@ async function loadProgram() {
   if ($("progSecBox").open) loadProgramFindings();
   if ($("progAssessBox").open) loadAssessment();
   if ($("progDiagBox").open) loadDiagrams();
+  if ($("progUiBox").open) loadUiReview();
   const rb = `/api/programs/${encodeURIComponent(_program)}/report`;
   $("progReportHtml").href = `${rb}.html`;
   $("progReportDocx").href = `${rb}.docx`;
@@ -928,19 +929,16 @@ function _refTags(r) {
   if (r.owasp) out.push(r.owasp.split(" ")[0]);
   return out.map(t => `<span class="ref">${escapeHtml(t)}</span>`).join("");
 }
-function renderFindings() {
-  const box = $("progSec");
-  const cat = $("progSecFilter").value;
-  const rows = _findings.filter(f => !cat || f.category === cat)
-    .sort((a, b) => _SEV.indexOf(a.severity) - _SEV.indexOf(b.severity));
-  if (!rows.length) { box.innerHTML = `<p class="project-hint">${_findings.length ? "Nothing in this category." : "Not scanned yet — Run scan (no API cost)."}</p>`; return; }
+function findingList(box, rows, onUpdate) {
   const base = `/api/programs/${encodeURIComponent(_program)}`;
   box.innerHTML = rows.map(f => {
-    const ev = (f.evidence || []).map(e => `<div class="sec-ev"><b>${escapeHtml(e.file || "")}${e.line ? ":" + e.line : ""}</b>${e.snippet ? ` <code>${escapeHtml(e.snippet)}</code>` : ""}${(e.screenshots || []).slice(0, 3).map(id => ` <a href="${base}/evidence/${id}" target="_blank" rel="noopener">frame</a>`).join("")}</div>`).join("");
-    const refs = f.refs || {};
+    const ev = (f.evidence || []).map(e => {
+      const where = e.url ? `<a href="${_attr(e.url)}" target="_blank" rel="noopener">${escapeHtml(e.url)}</a>` : escapeHtml((e.file || "") + (e.screen ? " · " + e.screen : ""));
+      return `<div class="sec-ev"><b>${where}${e.line ? ":" + e.line : ""}</b>${e.snippet ? ` <code>${escapeHtml(e.snippet)}</code>` : ""}${(e.screenshots || []).slice(0, 3).map(id => ` <a href="${base}/evidence/${id}" target="_blank" rel="noopener">frame</a>`).join("")}</div>`;
+    }).join("");
     return `<details class="sec-f ${f.status === "dismissed" ? "dismissed" : ""}" data-id="${f.id}"><summary><span class="sev ${_attr(f.severity)}">${escapeHtml(f.severity)}</span> ${escapeHtml(f.title)}</summary>
       <div class="sec-d"><p>${escapeHtml(f.detail || "")}</p>${ev}
-      <div class="sec-refs">${_refTags(refs)}</div>
+      <div class="sec-refs">${_refTags(f.refs || {})}</div>
       <div class="sec-src">Source: ${escapeHtml(f.source || "")}</div>
       <div class="sec-actions">${["open", "accepted", "dismissed", "fixed"].map(s => `<button class="btn-link${f.status === s ? " on" : ""}" data-status="${s}" type="button">${s}</button>`).join(" ")}</div></div></details>`;
   }).join("");
@@ -948,10 +946,61 @@ function renderFindings() {
     const id = b.closest(".sec-f").dataset.id;
     try {
       const d = await _json(`${base}/findings/${id}/status`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: b.dataset.status }) });
-      _findings = _findings.map(f => f.id === d.finding.id ? d.finding : f);
-      renderFindings();
+      onUpdate(d.finding);
     } catch (e) { alert(e.message); }
   }));
+}
+function renderFindings() {
+  const box = $("progSec");
+  const cat = $("progSecFilter").value;
+  const rows = _findings.filter(f => !cat || f.category === cat)
+    .sort((a, b) => _SEV.indexOf(a.severity) - _SEV.indexOf(b.severity));
+  if (!rows.length) { box.innerHTML = `<p class="project-hint">${_findings.length ? "Nothing in this category." : "Not scanned yet — Run scan (no API cost)."}</p>`; return; }
+  findingList(box, rows, nf => { _findings = _findings.map(f => f.id === nf.id ? nf : f); renderFindings(); });
+}
+const _UI_CATS = { accessibility: "Accessibility", usability: "Usability", ui_security: "UI security", website: "Website" };
+let _uiFindings = [], _uiData = null;
+function renderUiReview() {
+  const box = $("progUi"), d = _uiData;
+  if (!d) { box.innerHTML = ""; return; }
+  const cat = $("progUiFilter").value;
+  const sum = d.summary || {};
+  $("progUiSummary").innerHTML = `UI, process &amp; website ` + Object.entries(_UI_CATS).filter(([k]) => (sum[k] || {}).total)
+    .map(([k, v]) => `<span class="sev ${(sum[k].high ? "high" : "low")}">${sum[k].total} ${escapeHtml(v.toLowerCase())}</span>`).join(" ");
+  const site = d.site;
+  const siteHtml = site ? `<div class="ui-site"><b>${escapeHtml(site.final_url || site.start || "")}</b> · TLS ${escapeHtml((site.tls || {}).version || "none")} · ${(site.pages || []).filter(p => p.status && p.status < 400).length} page(s) · scanned ${escapeHtml((site.scanned || "").slice(0, 10))}${site.error ? ` · <span class="sev high">${escapeHtml(site.error)}</span>` : ""}</div>` : `<p class="project-hint">No live site scan yet — enter the program's URL and press Scan site.</p>`;
+  const fl = d.flows || {};
+  const journeys = (fl.journeys || []).slice(0, 12).map(j => `<div class="pf-flow">${j.steps.map(s => escapeHtml(s.screen) + (s.captured ? "" : " <small>(not captured)</small>")).join(" → ")}</div>`).join("")
+    || `<p class="project-hint">No multi-screen journeys in the captured screens yet.</p>`;
+  const extra = [fl.dead_ends && fl.dead_ends.length ? `Links to screens not captured: ${fl.dead_ends.map(escapeHtml).join(", ")}` : "",
+    fl.orphans && fl.orphans.length ? `Standalone screens: ${fl.orphans.map(escapeHtml).join(", ")}` : ""].filter(Boolean).map(t => `<p class="project-hint">${t}</p>`).join("");
+  box.innerHTML = `${siteHtml}<div class="prog-section-label">User journeys (${fl.screens || 0} screens)</div>${journeys}${extra}<div class="prog-section-label">Findings</div><div id="progUiList"></div>`;
+  const rows = _uiFindings.filter(f => !cat || f.category === cat).sort((a, b) => _SEV.indexOf(a.severity) - _SEV.indexOf(b.severity));
+  const list = $("progUiList");
+  if (!rows.length) { list.innerHTML = `<p class="project-hint">${_uiFindings.length ? "Nothing in this category." : "Not reviewed yet — press Review UI."}</p>`; return; }
+  findingList(list, rows, nf => { _uiFindings = _uiFindings.map(f => f.id === nf.id ? nf : f); renderUiReview(); });
+}
+async function loadUiReview() {
+  try {
+    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/ui`);
+    _uiData = d; _uiFindings = d.findings || [];
+    if (d.site && d.site.start && !$("progUiUrl").value) $("progUiUrl").value = d.site.start;
+    renderUiReview();
+  } catch (e) { $("progUi").textContent = e.message; }
+}
+async function runUiReview(withSite) {
+  const btn = withSite ? $("progUiScan") : $("progUiRun");
+  const url = $("progUiUrl").value.trim();
+  if (withSite && !url) { toast("Enter the site URL first."); return; }
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = withSite ? "Scanning site…" : "Reviewing…";
+  try {
+    const qs = new URLSearchParams();
+    if (withSite) { qs.set("site_url", url); qs.set("max_pages", $("progUiPages").value || "10"); }
+    await _json(`/api/programs/${encodeURIComponent(_program)}/ui/review?${qs}`, { method: "POST" });
+    await loadUiReview();
+  } catch (e) { $("progUi").textContent = e.message; }
+  btn.disabled = false; btn.textContent = label;
 }
 async function loadProgramFindings() {
   try {
@@ -982,7 +1031,7 @@ function renderAssessment() {
   if (!a) { box.innerHTML = `<p class="project-hint">Not assessed yet — Run assessment.</p>`; return; }
   const v = a.verdict || {}, sc = a.scores || {}, conf = a.confidence || {};
   $("progAssessSummary").innerHTML = `Assessment &amp; verdict <span class="as-chip ${_attr((v.bucket || "").replace(/ /g, "-"))}">${escapeHtml(v.label || "—")}</span>`;
-  const dims = ["health", "tech_debt", "security", "supportability", "complexity", "coupling"];
+  const dims = ["health", "tech_debt", "security", "supportability", "complexity", "coupling", "ux"];
   const cells = a.matrix.cells.map((row, ri) => `<tr><th>${5 - ri}</th>${row.map((names, ci) => {
     const lvl = (5 - ri) * (ci + 1) >= 20 ? "critical" : (5 - ri) * (ci + 1) >= 12 ? "high" : (5 - ri) * (ci + 1) >= 6 ? "medium" : "low";
     return `<td class="mx ${lvl}" title="${_attr(names.join(", "))}">${names.length || ""}</td>`; }).join("")}</tr>`).join("");
@@ -1121,6 +1170,10 @@ document.querySelectorAll("#kindSeg .seg-opt").forEach(b => b.addEventListener("
   }
 }));
 
+$("progUiBox").addEventListener("toggle", () => { if ($("progUiBox").open) loadUiReview(); });
+$("progUiRun").addEventListener("click", () => runUiReview(false));
+$("progUiScan").addEventListener("click", () => runUiReview(true));
+$("progUiFilter").addEventListener("change", renderUiReview);
 $("progDiagBox").addEventListener("toggle", () => { if ($("progDiagBox").open) loadDiagrams(); });
 $("progDiagSelect").addEventListener("change", showDiagram);
 $("progAssessBox").addEventListener("toggle", () => { if ($("progAssessBox").open) loadAssessment(); });

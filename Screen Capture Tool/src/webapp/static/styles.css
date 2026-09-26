@@ -625,3 +625,9 @@ body.dark .seg-opt{ color:#B6B6BE; }
 .diag-view{overflow:auto;max-height:70vh;border:1px solid rgba(0,0,0,.08);border-radius:8px;background:#fff}
 .diag-view img{display:block;max-width:none}
 #progDiagSelect{max-width:420px}
+
+#progUiUrl{flex:1;min-width:220px;font-size:12.5px;padding:6px 8px}#progUiPages{width:64px;font-size:12.5px;padding:6px}
+.ui-site{font-size:12.5px;margin:6px 0 10px;overflow-wrap:anywhere}
+.program-card .project-actions{flex-wrap:wrap;gap:10px}
+.program-card .project-actions > span:last-child{flex-wrap:wrap;justify-content:flex-end;row-gap:8px}
+.program-card .project-actions a,.program-card .project-actions button{white-space:nowrap}

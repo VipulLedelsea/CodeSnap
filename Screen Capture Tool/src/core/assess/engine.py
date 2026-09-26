@@ -57,10 +57,22 @@ def _components(store):
             c["external"].add(target["name"])
     for c in comps.values():
         c["shared_writes"] = {ents[t]["name"] for t in c["write_targets"] if len(writers.get(t, ())) > 1}
+    site = store.get_meta("site_scan") or {}
     for f in findings:
         if f.get("status") in ("dismissed", "fixed"):
             continue
         targets = {ev.get("artifact_id") for ev in f.get("evidence") or [] if isinstance(ev, dict)}
+        if not (targets - {None}) and any(isinstance(ev, dict) and ev.get("url") for ev in f.get("evidence") or []):
+            if 0 not in comps:
+                host = (site.get("final_url") or site.get("start") or "live site").split("://")[-1].split("/")[0]
+                art = {"id": 0, "name": f"Live site ({host})", "artifact_type": "web", "language": "Live website",
+                       "status": "validated", "validation_ok": 1, "transcription": ""}
+                comps[0] = {"id": 0, "name": art["name"], "artifact": art, "file": None,
+                            "metrics": {"lines": 0, "decisions": 0, "gotos": 0, "family": "web"}, "units": [],
+                            "findings": [], "fan_out_set": set(), "fan_in_set": set(), "writes": False, "entry": True,
+                            "student_data": False, "missing_code": 0, "external": set(), "write_targets": set(),
+                            "shared_writes": set()}
+            targets = {0}
         if f.get("target_type") == "artifact":
             targets.add(f["target_id"])
         elif f.get("target_type") == "entity" and f.get("target_id") in owner:
@@ -92,7 +104,9 @@ def _facts(components):
 
 def run_assessment(store, *, scan: bool = True, online: bool = False, today=None) -> dict:
     if scan:
+        from core.uireview import run_ui_review
         security_scan.run_scan(store, online=online, today=today)
+        run_ui_review(store, today=today)
     inputs = store.get_meta("assessment_inputs", {}) or {}
     comp_inputs = inputs.get("components") or {}
     components = _components(store)

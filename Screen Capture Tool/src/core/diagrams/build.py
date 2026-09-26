@@ -316,6 +316,9 @@ def all_diagrams(store, per_file=True) -> list:
                 e["kind"] in CLASS_KINDS or (e["kind"] == "function" and m.top(e["id"]) is None)))
             if n >= 1:
                 out.append(classes(store, aid))
+    uf = user_flow(store)
+    if uf and uf["nodes"]:
+        out.append(uf)
     out += interactions(store)
     return out
 
@@ -550,3 +553,31 @@ def architecture(store) -> dict:
     scene = lanes(lane_specs, edges, bars)
     title = f"Architecture overview — {name}" + (f"  ·  verdict: {verdict}" if verdict else "")
     return {"id": "architecture", "kind": "architecture", "title": title, **scene}
+
+
+def user_flow(store) -> dict | None:
+    from core.uireview.flows import canonical_screens, journeys
+    m = _Model(store)
+    canon = canonical_screens(store, m.ents, m.rels)
+    fl = journeys(store)
+    by_name = {}
+    for e in m.ents.values():
+        if e["kind"] == "screen" and e["id"] not in canon:
+            by_name.setdefault(e["name"], e)
+    if not by_name:
+        return None
+    nodes, edges = [], []
+    for name, e in sorted(by_name.items()):
+        attrs = e.get("attrs") or {}
+        art = m.arts.get(e["artifact_id"]) or {}
+        tech = "3270 / CICS" if art.get("name", "").lower().endswith(".bms") else attrs.get("screen_type") or \
+            ("web page" if attrs.get("technology") == "web" else "screen")
+        nodes.append({"id": f"s{e['id']}", "title": _short(name, 32), "stereotype": ("not captured" if e["origin"] == "placeholder"
+                                                                                   else tech), "kind": "actor" if e["origin"] != "placeholder" else "missing",
+                      "dashed": e["origin"] == "placeholder"})
+    ids = {n["title"]: n["id"] for n in nodes}
+    for a, b, how in fl["edges"]:
+        if _short(a, 32) in ids and _short(b, 32) in ids:
+            edges.append({"from": ids[_short(a, 32)], "to": ids[_short(b, 32)], "label": how, "style": "solid", "head": "arrow"})
+    scene = layered(nodes, edges, "LR", straight=len(edges) > 12)
+    return {"id": "userflow", "kind": "userflow", "title": f"User flow — {store.info['name']}", **scene}
