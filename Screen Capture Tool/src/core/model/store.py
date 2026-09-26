@@ -515,7 +515,7 @@ class ProgramStore:
             "entities": total,
             "entities_by_kind": by_kind,
             "missing": missing,
-            "resolved_ratio": round(total / (total + len(missing)), 3) if total + len(missing) else 1.0,
+            "resolved_ratio": round(total / (total + len(missing)), 3) if total + len(missing) else None,
         }
 
     def graph(self) -> dict:

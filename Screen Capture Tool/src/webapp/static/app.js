@@ -808,7 +808,7 @@ async function loadProgram() {
   $("progSub").textContent = d.program.description || "Every capture is transcribed, checked, and added to this program's model.";
   const c = d.coverage, u = d.usage;
   $("progStats").innerHTML = _stat(c.files, "files") + _stat(c.entities, "entities") +
-    _stat(c.missing.length, "missing") + _stat(Math.round(c.resolved_ratio * 100) + "%", "resolved") +
+    _stat(c.missing.length, "missing") + _stat(c.resolved_ratio == null ? "—" : Math.round(c.resolved_ratio * 100) + "%", "resolved") +
     _stat(((u.input_tokens + u.output_tokens) / 1000).toFixed(1) + "k", "tokens") +
     _stat("$" + (u.cost || 0).toFixed(2), "est. cost");
   const steps = (d.usage_by_step || []).filter(x => x.cost > 0 || x.calls > 0);
@@ -829,7 +829,7 @@ async function loadProgram() {
   $("progMissing").innerHTML = c.missing.length ? c.missing.map(m => {
     const by = (m.referenced_by || []).map(r => `${r.name} (${r.relation}${r.artifact ? ", " + r.artifact : ""})`).join("; ");
     return `<div class="pm"><b>${escapeHtml(m.name)}</b> <small>${escapeHtml(m.kind)} — used by ${escapeHtml(by || "unknown")}</small></div>`;
-  }).join("") : `<p class="project-hint" style="margin:0">Nothing missing so far.</p>`;
+  }).join("") : `<p class="project-hint" style="margin:0">${c.entities ? "Nothing missing so far." : "No structure extracted yet — use Re-extract on a file."}</p>`;
   if ($("progMapBox").open) loadProgramMap();
 }
 async function loadArtifact(el) {

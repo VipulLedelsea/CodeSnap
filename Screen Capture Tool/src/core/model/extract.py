@@ -6,6 +6,7 @@ PROMPT_VERSION = "structure-v1"
 CHUNK_LINES = 600
 CHUNK_OVERLAP = 20
 MAX_TOKENS = 16000
+_NO_FORCED_TOOL = set()
 
 STRUCTURE_SYSTEM = f"""You map the structure of ONE source file from a legacy program so it can be stored in a program model.
 
@@ -98,11 +99,27 @@ def chunks(code: str, size: int = CHUNK_LINES, overlap: int = CHUNK_OVERLAP):
         start += size - overlap
 
 
-def _tool_input(message) -> dict:
+def _tool_input(message) -> dict | None:
     for block in getattr(message, "content", []) or []:
         if getattr(block, "type", "") == "tool_use" and getattr(block, "name", "") == STRUCTURE_TOOL["name"]:
             return dict(getattr(block, "input", {}) or {})
-    return {}
+    text = "".join(getattr(b, "text", "") for b in getattr(message, "content", []) or [])
+    from core.analysis import _parse_json
+    data = _parse_json(text) if text.strip() else None
+    return data if isinstance(data, dict) and ("entities" in data or "relations" in data) else None
+
+
+def _create(client, model, header, body):
+    base = dict(model=model, max_tokens=MAX_TOKENS, system=STRUCTURE_SYSTEM, tools=[STRUCTURE_TOOL],
+                messages=[{"role": "user", "content": header + "\n" + body}])
+    if model not in _NO_FORCED_TOOL:
+        try:
+            return client.messages.create(tool_choice={"type": "tool", "name": STRUCTURE_TOOL["name"]}, **base)
+        except Exception as exc:
+            if "tool_choice" not in str(exc):
+                raise
+            _NO_FORCED_TOOL.add(model)
+    return client.messages.create(tool_choice={"type": "auto"}, **base)
 
 
 def extract_structure(client, code: str, *, filename: str = "", language: str = "", model: str | None = None) -> dict:
@@ -115,14 +132,15 @@ def extract_structure(client, code: str, *, filename: str = "", language: str = 
         if len(parts) > 1:
             header += f"Part {index} of {len(parts)} (lines {start}-{start + len(lines) - 1}).\n"
         began = time.monotonic()
-        message = client.messages.create(
-            model=model,
-            max_tokens=MAX_TOKENS,
-            system=STRUCTURE_SYSTEM,
-            tools=[STRUCTURE_TOOL],
-            tool_choice={"type": "tool", "name": STRUCTURE_TOOL["name"]},
-            messages=[{"role": "user", "content": header + "\n" + numbered(lines, start)}],
-        )
+        header += "Call the record_structure tool exactly once with everything you found.\n"
+        message = _create(client, model, header, numbered(lines, start))
+        data = _tool_input(message)
+        if data is None:
+            message = _create(client, model, header + "You must respond by calling record_structure.\n",
+                              numbered(lines, start))
+            data = _tool_input(message)
+        if data is None:
+            raise ValueError("model did not return a record_structure call")
         usage = getattr(message, "usage", None)
         calls.append({
             "model": model,
@@ -131,7 +149,6 @@ def extract_structure(client, code: str, *, filename: str = "", language: str = 
             "ms": int((time.monotonic() - began) * 1000),
             "stop_reason": getattr(message, "stop_reason", None),
         })
-        data = _tool_input(message)
         entities += [e for e in data.get("entities") or [] if isinstance(e, dict)]
         relations += [r for r in data.get("relations") or [] if isinstance(r, dict)]
     return {"entities": entities, "relations": relations, "calls": calls, "prompt_version": PROMPT_VERSION}
