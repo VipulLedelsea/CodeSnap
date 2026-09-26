@@ -121,6 +121,19 @@ class ProgramStore:
     def info(self) -> dict:
         return self._one("SELECT * FROM program WHERE id = 1")
 
+    def get_meta(self, key: str, default=None):
+        row = self._one("SELECT value FROM meta WHERE key = ?", (key,))
+        if not row:
+            return default
+        try:
+            return json.loads(row["value"])
+        except (TypeError, ValueError):
+            return row["value"]
+
+    def set_meta(self, key: str, value):
+        with self.transaction() as db:
+            db.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, json.dumps(value)))
+
     @property
     def schema_version(self) -> int:
         return SCHEMA_VERSION
@@ -590,6 +603,8 @@ class ProgramStore:
             "corrections": self.corrections(active_only=False),
             "coverage": self.coverage(),
             "usage": self.usage(),
+            "assessment_inputs": self.get_meta("assessment_inputs", {}),
+            "assessment": self.get_meta("assessment"),
         }
         if write:
             (self.exports_dir / "program.json").write_text(json.dumps(data, indent=2))

@@ -606,3 +606,18 @@ body.dark .seg-opt{ color:#B6B6BE; }
 .sec-ev{margin:2px 0;overflow-wrap:anywhere}.sec-ev code{font-size:11px;background:#F4F4F6;padding:1px 4px;border-radius:4px}
 .sec-refs{margin:6px 0;display:flex;flex-wrap:wrap;gap:4px}.ref{font-size:10.5px;background:#F0EEF8;color:#4b3f8a;padding:1px 6px;border-radius:8px}
 .sec-src{color:#6E6E73;font-size:11px;overflow-wrap:anywhere}.sec-actions{margin-top:4px}.sec-actions .on{font-weight:700;text-decoration:underline}
+
+.as-chip{font-size:11px;font-weight:600;padding:1px 8px;border-radius:10px;margin-left:6px;background:#EFEFF2}
+.as-chip.good-to-go{background:#e3f5e8;color:#1f7a3a}.as-chip.patch{background:#fff1d6;color:#8a5a00}.as-chip.rebuild{background:#fde2e1;color:#a4161a}
+.as-verdict{display:flex;gap:18px;align-items:flex-start;margin:10px 0;padding:12px;border:1px solid rgba(0,0,0,.08);border-radius:10px}
+.as-big{font-size:22px;font-weight:700}.as-bucket{font-size:12px;color:#6E6E73;text-transform:uppercase;letter-spacing:.03em}
+.as-reasons{font-size:12.5px}.as-reasons p{margin:0 0 4px}.as-reasons ul{margin:0 0 4px;padding-left:18px}
+.as-grid{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:start}
+@media (max-width:720px){.as-grid{grid-template-columns:1fr}.as-verdict{flex-direction:column}}
+.as-bar{display:grid;grid-template-columns:110px 1fr 34px;gap:8px;align-items:center;font-size:12px;margin:3px 0}
+.as-track{height:8px;background:#EFEFF2;border-radius:6px;overflow:hidden}.as-fill{display:block;height:100%}
+.as-fill.good{background:#2f9e55}.as-fill.fair{background:#d9a21b}.as-fill.poor{background:#e06a2c}.as-fill.crit{background:#b3261e}
+.as-mx{border-collapse:collapse;font-size:11px}.as-mx td,.as-mx th{width:28px;height:24px;text-align:center}
+.mx.low{background:#e3f5e8}.mx.medium{background:#fff1d6}.mx.high{background:#fde2e1}.mx.critical{background:#f4b4b0;font-weight:700}
+.as-tbl{width:100%;border-collapse:collapse;font-size:12px}.as-tbl th,.as-tbl td{text-align:left;padding:4px 6px;border-bottom:1px solid rgba(0,0,0,.06)}
+.as-tbl input{width:100%;min-width:120px;font-size:12px}.as-phase{margin:6px 0}.as-item{font-size:12px;padding-left:12px}

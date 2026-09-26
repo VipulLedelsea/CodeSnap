@@ -840,6 +840,7 @@ async function loadProgram() {
   if ($("progFlowsBox").open) loadProgramFlows();
   if ($("progMapBox").open) loadProgramMap();
   if ($("progSecBox").open) loadProgramFindings();
+  if ($("progAssessBox").open) loadAssessment();
 }
 async function loadArtifact(el) {
   const box = el.querySelector(".pf-detail");
@@ -961,6 +962,73 @@ async function runSecurityScan() {
   } catch (e) { $("progSec").textContent = e.message; }
   btn.disabled = false; btn.textContent = "Run scan";
 }
+let _assess = null, _assessInputs = {};
+function _bar(label, v) {
+  const val = v == null ? 0 : v;
+  const cls = v == null ? "na" : v >= 80 ? "good" : v >= 60 ? "fair" : v >= 40 ? "poor" : "crit";
+  return `<div class="as-bar"><span class="as-bl">${escapeHtml(label)}</span><span class="as-track"><span class="as-fill ${cls}" style="width:${val}%"></span></span><b>${v == null ? "n/a" : v}</b></div>`;
+}
+function renderAssessment() {
+  const box = $("progAssess"), a = _assess;
+  if (!a) { box.innerHTML = `<p class="project-hint">Not assessed yet — Run assessment.</p>`; return; }
+  const v = a.verdict || {}, sc = a.scores || {}, conf = a.confidence || {};
+  $("progAssessSummary").innerHTML = `Assessment &amp; verdict <span class="as-chip ${_attr((v.bucket || "").replace(/ /g, "-"))}">${escapeHtml(v.label || "—")}</span>`;
+  const dims = ["health", "tech_debt", "security", "supportability", "complexity", "coupling"];
+  const cells = a.matrix.cells.map((row, ri) => `<tr><th>${5 - ri}</th>${row.map((names, ci) => {
+    const lvl = (5 - ri) * (ci + 1) >= 20 ? "critical" : (5 - ri) * (ci + 1) >= 12 ? "high" : (5 - ri) * (ci + 1) >= 6 ? "medium" : "low";
+    return `<td class="mx ${lvl}" title="${_attr(names.join(", "))}">${names.length || ""}</td>`; }).join("")}</tr>`).join("");
+  const comps = a.components.map(c => {
+    const inp = (_assessInputs.components || {})[c.name] || {};
+    const opts = [1, 2, 3, 4, 5].map(n => `<option value="${n}" ${n === c.risk.impact ? "selected" : ""}>${n}</option>`).join("");
+    return `<tr><td><b>${escapeHtml(c.name)}</b>${c.student_data ? ' <span class="ref">student data</span>' : ""}</td>
+      <td>${c.overall}</td><td><span class="sev ${_attr(c.risk.level)}">${escapeHtml(c.risk.level)}</span> ${c.risk.likelihood}×${c.risk.impact}</td>
+      <td><select class="as-imp" data-name="${_attr(c.name)}">${opts}</select><small>${c.risk.impact_source === "staff" ? "" : " default"}</small></td>
+      <td>${c.disposition ? escapeHtml(c.disposition.label) : "<small>as program</small>"}</td>
+      <td><input class="as-cots" data-name="${_attr(c.name)}" placeholder="COTS / retire note" value="${_attr(inp.cots || inp.retire || "")}"></td></tr>`;
+  }).join("");
+  const plan = (a.roadmap.phases || []).map(p => `<div class="as-phase"><div class="as-ph"><b>${escapeHtml(p.title)}</b> <small>${escapeHtml(p.window)} · ${p.low}–${p.high} person-weeks</small></div>
+    ${p.items.map(i => `<div class="as-item">${escapeHtml(i.title)} <small>${i.low}–${i.high} pw${i.components.length ? " · " + escapeHtml(i.components.slice(0, 3).join(", ")) + (i.components.length > 3 ? "…" : "") : ""}</small></div>`).join("")}</div>`).join("");
+  box.innerHTML = `
+    <div class="as-verdict"><div><div class="as-big">${escapeHtml(v.label || "—")}</div><div class="as-bucket">${escapeHtml(v.bucket || "")} · confidence ${escapeHtml(conf.level || "")}</div></div>
+      <div class="as-reasons"><p>${escapeHtml(v.meaning || "")}</p><ul>${(v.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
+      <small>${escapeHtml((conf.notes || []).join(" · "))}</small></div></div>
+    <div class="as-grid"><div>${_bar("Overall", sc.overall && sc.overall.score)}${dims.map(d => _bar(a.labels[d], sc[d] && sc[d].score)).join("")}
+      <p class="project-hint">Total risk: <span class="sev ${_attr(a.total_risk.level)}">${escapeHtml(a.total_risk.level)}</span> · ${a.grade_scale}</p></div>
+      <div><table class="as-mx"><tr><th></th><th colspan="5">impact →</th></tr>${cells}<tr><th></th>${[1, 2, 3, 4, 5].map(n => `<th>${n}</th>`).join("")}</tr></table><small>likelihood ↑ · hover a cell for components</small></div></div>
+    <div class="prog-section-label">Components</div>
+    <table class="as-tbl"><tr><th>Component</th><th>Score</th><th>Risk</th><th>Impact</th><th>Disposition</th><th>Staff note</th></tr>${comps}</table>
+    <div class="prog-section-label">Roadmap — ${a.roadmap.total.low}–${a.roadmap.total.high} person-weeks</div>${plan}`;
+  box.querySelectorAll(".as-imp").forEach(el => el.addEventListener("change", () => saveAssessInput(el.dataset.name, { impact: +el.value })));
+  box.querySelectorAll(".as-cots").forEach(el => el.addEventListener("change", () => {
+    const val = el.value.trim();
+    saveAssessInput(el.dataset.name, /^retire/i.test(val) ? { retire: val } : { cots: val });
+  }));
+}
+async function saveAssessInput(name, vals) {
+  const cur = { ...((_assessInputs.components || {})[name] || {}) };
+  if ("cots" in vals || "retire" in vals) { delete cur.cots; delete cur.retire; }
+  const payload = { components: { [name]: { ...cur, ...vals } } };
+  try {
+    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/assessment/inputs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    _assess = d.assessment; _assessInputs = d.inputs; renderAssessment();
+  } catch (e) { alert(e.message); }
+}
+async function loadAssessment() {
+  try {
+    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/assessment`);
+    _assess = d.assessment; _assessInputs = d.inputs || {}; renderAssessment();
+  } catch (e) { $("progAssess").textContent = e.message; }
+}
+async function runAssessment() {
+  const btn = $("progAssessRun");
+  btn.disabled = true; btn.textContent = "Assessing…";
+  try {
+    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/assessment?online=${$("progSecOnline").checked}`, { method: "POST" });
+    _assess = d.assessment; _assessInputs = d.inputs || {}; renderAssessment();
+    if ($("progSecBox").open) loadProgramFindings();
+  } catch (e) { $("progAssess").textContent = e.message; }
+  btn.disabled = false; btn.textContent = "Run assessment";
+}
 async function loadProgramMap() {
   const box = $("progMap");
   try {
@@ -1023,6 +1091,8 @@ document.querySelectorAll("#kindSeg .seg-opt").forEach(b => b.addEventListener("
   }
 }));
 
+$("progAssessBox").addEventListener("toggle", () => { if ($("progAssessBox").open) loadAssessment(); });
+$("progAssessRun").addEventListener("click", runAssessment);
 $("progSecBox").addEventListener("toggle", () => { if ($("progSecBox").open) loadProgramFindings(); });
 $("progSecScan").addEventListener("click", runSecurityScan);
 $("progSecFilter").addEventListener("change", renderFindings);

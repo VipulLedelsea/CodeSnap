@@ -57,6 +57,13 @@
           <div class="prog-files" id="progFiles"></div>
           <div class="prog-section-label" id="progMissingLabel">Referenced but not captured</div>
           <div class="prog-missing" id="progMissing"></div>
+          <details class="prog-map" id="progAssessBox"><summary id="progAssessSummary">Assessment &amp; verdict</summary>
+            <div class="sec-bar">
+              <button class="btn-primary" id="progAssessRun" type="button">Run assessment</button>
+              <span class="project-hint">Re-scans security, then scores the program. No API cost.</span>
+            </div>
+            <div id="progAssess"></div>
+          </details>
           <details class="prog-map" id="progSecBox"><summary id="progSecSummary">Security &amp; end-of-life</summary>
             <div class="sec-bar">
               <button class="btn-secondary" id="progSecScan" type="button">Run scan</button>

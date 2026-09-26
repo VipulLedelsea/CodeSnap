@@ -310,6 +310,31 @@ def api_eol_refresh():
     return eol.refresh()
 
 
+@app.get("/api/programs/{slug}/assessment")
+def api_program_assessment(slug: str):
+    with _open_program(slug) as store:
+        return {"assessment": store.get_meta("assessment"), "inputs": store.get_meta("assessment_inputs", {})}
+
+
+@app.post("/api/programs/{slug}/assessment")
+def api_program_assess(slug: str, scan: bool = True, online: bool = False):
+    from core.assess import run_assessment
+    with _open_program(slug) as store:
+        return {"ok": True, "assessment": run_assessment(store, scan=scan, online=online),
+                "inputs": store.get_meta("assessment_inputs", {})}
+
+
+@app.post("/api/programs/{slug}/assessment/inputs")
+def api_program_assess_inputs(slug: str, payload: dict = Body(...)):
+    from core.assess import run_assessment, set_inputs
+    with _open_program(slug) as store:
+        try:
+            inputs = set_inputs(store, payload or {})
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "impact / criticality must be 1–5"}, status_code=400)
+        return {"ok": True, "inputs": inputs, "assessment": run_assessment(store, scan=False)}
+
+
 @app.get("/api/programs/{slug}/coverage")
 def api_program_coverage(slug: str):
     with _open_program(slug) as store:
