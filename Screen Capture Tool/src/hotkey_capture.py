@@ -88,6 +88,12 @@ class App:
     """Run state + API client + background reader pool."""
 
     def __init__(self, client):
+        from core.usage import TrackedClient, UsageTracker
+        if isinstance(client, TrackedClient):
+            self.tracker = client.tracker
+        else:
+            self.tracker = UsageTracker()
+            client = self.tracker.wrap(client) if client is not None else None
         self.client = client
         self.running = False                      # idle until a session is started
         self.agent_mode = False                   # set from --agent in main
@@ -144,7 +150,8 @@ class App:
         """Client is normally built at boot; load lazily if it isn't (safe no-op otherwise)."""
         if self.client is None:
             import anthropic
-            self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=120.0)
+            self.client = self.tracker.wrap(
+                anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=120.0))
         return self.client
 
     # --- burst mode: auto-capture while the user scrolls; phash drops near-dups ---
@@ -188,6 +195,7 @@ class App:
     def _safe_extract(self, path, cache_dir):
         try:
             from core.analysis import extract_to_cache
+            self.tracker.set_thread_bucket(str(Path(path).parent))
             extract_to_cache(self.client, path, cache_dir)
         except Exception:  # noqa: BLE001
             pass
@@ -259,6 +267,8 @@ class App:
         )
         self._analysis_lock.acquire()   # serialise overlapping analyses (captures stay non-blocking)
         self._analysing = True
+        bucket = str(session_dir)
+        self.tracker.default_bucket = bucket
         try:
             if self.program:
                 self._share_copybooks()
@@ -271,8 +281,11 @@ class App:
                 runner = run_agent
             final, _ = runner(self.client, ctx, goal=goal, verbose=True, audit=audit)
             print(f"\n{'=' * 60}\n{final}\n{'=' * 60}")
+            records = self.tracker.take(bucket)
+            self._report_usage(records)
             if self.program:
-                self._ingest_into_program(imgs, ctx)
+                self._ingest_into_program(imgs, ctx, records)
+            self.tracker.take(bucket)
         except Exception as exc:  # noqa: BLE001
             print(f"Analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
             try:
@@ -295,7 +308,16 @@ class App:
         except Exception as exc:  # noqa: BLE001
             print(f"Copybook export skipped: {exc}", file=sys.stderr)
 
-    def _ingest_into_program(self, imgs, ctx):
+    def _report_usage(self, records):
+        from core import status
+        from core.usage import summarize
+        total = summarize(records)
+        steps = ", ".join(f"{k} ${v['cost']:.3f}" for k, v in sorted(total["by_step"].items(), key=lambda kv: -kv[1]["cost"]))
+        print(f"[usage] {total['calls']} calls, {total['input_tokens']:,} in / {total['output_tokens']:,} out tokens, "
+              f"${total['cost']:.3f} ({steps})")
+        status.publish(f"Cost for this file: ${total['cost']:.3f} ({total['calls']} calls)", "info")
+
+    def _ingest_into_program(self, imgs, ctx, records=()):
         from core import status
         from core.model import ProgramStore, ingest_capture
         if not ctx.last_report:
@@ -305,6 +327,10 @@ class App:
                 session_id = store.add_session(mode="burst", region=",".join(map(str, self.region)) if self.region else None)
                 status.publish("Adding file to the program model", "tool", stage="save")
                 artifact_id = ingest_capture(store, self.client, imgs, ctx.last_report, session_id=session_id)
+                for r in records:
+                    store.log_run(r["step"], artifact_id=artifact_id, model=r["model"], input_tokens=r["input_tokens"],
+                                  output_tokens=r["output_tokens"], cost=r["cost"], ms=r["ms"], ok=r["ok"],
+                                  error=r["error"])
                 name = store.artifact(artifact_id)["name"]
             status.publish(f"Added {name} to program {self.program}", "info", stage="done")
         except Exception as exc:  # noqa: BLE001

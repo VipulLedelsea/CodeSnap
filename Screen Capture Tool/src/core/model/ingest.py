@@ -2,6 +2,8 @@ import json
 import re
 from pathlib import Path
 
+from core.usage import cost as usage_cost
+
 from .extract import PROMPT_VERSION, extract_structure
 from .kinds import ENTITY_KINDS, RELATION_KINDS
 
@@ -111,6 +113,7 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
     for call in structure["calls"]:
         store.log_run("structure", artifact_id=artifact_id, model=call["model"], prompt_version=PROMPT_VERSION,
                       input_tokens=call["input_tokens"], output_tokens=call["output_tokens"], ms=call["ms"],
+                      cost=usage_cost(call["model"], call["input_tokens"], call["output_tokens"]),
                       ok=call.get("stop_reason") != "max_tokens",
                       error="output truncated (max_tokens)" if call.get("stop_reason") == "max_tokens" else None)
     counts = apply_structure(store, artifact_id, structure, artifact["name"], len(code.splitlines()))

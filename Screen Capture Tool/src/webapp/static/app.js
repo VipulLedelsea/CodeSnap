@@ -809,12 +809,17 @@ async function loadProgram() {
   const c = d.coverage, u = d.usage;
   $("progStats").innerHTML = _stat(c.files, "files") + _stat(c.entities, "entities") +
     _stat(c.missing.length, "missing") + _stat(Math.round(c.resolved_ratio * 100) + "%", "resolved") +
-    _stat(((u.input_tokens + u.output_tokens) / 1000).toFixed(1) + "k", "tokens");
+    _stat(((u.input_tokens + u.output_tokens) / 1000).toFixed(1) + "k", "tokens") +
+    _stat("$" + (u.cost || 0).toFixed(2), "est. cost");
+  const steps = (d.usage_by_step || []).filter(x => x.cost > 0 || x.calls > 0);
+  $("progCost").innerHTML = steps.length ? "Cost by step: " + steps.map(x =>
+    `${escapeHtml(x.step)} <b>$${(x.cost || 0).toFixed(3)}</b> <small>(${x.calls} calls)</small>`).join(" · ") +
+    ` <small>— estimated from list prices</small>` : "";
   $("progFiles").innerHTML = d.artifacts.length ? d.artifacts.map(a => `
     <details class="prog-file" data-id="${a.id}">
       <summary>
         <span class="pf-name">${escapeHtml(a.name)}</span>
-        <span class="pf-meta">${escapeHtml(a.language || a.artifact_type)} · v${a.version} · ${a.entities} entities · ${a.frames} frames</span>
+        <span class="pf-meta">${escapeHtml(a.language || a.artifact_type)} · v${a.version} · ${a.entities} entities · ${a.frames} frames · $${(a.cost || 0).toFixed(3)}</span>
         <span class="pf-status ${_attr(a.status)}">${escapeHtml(a.status)}</span>
       </summary>
       <div class="pf-detail"></div>

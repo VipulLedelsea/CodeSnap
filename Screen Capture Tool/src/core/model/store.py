@@ -477,6 +477,23 @@ class ProgramStore:
         )
         return row
 
+    def usage_by_step(self) -> dict:
+        rows = self._all(
+            "SELECT step, model, COUNT(*) AS calls, COALESCE(SUM(input_tokens), 0) AS input_tokens, "
+            "COALESCE(SUM(output_tokens), 0) AS output_tokens, COALESCE(SUM(cost), 0) AS cost, "
+            "COALESCE(SUM(ms), 0) AS ms FROM run GROUP BY step, model ORDER BY cost DESC"
+        )
+        return {"steps": rows, "files": self._all(
+            "SELECT a.name, COALESCE(SUM(r.cost), 0) AS cost, COALESCE(SUM(r.input_tokens), 0) AS input_tokens, "
+            "COALESCE(SUM(r.output_tokens), 0) AS output_tokens, COUNT(r.id) AS calls FROM artifact a "
+            "LEFT JOIN run r ON r.artifact_id = a.id WHERE a.is_current = 1 OR r.id IS NOT NULL "
+            "GROUP BY a.name ORDER BY cost DESC")}
+
+    def artifact_cost(self, artifact_id: int) -> float:
+        row = self._one("SELECT COALESCE(SUM(r.cost), 0) AS cost FROM run r JOIN artifact a ON a.id = r.artifact_id "
+                        "WHERE a.name = (SELECT name FROM artifact WHERE id = ?)", (artifact_id,))
+        return round(row["cost"], 4) if row else 0.0
+
     def coverage(self) -> dict:
         by_status = {r["status"]: r["n"] for r in self._all(
             "SELECT status, COUNT(*) AS n FROM artifact WHERE is_current = 1 GROUP BY status")}

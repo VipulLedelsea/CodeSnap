@@ -144,6 +144,7 @@ def _artifact_summary(store, artifact: dict) -> dict:
     out["entities"] = len(store._all("SELECT DISTINCT entity_id FROM entity_source WHERE artifact_id = ?",
                                      (artifact["id"],)))
     out["frames"] = len(store.artifact_evidence(artifact["id"]))
+    out["cost"] = store.artifact_cost(artifact["id"])
     return out
 
 
@@ -170,6 +171,7 @@ def api_program(slug: str):
             "program": store.info,
             "coverage": store.coverage(),
             "usage": store.usage(),
+            "usage_by_step": store.usage_by_step()["steps"],
             "artifacts": [_artifact_summary(store, a) for a in store.artifacts()],
         }
 
