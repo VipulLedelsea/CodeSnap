@@ -260,3 +260,109 @@ def sequence(participants: list, messages: list) -> dict:
     width = max(x - 40 + MARGIN, max((max(p[0] for p in e["points"]) + 40 + len(e["label"]) * 3.5)
                                      for e in edges if e.get("message")) if messages else 300)
     return {"nodes": nodes, "edges": edges, "width": round(max(width, 300)), "height": round(bottom + MARGIN)}
+
+
+LANE_GAP, GROUP_GAP, CELL_GAP, GPAD, GTITLE = 70, 16, 10, 12, 24
+
+
+def compact_size(n):
+    w = 40 + max(text_w(n["title"], True), text_w(n.get("sub") or "") * 0.85) + (46 if n.get("badge") else 0)
+    return max(130, min(250, w)), (44 if n.get("sub") else 34)
+
+
+def lanes(lane_specs: list, edges: list, bars: list, title_h=30) -> dict:
+    groups, nodes, lane_boxes = [], [], []
+    x = MARGIN
+    top = MARGIN + title_h + 26
+    for lane in lane_specs:
+        y = top + 28
+        lane_w = 160
+        placed = []
+        for g in lane["groups"]:
+            items = g["nodes"]
+            for n in items:
+                n["w"], n["h"] = compact_size(n)
+                n["compact"] = True
+            nw = max([n["w"] for n in items] or [140])
+            nh = max([n["h"] for n in items] or [34])
+            cols = 1 if len(items) <= 8 else 2 if len(items) <= 20 else 3
+            rows = max(1, -(-len(items) // cols))
+            gw = cols * nw + (cols - 1) * CELL_GAP + 2 * GPAD
+            gh = GTITLE + rows * (nh + CELL_GAP) - CELL_GAP + GPAD + (0 if items else 10)
+            placed.append((g, items, nw, nh, cols, gw, gh, y))
+            y += gh + GROUP_GAP
+            lane_w = max(lane_w, gw)
+        for g, items, nw, nh, cols, gw, gh, gy in placed:
+            gx = x + GPAD
+            groups.append({"id": g["id"], "x": gx, "y": gy, "w": lane_w, "h": gh, "title": g["title"], "style": "group",
+                           "dashed": g.get("dashed", True)})
+            for i, n in enumerate(items):
+                r, c = divmod(i, cols)
+                n["w"], n["h"] = nw, nh
+                n["x"] = gx + GPAD + c * (nw + CELL_GAP)
+                n["y"] = gy + GTITLE + r * (nh + CELL_GAP)
+                nodes.append(n)
+        lane_boxes.append({"id": lane["id"], "x": x, "y": top, "w": lane_w + 2 * GPAD, "title": lane["title"],
+                           "bottom": y})
+        x += lane_w + 2 * GPAD + LANE_GAP
+    total_w = x - LANE_GAP
+    bottom = max([l["bottom"] for l in lane_boxes] or [top + 100])
+    groups[:0] = [{"id": l["id"], "x": l["x"], "y": l["y"], "w": l["w"], "h": bottom - l["y"], "title": l["title"],
+                   "style": "lane", "dashed": True} for l in lane_boxes]
+    y = bottom + 20
+    for b in bars:
+        cx, cy, row_h = MARGIN + 150, y + 8, 0
+        chips = []
+        for chip in b["chips"]:
+            chip["w"], chip["h"] = max(70, text_w(chip["title"]) * 0.9 + 26), 24
+            chip["compact"] = True
+            chip["chip"] = True
+            if cx + chip["w"] > total_w - 8 and chips:
+                cx, cy = MARGIN + 150, cy + 30
+            chip["x"], chip["y"] = cx, cy
+            cx += chip["w"] + 8
+            chips.append(chip)
+            nodes.append(chip)
+        h = (cy - y) + 32
+        groups.append({"id": b["id"], "x": MARGIN, "y": y, "w": total_w - MARGIN, "h": h, "title": b["title"],
+                       "style": "bar", "dashed": False})
+        y += h + 8
+    by_id = {n["id"]: n for n in nodes} | {g["id"]: g for g in groups}
+    lane_of = {}
+    for li, lane in enumerate(lane_specs):
+        for g in lane["groups"]:
+            lane_of[g["id"]] = li
+            for n in g["nodes"]:
+                lane_of[n["id"]] = li
+    gaps = {}
+    kept = []
+    for e in edges:
+        a, b = by_id.get(e["from"]), by_id.get(e["to"])
+        la, lb = lane_of.get(e["from"]), lane_of.get(e["to"])
+        if a is None or b is None or la is None or lb is None or la == lb:
+            continue
+        forward = lb > la
+        gap = la if forward else la - 1
+        gaps.setdefault(gap, []).append(e)
+        e["_ab"] = (a, b, forward, gap)
+        kept.append(e)
+    for gap, es in gaps.items():
+        if gap < 0:
+            continue
+        lane = lane_boxes[gap]
+        gx0 = lane["x"] + lane["w"]
+        es.sort(key=lambda e: (e["_ab"][1]["y"], e["_ab"][0]["y"]))
+        for k, e in enumerate(es):
+            a, b, forward, _ = e.pop("_ab")
+            mx = gx0 + LANE_GAP * (0.15 + 0.7 * (k + 1) / (len(es) + 1))
+            ay = a["y"] + (a["h"] / 2 if a.get("compact") or a.get("style") != "lane" else 20)
+            by = b["y"] + (b["h"] / 2 if b.get("style") not in ("group", "lane") else min(b["h"] - 10, GTITLE + 16))
+            if forward:
+                sx, tx = a["x"] + a["w"], b["x"]
+            else:
+                sx, tx = a["x"], b["x"] + b["w"]
+            e["points"] = [(sx, ay), (mx, ay), (mx, by), (tx, by)]
+    for e in kept:
+        e.pop("_ab", None)
+    return {"nodes": nodes, "groups": groups, "edges": [e for e in kept if "points" in e],
+            "width": round(total_w + MARGIN), "height": round(y + MARGIN)}

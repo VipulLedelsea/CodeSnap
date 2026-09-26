@@ -13,9 +13,51 @@ STYLE = {
 INK, MUTED, EDGE = "#2A2521", "#857A70", "#5E5750"
 
 
+GROUP_STYLE = {"lane": ("#FAF7F4", "#D9CFC6", "#BE6E4A", 13), "group": ("#FFFFFF", "#CFC5BC", "#857A70", 11),
+               "bar": ("#F4F1EE", "#D9CFC6", "#2A2521", 12)}
+
+
 def _style(n):
+    if n.get("fill") or n.get("chip"):
+        return n.get("fill") or "#FFFFFF", n.get("stroke") or "#CFC5BC"
+    if n.get("compact"):
+        return ("#FCFAF8", "#A99C90") if n.get("dashed") else ("#FFFFFF", "#8F847A")
     fill, stroke = STYLE.get(n.get("kind"), STYLE["class"])
     return fill, ("#A99C90" if n.get("dashed") else stroke)
+
+
+def _svg_group(g):
+    fill, stroke, ink, size = GROUP_STYLE[g["style"]]
+    dash = ' stroke-dasharray="6,4"' if g.get("dashed") else ""
+    tx, ty = (g["x"] + 12, g["y"] + 21) if g["style"] == "bar" else (g["x"] + 10, g["y"] + (19 if g["style"] == "lane" else 15))
+    return (f'<rect x="{g["x"]:.1f}" y="{g["y"]:.1f}" width="{g["w"]:.1f}" height="{g["h"]:.1f}" rx="8" fill="{fill}" '
+            f'stroke="{stroke}" stroke-width="1.1"{dash}/>'
+            f'<text x="{tx:.1f}" y="{ty:.1f}" font-size="{size}" font-weight="700" fill="{ink}">{escape(g["title"])}</text>')
+
+
+def _svg_compact(n):
+    fill, stroke = _style(n)
+    x, y, w, h = n["x"], n["y"], n["w"], n["h"]
+    dash = ' stroke-dasharray="5,4"' if n.get("dashed") else ""
+    if n.get("chip"):
+        ink = n.get("ink") or n.get("stroke") or INK
+        return (f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="12" fill="{fill}" stroke="{stroke}" stroke-width="1"/>'
+                f'<text x="{x + w / 2:.1f}" y="{y + 16:.1f}" text-anchor="middle" font-size="10.5" fill="{ink}">{escape(n["title"])}</text>')
+    out = [f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="6" fill="{fill}" stroke="{stroke}" stroke-width="1.1"{dash}/>']
+    ic = n.get("icon")
+    if ic:
+        iy = y + (h - 20) / 2
+        out.append(f'<rect x="{x + 8:.1f}" y="{iy:.1f}" width="22" height="20" rx="4" fill="{ic["color"]}"/>'
+                   f'<text x="{x + 19:.1f}" y="{iy + 13.5:.1f}" text-anchor="middle" font-size="8" font-weight="700" fill="#fff">{escape(ic["text"])}</text>')
+    ty = y + (18 if n.get("sub") else h / 2 + 4)
+    out.append(f'<text x="{x + 36:.1f}" y="{ty:.1f}" font-size="11.5" font-weight="700" fill="{INK}">{escape(n["title"])}</text>')
+    if n.get("sub"):
+        out.append(f'<text x="{x + 36:.1f}" y="{y + 33:.1f}" font-size="10" fill="{MUTED}">{escape(str(n["sub"]))}</text>')
+    b = n.get("badge")
+    if b:
+        out.append(f'<rect x="{x + w - 42:.1f}" y="{y + 5:.1f}" width="36" height="14" rx="7" fill="{b["color"]}"/>'
+                   f'<text x="{x + w - 24:.1f}" y="{y + 15:.1f}" text-anchor="middle" font-size="8" font-weight="700" fill="#fff">{escape(b["text"])}</text>')
+    return "".join(out)
 
 
 def blocks(n):
@@ -56,6 +98,8 @@ def svg(scene: dict, title=True) -> str:
            f'<rect width="{W}" height="{H}" fill="#FFFFFF"/>']
     if title:
         out.append(f'<text x="30" y="26" font-size="15" font-weight="700" fill="{INK}">{escape(scene.get("title", ""))}</text>')
+    for g in scene.get("groups") or []:
+        out.append(_svg_group(g))
     for e in scene["edges"]:
         pts = " ".join(f"{x:.1f},{y:.1f}" for x, y in e["points"])
         dash = ' stroke-dasharray="5,4"' if e.get("style") == "dashed" else ""
@@ -69,6 +113,9 @@ def svg(scene: dict, title=True) -> str:
             out.append(f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="{anchor}" font-size="10.5" fill="{MUTED}" '
                        f'paint-order="stroke" stroke="#fff" stroke-width="3">{escape(e["label"])}</text>')
     for n in scene["nodes"]:
+        if n.get("compact"):
+            out.append(_svg_compact(n))
+            continue
         fill, stroke = _style(n)
         x, y, w, h = n["x"], n["y"], n["w"], n["h"]
         dash = ' stroke-dasharray="5,4"' if n.get("dashed") else ""
@@ -129,6 +176,18 @@ def png(scene: dict, scale: float = 2.0) -> bytes:
     f, fb, fs, ft = _font(int(12 * scale)), _font(int(12 * scale), True), _font(int(10.5 * scale)), _font(int(15 * scale), True)
     S = lambda v: v * scale
     d.text((S(30), S(12)), scene.get("title", ""), fill=INK, font=ft)
+    fg, f8, f10 = _font(int(11 * scale), True), _font(int(8 * scale), True), _font(int(10 * scale))
+    for g in scene.get("groups") or []:
+        fill, stroke, ink, size = GROUP_STYLE[g["style"]]
+        box = [S(g["x"]), S(g["y"]), S(g["x"] + g["w"]), S(g["y"] + g["h"])]
+        d.rounded_rectangle(box, radius=S(8), fill=fill)
+        if g.get("dashed"):
+            (x0, y0, x1, y1) = box
+            _dashed(d, [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], stroke, max(1, int(scale)))
+        else:
+            d.rounded_rectangle(box, radius=S(8), outline=stroke, width=max(1, int(scale)))
+        gf = _font(int(size * scale), True)
+        d.text((S(g["x"] + (12 if g["style"] == "bar" else 10)), S(g["y"] + (8 if g["style"] == "bar" else 5))), g["title"], fill=ink, font=gf)
     for e in scene["edges"]:
         pts = [(S(x), S(y)) for x, y in e["points"]]
         color = "#C9BFB6" if e.get("lifeline") else EDGE
@@ -159,6 +218,33 @@ def png(scene: dict, scale: float = 2.0) -> bytes:
     for n in scene["nodes"]:
         fill, stroke = _style(n)
         x, y, w, h = S(n["x"]), S(n["y"]), S(n["w"]), S(n["h"])
+        if n.get("compact"):
+            if n.get("chip"):
+                d.rounded_rectangle([x, y, x + w, y + h], radius=S(12), fill=fill, outline=stroke, width=max(1, int(scale)))
+                tw = d.textlength(n["title"], font=fs)
+                d.text((x + (w - tw) / 2, y + S(5)), n["title"], fill=n.get("ink") or n.get("stroke") or INK, font=fs)
+                continue
+            if n.get("dashed"):
+                d.rounded_rectangle([x, y, x + w, y + h], radius=S(6), fill=fill)
+                _dashed(d, [(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)], stroke, max(1, int(scale)))
+            else:
+                d.rounded_rectangle([x, y, x + w, y + h], radius=S(6), fill=fill, outline=stroke, width=max(1, int(scale)))
+            ic = n.get("icon")
+            if ic:
+                iy = y + (h - S(20)) / 2
+                d.rounded_rectangle([x + S(8), iy, x + S(30), iy + S(20)], radius=S(4), fill=ic["color"])
+                tw = d.textlength(ic["text"], font=f8)
+                d.text((x + S(19) - tw / 2, iy + S(5)), ic["text"], fill="#FFFFFF", font=f8)
+            ty = y + (S(6) if n.get("sub") else (h - S(13)) / 2)
+            d.text((x + S(36), ty), n["title"], fill=INK, font=fg)
+            if n.get("sub"):
+                d.text((x + S(36), y + S(24)), str(n["sub"]), fill=MUTED, font=f10)
+            b = n.get("badge")
+            if b:
+                d.rounded_rectangle([x + w - S(42), y + S(5), x + w - S(6), y + S(19)], radius=S(7), fill=b["color"])
+                tw = d.textlength(b["text"], font=f8)
+                d.text((x + w - S(24) - tw / 2, y + S(7)), b["text"], fill="#FFFFFF", font=f8)
+            continue
         d.rounded_rectangle([x, y, x + w, y + h], radius=S(6), fill=fill, outline=stroke, width=max(1, int(scale * 1.2)))
         for b in blocks(n):
             if not b.get("head"):
@@ -177,6 +263,15 @@ def png(scene: dict, scale: float = 2.0) -> bytes:
 
 
 def _html(n):
+    if n.get("compact"):
+        ic = n.get("icon")
+        head = (f'<span style="background:{ic["color"]};color:#fff;font-size:9px;font-weight:bold;padding:2px 4px;'
+                f'border-radius:3px">{escape(ic["text"])}</span>&nbsp;') if ic else ""
+        b = n.get("badge")
+        tail = (f'&nbsp;<span style="background:{b["color"]};color:#fff;font-size:8px;padding:1px 4px;border-radius:6px">'
+                f'{escape(b["text"])}</span>') if b else ""
+        sub = f'<br><span style="color:{MUTED};font-size:10px">{escape(str(n["sub"]))}</span>' if n.get("sub") else ""
+        return f"{head}<b>{escape(n['title'])}</b>{tail}{sub}" if not n.get("chip") else escape(n["title"])
     parts = []
     if n.get("stereotype"):
         parts.append(f"<i>«{escape(n['stereotype'])}»</i>")
@@ -193,13 +288,22 @@ def drawio(scenes: list) -> str:
                    f'gridSize="10" page="1" pageWidth="{sc["width"]}" pageHeight="{sc["height"]}"><root>'
                    '<mxCell id="0"/><mxCell id="1" parent="0"/>')
         ids = {}
+        for gi, g in enumerate(sc.get("groups") or []):
+            fill, stroke, ink, size = GROUP_STYLE[g["style"]]
+            gid = f"g{di}_{gi}"
+            ids[g["id"]] = gid
+            style = (f"rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor={fill};strokeColor={stroke};fontColor={ink};"
+                     f"verticalAlign=top;align=left;spacingLeft=8;fontStyle=1;fontSize={size};{'dashed=1;' if g.get('dashed') else ''}")
+            out.append(f'<mxCell id="{gid}" value={quoteattr(g["title"])} style="{style}" vertex="1" parent="1">'
+                       f'<mxGeometry x="{g["x"]:.0f}" y="{g["y"]:.0f}" width="{g["w"]:.0f}" height="{g["h"]:.0f}" as="geometry"/></mxCell>')
         for i, n in enumerate(sc["nodes"]):
             fill, stroke = _style(n)
             cid = f"n{di}_{i}"
             ids[n["id"]] = cid
-            align = "align=left;spacingLeft=6;" if n.get("kind") == "class" else "align=center;"
-            style = (f"rounded={1 if n.get('kind') in ('actor', 'system', 'external_system') else 0};whiteSpace=wrap;html=1;"
-                     f"fillColor={fill};strokeColor={stroke};fontColor={INK};verticalAlign=top;{align}"
+            align = "align=left;spacingLeft=6;" if n.get("kind") == "class" or (n.get("compact") and not n.get("chip")) else "align=center;"
+            style = (f"rounded={1 if n.get('kind') in ('actor', 'system', 'external_system') or n.get('compact') else 0};whiteSpace=wrap;html=1;"
+                     f"fillColor={fill};strokeColor={stroke};fontColor={n.get('ink') or INK};"
+                     f"verticalAlign={'middle' if n.get('compact') else 'top'};{align}"
                      f"{'dashed=1;' if n.get('dashed') else ''}fontSize=12;")
             out.append(f'<mxCell id="{cid}" value={quoteattr(_html(n))} style="{style}" vertex="1" parent="1">'
                        f'<mxGeometry x="{n["x"]:.0f}" y="{n["y"]:.0f}" width="{n["w"]:.0f}" height="{n["h"]:.0f}" as="geometry"/></mxCell>')
@@ -246,7 +350,7 @@ class _Vsdx:
         return self.id
 
     def box(self, x, y, w, h, *, fill=None, line=None, dashed=False, text="", align=1, valign=0, size=12, bold=False,
-            italic=False, color=INK, arrow=None):
+            italic=False, color=INK, arrow=None, margin=None):
         W, Hh = max(w, 1) / DPI, max(h, 1) / DPI
         pinx, piny = (x + w / 2) / DPI, (self.H - y - h / 2) / DPI
         cells = [_c("PinX", f"{pinx:.4f}"), _c("PinY", f"{piny:.4f}"), _c("Width", f"{W:.4f}"), _c("Height", f"{Hh:.4f}"),
@@ -254,7 +358,8 @@ class _Vsdx:
                  _c("LineWeight", "0.0125"), _c("LinePattern", 0 if line is None else (2 if dashed else 1)),
                  _c("LineColor", line or "#000000"), _c("FillForegnd", fill or "#FFFFFF"),
                  _c("FillPattern", 0 if fill is None else 1), _c("VerticalAlign", valign),
-                 _c("TopMargin", "0.06"), _c("BottomMargin", "0.0"), _c("LeftMargin", "0.05"), _c("RightMargin", "0.03")]
+                 _c("TopMargin", "0.06" if margin is None else margin), _c("BottomMargin", "0.0"),
+                 _c("LeftMargin", "0.05" if margin is None else margin), _c("RightMargin", "0.03" if margin is None else margin)]
         style = (1 if bold else 0) | (2 if italic else 0)
         chars = f'<Section N="Character"><Row IX="0">{_c("Size", f"{size / 72:.4f}")}{_c("Color", color)}{_c("Style", style)}</Row></Section>'
         para = f'<Section N="Paragraph"><Row IX="0">{_c("HorzAlign", align)}</Row></Section>'
@@ -288,6 +393,11 @@ class _Vsdx:
 def _vsdx_page(sc):
     v = _Vsdx(sc["height"])
     v.box(30, 6, max(260, len(sc.get("title", "")) * 11 + 40), 26, text=sc.get("title", ""), align=0, size=14, bold=True)
+    for g in sc.get("groups") or []:
+        fill, stroke, ink, size = GROUP_STYLE[g["style"]]
+        v.box(g["x"], g["y"], g["w"], g["h"], fill=fill, line=stroke, dashed=bool(g.get("dashed")))
+        v.box(g["x"] + 6, g["y"] + 2, min(g["w"] - 8, len(g["title"]) * 8 + 20), 20, text=g["title"], align=0,
+              size=size - 2, bold=True, color=ink)
     for e in sc["edges"]:
         v.path(e["points"], color="#C9BFB6" if e.get("lifeline") else EDGE, dashed=e.get("style") == "dashed",
                head=e.get("head", "arrow"))
@@ -303,6 +413,24 @@ def _vsdx_page(sc):
     for n in sc["nodes"]:
         fill, stroke = _style(n)
         v.box(n["x"], n["y"], n["w"], n["h"], fill=fill, line=stroke, dashed=bool(n.get("dashed")))
+        if n.get("compact"):
+            if n.get("chip"):
+                v.box(n["x"], n["y"] + 3, n["w"], n["h"] - 3, text=n["title"], align=1, size=8.5,
+                      color=n.get("ink") or n.get("stroke") or INK)
+                continue
+            ic = n.get("icon")
+            if ic:
+                iy = n["y"] + (n["h"] - 20) / 2
+                v.box(n["x"] + 8, iy, 22, 20, fill=ic["color"], text=ic["text"], align=1, valign=1, size=6, bold=True,
+                      color="#FFFFFF", margin="0")
+            txt = n["title"] + (f"\n{n['sub']}" if n.get("sub") else "")
+            v.box(n["x"] + 34, n["y"], n["w"] - 34 - (44 if n.get("badge") else 4), n["h"], text=txt, align=0, valign=1,
+                  size=9, bold=False)
+            b = n.get("badge")
+            if b:
+                v.box(n["x"] + n["w"] - 42, n["y"] + 5, 36, 14, fill=b["color"], text=b["text"], align=1, valign=1,
+                      size=6.5, bold=True, color="#FFFFFF", margin="0")
+            continue
         for b in blocks(n):
             if not b.get("head"):
                 v.path([(n["x"], n["y"] + b["y"]), (n["x"] + n["w"], n["y"] + b["y"])], color=stroke, head="none")

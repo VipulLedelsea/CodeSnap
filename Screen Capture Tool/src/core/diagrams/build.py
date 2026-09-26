@@ -1,7 +1,7 @@
 from core.model.linker import trace_flows
 from core.model.store import classify_placeholder
 
-from .layout import columns, layered, sequence
+from .layout import columns, lanes, layered, sequence
 
 CLASS_KINDS = ("class", "interface", "program", "copybook")
 MEMBER_ATTR = ("field", "column")
@@ -303,7 +303,7 @@ def interactions(store, limit=40) -> list:
 
 
 def all_diagrams(store, per_file=True) -> list:
-    out = [context(store), components(store), classes(store)]
+    out = [architecture(store), context(store), components(store), classes(store)]
     if any(e["kind"] == "table" for e in store.entities("table")):
         out.append(data_model(store))
     if per_file:
@@ -339,3 +339,211 @@ def diagram_coverage(store, diagrams) -> dict:
             missing.append({"kind": e["kind"], "name": e["name"]})
     return {"entities": total, "shown": total - len(missing), "missing": missing,
             "ratio": round((total - len(missing)) / total, 3) if total else 1.0}
+
+
+ICONS = {"users": ("USR", "#2E7DB0"), "screen": ("UI", "#2E7DB0"), "cobol": ("CBL", "#BE6E4A"), "cs": ("C#", "#7B4FA0"),
+         "java": ("JV", "#D9822B"), "cpp": ("C++", "#2A8C8C"), "web": ("WEB", "#2E7DB0"), "js": ("JS", "#B38F00"),
+         "code": ("SRC", "#857A70"), "api": ("API", "#3F51B5"), "transaction": ("TX", "#B3261E"), "job": ("JOB", "#8A4A2C"),
+         "database": ("DB", "#3B8F5E"), "table": ("TBL", "#3B8F5E"), "file": ("FILE", "#6E6E73"),
+         "external": ("EXT", "#6E6E73"), "missing": ("?", "#A99C90")}
+STATUS_CHIP = {"eol": ("#FDE2E1", "#B3261E"), "extended": ("#FFF1D6", "#8A5A00"), "legacy": ("#FFF1D6", "#8A5A00"),
+               "ending": ("#FFF1D6", "#8A5A00"), "supported": ("#E3F5E8", "#1F7A3A"), "unknown": ("#EFEFF2", "#6E6E73")}
+SEV_CHIP = {"critical": ("#7A1020", "#7A1020"), "high": ("#FDE2E1", "#A4161A"), "medium": ("#FFF1D6", "#8A5A00"),
+            "low": ("#E8F1FB", "#1D4F86"), "info": ("#EFEFF2", "#6E6E73")}
+
+
+def _icon(key):
+    t, c = ICONS[key]
+    return {"text": t, "color": c}
+
+
+def architecture(store) -> dict:
+    from core.security.rules import family
+    from core.security.scan import summary as sec_summary, technologies
+    m = _Model(store)
+    name = store.info["name"]
+    assessment = store.get_meta("assessment") or {}
+    risk = {c["artifact_id"]: c["risk"]["level"] for c in assessment.get("components") or []}
+    eol_arts = {f["target_id"] for f in store.findings("eol") if f["severity"] == "high" and f.get("status") != "dismissed"}
+
+    def badge(aid):
+        lvl = risk.get(aid)
+        if lvl in ("critical", "high"):
+            return {"text": "CRIT" if lvl == "critical" else "HIGH", "color": "#B3261E" if lvl == "critical" else "#E06A2C"}
+        if aid in eol_arts:
+            return {"text": "EOL", "color": "#B3261E"}
+        return None
+
+    node_of, lanes_ = {}, {k: {} for k in ("users", "presentation", "application", "integration", "data", "external")}
+
+    def put(lane, gid, gtitle, node, dashed=True):
+        lanes_[lane].setdefault(gid, {"id": gid, "title": gtitle, "nodes": [], "dashed": dashed})["nodes"].append(node)
+        return node["id"]
+
+    code_types = ("code",)
+    for aid, a in sorted(m.arts.items(), key=lambda kv: kv[1]["name"]):
+        fam = family(a["name"], a.get("language") or "")
+        lang = (a.get("language") or "").lower()
+        if a.get("artifact_type") not in code_types or fam in ("config", "props", "json", "sql", "web"):
+            continue
+        if "bms" in lang or "jcl" in lang or a["name"].lower().endswith((".bms", ".jcl")):
+            continue
+        file_ent = next((e for e in m.ents.values() if e["kind"] == "file" and e["artifact_id"] == aid), None)
+        prof = ((file_ent or {}).get("attrs") or {}).get("profile") or {}
+        owned = [e for e in m.ents.values() if m.in_file(e["id"], aid)]
+        cics = any(e["kind"] == "transaction" for e in owned) or "EXEC CICS" in (a.get("transcription") or "").upper()
+        if fam == "cobol":
+            gid, gt, ic = ("g-cics", "COBOL / CICS online", "cobol") if cics else ("g-cobol", "COBOL batch & copybooks", "cobol")
+        elif fam == "cs":
+            gid, gt, ic = ("g-cobnet", "COBOL-translated .NET", "cs") if prof.get("cobol_translated") else ("g-cs", "C# / .NET", "cs")
+        elif fam == "java":
+            gid, gt, ic = "g-java", "Java", "java"
+        elif fam == "cpp":
+            gid, gt, ic = "g-cpp", "C / C++", "cpp"
+        elif fam == "js":
+            gid, gt, ic = "g-js", "JavaScript", "js"
+        else:
+            gid, gt, ic = "g-code", "Other code", "code"
+        units = sum(1 for e in owned if e["kind"] in ("class", "interface", "program"))
+        lines = len([l for l in (a.get("transcription") or "").splitlines() if l.strip()])
+        node_of[f"art:{aid}"] = put("application", gid, gt, {
+            "id": f"a{aid}", "title": _short(a["name"], 30), "icon": _icon(ic), "badge": badge(aid),
+            "sub": f"{lines} lines" + (f" · {units} unit{'s' if units != 1 else ''}" if units else "")})
+    for e in sorted(m.ents.values(), key=lambda e: e["name"]):
+        k, ph = e["kind"], e["origin"] == "placeholder"
+        attrs = e.get("attrs") or {}
+        nid = f"e{e['id']}"
+        src_art = m.owner_art.get(e["id"])
+        src = m.arts.get(src_art) or {}
+        if k == "screen":
+            fam = family(src.get("name", ""), src.get("language") or "")
+            bms = src.get("name", "").lower().endswith(".bms") or "bms" in (src.get("language") or "").lower()
+            if ph:
+                gid, gt = "g-scr-miss", "Screens referenced, not captured"
+            elif bms:
+                gid, gt = "g-scr-bms", "CICS / BMS screens"
+            elif src.get("artifact_type") == "ui_screen":
+                gid, gt = "g-scr-app", "Captured app screens"
+            elif fam == "web" or attrs.get("technology") == "web":
+                gid, gt = "g-scr-web", "Web pages"
+            else:
+                gid, gt = "g-scr-bms", "CICS / BMS screens"
+            node_of[e["id"]] = put("presentation", gid, gt, {"id": nid, "title": _short(e["name"], 30), "icon": _icon("screen"),
+                                                             "dashed": ph, "badge": badge(src_art)})
+        elif k == "api_endpoint" and not ph:
+            node_of[e["id"]] = put("integration", "g-api", "HTTP endpoints & services",
+                                   {"id": nid, "title": _short(e["name"], 32), "icon": _icon("api")})
+        elif k == "transaction":
+            node_of[e["id"]] = put("integration", "g-tx", "CICS transactions",
+                                   {"id": nid, "title": e["name"], "icon": _icon("transaction"), "dashed": ph})
+        elif k == "job" and attrs.get("tool") != "SQL script" and not ph:
+            node_of[e["id"]] = put("integration", "g-job", "Batch jobs", {"id": nid, "title": _short(e["name"], 30),
+                                                                         "icon": _icon("job"), "sub": attrs.get("tool")})
+        elif k == "data_store":
+            st = attrs.get("store_type") or ""
+            db = st == "database"
+            node_of[e["id"]] = put("data", "g-db" if db else "g-files", "Databases" if db else "Files & datasets",
+                                   {"id": nid, "title": _short(e["name"], 32), "icon": _icon("database" if db else "file"),
+                                    "sub": ("not captured" if ph else st) or None, "dashed": ph})
+        elif k == "table":
+            cols = sum(1 for c in m.children.get(e["id"], []) if c["kind"] == "column")
+            node_of[e["id"]] = put("data", "g-tables", "Tables", {"id": nid, "title": _short(e["name"], 32),
+                                                                 "icon": _icon("table"), "dashed": ph,
+                                                                 "sub": "no DDL captured" if ph else f"{cols} columns"})
+        elif k == "external_system":
+            node_of[e["id"]] = put("external", "g-ext", "External systems", {"id": nid, "title": _short(e["name"], 32),
+                                                                            "icon": _icon("external"), "dashed": ph,
+                                                                            "sub": attrs.get("protocol")})
+        elif ph and k in ("program", "class", "copybook") and classify_placeholder(e) == "missing_code":
+            node_of[e["id"]] = put("application", "g-missing", "Referenced, not captured",
+                                   {"id": nid, "title": _short(e["name"], 30), "icon": _icon("missing"), "dashed": True,
+                                    "sub": k})
+    if lanes_["presentation"] or any(g for g in lanes_["integration"] if g in ("g-api", "g-tx")):
+        put("users", "g-actors", "People & schedulers", {"id": "u-users", "title": "Program users", "icon": _icon("users"),
+                                                          "sub": "MDE staff / districts"}, dashed=False)
+    if "g-job" in lanes_["integration"]:
+        put("users", "g-actors", "People & schedulers", {"id": "u-sched", "title": "Batch scheduler", "icon": _icon("job"),
+                                                          "sub": "JCL / job control"}, dashed=False)
+
+    def target(eid):
+        if eid in node_of:
+            return node_of[eid]
+        for aid in sorted(m.sources.get(eid, ())):
+            if f"art:{aid}" in node_of:
+                return node_of[f"art:{aid}"]
+        top = m.top(eid)
+        return node_of.get(top) if top else None
+
+    agg = {}
+    for r in m.rels:
+        if r["kind"] in ("contains", "same_as"):
+            continue
+        a = node_of.get(f"art:{r['artifact_id']}") if r["artifact_id"] in m.arts and r["from_id"] not in node_of else None
+        a = a or target(r["from_id"])
+        b = target(r["to_id"])
+        if a and b and a != b:
+            agg.setdefault((a, b), set()).add(r["kind"])
+    edges = [{"from": a, "to": b, "label": "", "style": "dashed" if kinds <= {"reads", "displays"} else "solid", "head": "arrow"}
+             for (a, b), kinds in agg.items()]
+    for gid in ("g-scr-bms", "g-scr-web", "g-scr-app"):
+        if gid in lanes_["presentation"]:
+            edges.append({"from": "u-users", "to": gid, "label": "", "style": "solid", "head": "arrow"})
+    for gid in ("g-api", "g-tx"):
+        if gid in lanes_["integration"] and "u-users" in {n["id"] for g in lanes_["users"].values() for n in g["nodes"]}:
+            edges.append({"from": "u-users", "to": gid, "label": "", "style": "solid", "head": "arrow"})
+    if "g-job" in lanes_["integration"]:
+        edges.append({"from": "u-sched", "to": "g-job", "label": "", "style": "solid", "head": "arrow"})
+    order = {"users": "Users & triggers", "presentation": "Presentation", "application": "Application",
+             "integration": "Integration", "data": "Data", "external": "External"}
+    group_order = ["g-actors", "g-scr-bms", "g-scr-web", "g-scr-app", "g-scr-miss", "g-cics", "g-cobol", "g-cobnet", "g-cs",
+                   "g-java", "g-cpp", "g-js", "g-code", "g-missing", "g-tx", "g-api", "g-job", "g-db", "g-tables",
+                   "g-files", "g-ext"]
+    lane_specs = []
+    for key, title in order.items():
+        gs = sorted(lanes_[key].values(), key=lambda g: group_order.index(g["id"]) if g["id"] in group_order else 99)
+        if gs:
+            lane_specs.append({"id": f"lane-{key}", "title": title, "groups": gs})
+    bars = []
+    techs, seen = [], set()
+    for t in technologies(store):
+        base = t.get("name") or t.get("label")
+        ver = t.get("version") or (t.get("cycle") if not t.get("curated") else None)
+        label = f"{base} {ver}" if ver else base
+        key = (base, ver)
+        if key in seen:
+            continue
+        seen.add(key)
+        fill, stroke = STATUS_CHIP.get(t.get("status"), STATUS_CHIP["unknown"])
+        status = {"eol": "EOL", "extended": "ext. support", "legacy": "legacy", "ending": "EOL soon",
+                  "supported": "supported", "unknown": "version ?"}.get(t.get("status"), "")
+        techs.append({"id": f"t{len(techs)}", "title": f"{_short(label, 34)} · {status}", "fill": fill, "stroke": stroke,
+                      "kind": "chip"})
+    if techs:
+        bars.append({"id": "bar-platform", "title": "Platform & runtime", "chips": techs})
+    cfg = [a for a in m.arts.values() if family(a["name"], a.get("language") or "") in ("config", "props", "json")
+           and a.get("artifact_type") != "ui_screen"]
+    if cfg:
+        secrets = {}
+        for e in m.ents.values():
+            if e["kind"] == "config_item" and (e.get("attrs") or {}).get("hardcoded_secret"):
+                secrets[e["artifact_id"]] = secrets.get(e["artifact_id"], 0) + 1
+        bars.append({"id": "bar-config", "title": "Configuration", "chips": [
+            {"id": f"cfg{a['id']}", "title": a["name"] + (f" · {secrets[a['id']]} secret(s)" if secrets.get(a["id"]) else ""),
+             "kind": "chip", **({"fill": "#FDE2E1", "stroke": "#B3261E"} if secrets.get(a["id"]) else {})} for a in cfg]})
+    sec = sec_summary(store)
+    if sec["total"]:
+        bars.append({"id": "bar-security", "title": "Security findings", "chips": [
+            {"id": f"sev-{k}", "title": f"{v} {k}", "kind": "chip", "fill": SEV_CHIP[k][0], "stroke": SEV_CHIP[k][1],
+             "ink": "#FFFFFF" if k == "critical" else None} for k, v in sec["by_severity"].items() if v]})
+    cov = store.coverage()
+    mc = cov.get("missing_counts") or {}
+    bars.append({"id": "bar-coverage", "title": "Coverage", "chips": [
+        {"id": "cov-files", "title": f"{len(m.arts)} files captured", "kind": "chip"},
+        {"id": "cov-missing", "title": f"{mc.get('missing_code', 0)} code references not captured", "kind": "chip"},
+        {"id": "cov-ext", "title": f"{mc.get('external', 0)} external resources", "kind": "chip"},
+        {"id": "cov-ratio", "title": f"{round((cov.get('resolved_ratio') or 0) * 100)}% of referenced code captured",
+         "kind": "chip"}]})
+    verdict = (assessment.get("verdict") or {}).get("label")
+    scene = lanes(lane_specs, edges, bars)
+    title = f"Architecture overview — {name}" + (f"  ·  verdict: {verdict}" if verdict else "")
+    return {"id": "architecture", "kind": "architecture", "title": title, **scene}
