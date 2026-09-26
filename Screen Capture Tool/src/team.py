@@ -26,7 +26,7 @@ from pathlib import Path
 
 import tools
 from core import analysis, validate, outputs
-from core.analysis import MODEL
+from core.analysis import MODEL, TEXT_MODEL
 
 MAX_ITERS = 10
 MAX_TOKENS = 4096
@@ -91,7 +91,7 @@ def _analyst_enrich(client, text: str, base: dict) -> dict:
         return out
     try:
         msg = client.messages.create(
-            model=MODEL, max_tokens=2048, system=ANALYST_SYSTEM,
+            model=TEXT_MODEL, max_tokens=2048, system=ANALYST_SYSTEM,
             messages=[{"role": "user", "content": text}],
         )
         raw = "".join(getattr(b, "text", "") for b in msg.content).strip()
@@ -260,7 +260,7 @@ def agent_diagrammer(client, code: str, language: str) -> str:
         return ""
     try:
         msg = client.messages.create(
-            model=MODEL, max_tokens=2000, system=DIAGRAMMER_SYSTEM,
+            model=TEXT_MODEL, max_tokens=2000, system=DIAGRAMMER_SYSTEM,
             messages=[{"role": "user", "content": f"Language: {language or 'unknown'}\n\n{code}"}],
         )
         return "".join(getattr(b, "text", "") for b in msg.content).strip()

@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 MODEL = _os.environ.get("CODESNAP_MODEL", "claude-opus-5-5")
+TEXT_MODEL = _os.environ.get("CODESNAP_TEXT_MODEL", "claude-sonnet-5")
 # Per-image extraction is an OCR-like task — use a cheaper/faster model to cut cost.
 # Reasoning steps (classify, fix) keep MODEL. Change if this model isn't available.
 EXTRACT_MODEL = MODEL  # Sonnet for extraction: follows the verbatim/no-correct rule far better than Haiku (higher cost)
@@ -388,7 +389,7 @@ def synthesize_final(client, full_text: str) -> dict:
     if not full_text.strip():
         return fallback
     msg = client.messages.create(
-        model=MODEL,
+        model=TEXT_MODEL,
         max_tokens=1024,
         system=FINALIZE_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": full_text}],
@@ -831,7 +832,7 @@ def explain_error(client, language: str, errors: str, code: str = "") -> str:
         return ""
     try:
         msg = client.messages.create(
-            model=MODEL, max_tokens=300, system=EXPLAIN_SYSTEM_PROMPT,
+            model=TEXT_MODEL, max_tokens=300, system=EXPLAIN_SYSTEM_PROMPT,
             messages=[{"role": "user", "content":
                        f"Language: {language or 'unknown'}\n\nCompiler error:\n{errors}\n\nCode:\n{code[:4000]}"}],
         )
