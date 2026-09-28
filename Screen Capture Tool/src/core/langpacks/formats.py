@@ -71,6 +71,35 @@ PROMPT_CLAUSE = (
     ")ATTR/)BODY sections and column layout exactly. ")
 
 
+_MACRO_OPS = ("DBD|DATASET|SEGM|FIELD|LCHILD|XDFLD|PCB|SENSEG|SENFLD|PSBGEN|DBDGEN|FINISH|PRINT|FMT|DEV|DIV|DPAGE|DFLD|"
+              "MSG|LPAGE|SEG|MFLD|FMTEND|MSGEND|DFHMSD|DFHMDI|DFHMDF|CSECT|DSECT|USING|DROP|EQU|DC|DS|LTORG|END")
+_MACRO_LINE = re.compile(r"^(" + _MACRO_OPS + r")(\s+\S|\s*$)", re.I)
+
+
+def looks_dedented_asm(text: str) -> bool:
+    """IMS DBD/PSB/MFS and assembler macros whose opcodes landed in column 1 (a transcription that
+    dropped the leading blanks). Column 1 is the label field, so these lines lost their columns."""
+    lines = [l for l in (text or "").splitlines() if l.strip() and not l.lstrip().startswith("*")]
+    hits = sum(1 for l in lines if _MACRO_LINE.match(l))
+    return len(lines) >= 3 and hits >= 0.6 * len(lines)
+
+
+def restore_asm_columns(text: str) -> str:
+    """Put an unlabelled macro/assembler statement back at column 10 when its opcode sits in column 1.
+    Only fires when the source is mostly such lines (see looks_dedented_asm); labelled lines, comments
+    and anything already indented are left exactly as transcribed."""
+    if not looks_dedented_asm(text):
+        return text
+    out = []
+    for l in text.split("\n"):
+        m = _MACRO_LINE.match(l)
+        nxt = l.split()[1] if len(l.split()) > 1 else ""
+        if m and not _MACRO_LINE.match(nxt):
+            l = " " * 9 + l
+        out.append(l)
+    return "\n".join(out)
+
+
 def minimal_clean(text: str) -> str:
     lines = [l.expandtabs(8).rstrip() for l in (text or "").replace("\r\n", "\n").split("\n")]
     while lines and not lines[0].strip():

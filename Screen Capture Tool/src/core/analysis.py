@@ -452,11 +452,11 @@ import re as _re
 _FENCE_RE = _re.compile(r"```[^\n`]*\n(.*?)```", _re.S)
 # leading line-number gutter: digits, an optional gutter glyph (Eclipse fold marker,
 # middot, colon), then whitespace — e.g. "12  ", "5⊖ ", "3: "
-_GUTTER_RE = _re.compile(r"^[ \t]*\d{1,4}[ \t\u00b7:.\u2296\u2299\u25cb\u2d54]?[ \t]+")
+_GUTTER_RE = _re.compile(r"^[ \t]*\d{1,4}(?!\d)[ \t\u00b7:.\u2296\u2299\u25cb\u2d54]?[ \t]+")
 
 
 # capturing form: leading ws (group1) + line number (group2) + optional gutter glyph (group3)
-_GUTTER_CAP = _re.compile(r"^([ \t]*)(\d{1,4})([ \t\u00b7:.\u2296\u2299\u25cb\u2d54]?)")
+_GUTTER_CAP = _re.compile(r"^([ \t]*)(\d{1,4})(?!\d)([ \t\u00b7:.\u2296\u2299\u25cb\u2d54]?)")
 
 
 def _strip_gutter(text: str) -> str:
@@ -560,11 +560,27 @@ def _strip_indent_guides(text: str) -> str:
     return "\n".join(out)
 
 
-def clean_source(text: str) -> str:
-    return _clean_source(text)
+def clean_source(text: str, mode: str | None = None) -> str:
+    return _clean_source(text, mode)
 
 
-def _clean_source(text: str) -> str:
+def source_mode(raw_parts: list) -> str | None:
+    """Decide once, from all frames together, whether the source is fixed-column
+    ("columns") or another column-sensitive format ("format"). A single mid-file frame
+    of COBOL has no DIVISION headers, so judging frames one by one mis-cleaned them."""
+    from core.cobol import is_column_sensitive
+    from core.langpacks.formats import detect_format, looks_dedented_asm
+    joined = "\n".join(_FENCE_RE.sub(lambda m: m.group(1), p or "") for p in raw_parts)
+    if not joined.strip():
+        return None
+    if is_column_sensitive(joined):
+        return "columns"
+    if detect_format(joined) or looks_dedented_asm(joined):
+        return "format"
+    return None
+
+
+def _clean_source(text: str, mode: str | None = None) -> str:
     """Turn a raw OCR'd code extraction into compiler-ready source: unwrap markdown
     code fences (dropping ```lang, ``` and any # headers/prose outside them), remove
     an editor line-number gutter, and drop identical duplicate blocks. Faithful — it
@@ -572,16 +588,17 @@ def _clean_source(text: str) -> str:
     if not text or not text.strip():
         return text or ""
     from core.cobol import is_column_sensitive
-    if is_column_sensitive(_FENCE_RE.sub(lambda m: m.group(1), text)):
+    if mode == "columns" or (mode is None and is_column_sensitive(_FENCE_RE.sub(lambda m: m.group(1), text))):
         blocks = _FENCE_RE.findall(text)
         text = "\n\n".join(blocks) if blocks else _re.sub(r"^[ \t]*```.*$", "", text, flags=_re.M)
         from core.cobol.normalize import normalize_transcription
         return normalize_transcription(text).strip("\n")
-    from core.langpacks.formats import detect_format, minimal_clean
-    if detect_format(_FENCE_RE.sub(lambda m: m.group(1), text)):
+    from core.langpacks.formats import detect_format, looks_dedented_asm, minimal_clean, restore_asm_columns
+    unfenced = _FENCE_RE.sub(lambda m: m.group(1), text)
+    if mode == "format" or (mode is None and (detect_format(unfenced) or looks_dedented_asm(unfenced))):
         blocks = _FENCE_RE.findall(text)
         text = "\n\n".join(blocks) if blocks else _re.sub(r"^[ \t]*```.*$", "", text, flags=_re.M)
-        return minimal_clean(text)
+        return restore_asm_columns(minimal_clean(text))
     blocks = _FENCE_RE.findall(text)
     if blocks:
         cleaned = [_strip_gutter(b).strip("\n") for b in blocks]
@@ -618,7 +635,10 @@ def _fix_leading_indent(code: str) -> str:
     for i, ln in enumerate(lines):
         if ln.strip() == "":
             continue
-        if ln[:1] in (" ", "\t"):
+        rest = [l for l in lines[i + 1:] if l.strip()]
+        # only a lone indented first line is an artifact; if the whole file is indented
+        # (e.g. IBM i CL, labels in column 2) the indent is real source
+        if ln[:1] in (" ", "\t") and (not rest or any(l[:1] not in (" ", "\t") for l in rest)):
             lines[i] = ln.lstrip()
         break
     return "\n".join(lines)
@@ -630,7 +650,8 @@ def merge_frames(raw_parts: list):
     (merged_code, clean_parts). Safety net: if stitching duplicated a class/function
     (a mis-merge on messy OCR), fall back to the longest single frame with no such
     duplication — one clean copy beats tripled garbage."""
-    cleaned = [clean_source(r) for r in raw_parts]
+    mode = source_mode(raw_parts)
+    cleaned = [clean_source(r, mode) for r in raw_parts]
     parts = _dedup_best(cleaned) or [c for c in cleaned if c.strip()]
     stitched = stitch_parts(parts)
     candidates = [stitched] + parts
@@ -638,7 +659,7 @@ def merge_frames(raw_parts: list):
     best = max(clean or candidates, key=lambda c: len(c.splitlines())) if candidates else stitched
     from core.cobol import is_column_sensitive
     from core.langpacks.formats import detect_format
-    keep = is_column_sensitive(best) or detect_format(best)
+    keep = mode or is_column_sensitive(best) or detect_format(best)
     return (best if keep else _fix_leading_indent(best)), parts
 
 
