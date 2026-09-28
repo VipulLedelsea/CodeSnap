@@ -416,7 +416,16 @@ def synthesize_final(client, full_text: str) -> dict:
 import difflib as _difflib
 
 
+import re as _re
+
+_SEQNO = _re.compile(r"^\s*(\d{6})")
+
+
 def _sim(x: str, y: str) -> float:
+    # two COBOL lines with different sequence numbers are different lines, however alike the code
+    mx, my = _SEQNO.match(x), _SEQNO.match(y)
+    if mx and my and mx.group(1) != my.group(1):
+        return 0.0
     return _difflib.SequenceMatcher(None, x.strip(), y.strip()).ratio()
 
 
@@ -441,10 +450,15 @@ def _mostly_contained(b: list, merged: list, thresh: float = 0.92) -> bool:
     if not bl:
         return True
     ms = [l.strip() for l in merged if l.strip()]
-    if not ms:
+    if not ms or len(bl) > len(ms):
         return False
-    hits = sum(1 for line in bl if any(_sim(line, m) >= 0.9 for m in ms))
-    return hits / len(bl) >= thresh
+    # b must reappear as a contiguous run, not just as lines scattered through merged —
+    # otherwise a short last frame ("    }" / "end-proc;") is thrown away as "already seen"
+    need = max(1, int(round(len(bl) * thresh)))
+    for o in range(len(ms) - len(bl) + 1):
+        if sum(1 for x, y in zip(bl, ms[o:o + len(bl)]) if _sim(x, y) >= 0.9) >= need:
+            return True
+    return False
 
 
 import re as _re
@@ -670,10 +684,14 @@ def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8
     max_k = min(len(merged), 60)
     for k in range(max_k, min_overlap - 1, -1):
         tail = merged[-k:]
+        # a 2-3 line overlap made only of punctuation ("}", "{", "END-IF.") is not evidence
+        if k < 4 and sum(len(_re.sub(r"\W", "", x)) for x in tail) < 12:
+            continue
         for o in range(0, len(b) - k + 1):
             window = b[o:o + k]
             sims = [_sim(x, y) for x, y in zip(tail, window)]
-            if sims and sum(sims) / len(sims) >= thresh:
+            # every line must match (OCR noise allowed), not just the average
+            if sims and sum(sims) / len(sims) >= thresh and min(sims) >= 0.7:
                 return merged + b[o + k:]
     return None
 
