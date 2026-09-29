@@ -110,7 +110,7 @@ def score_component(c: dict) -> dict:
             sec.deduct(SEC_POINTS.get(f["severity"], 0), f["rule"] or f["category"], f["title"], {"finding": f["id"]})
     if c["student_data"] and any(f["category"] == "security" and f["severity"] in ("critical", "high")
                                  for f in c["findings"]):
-        sec.deduct(10, "SEC-FERPA", "high-severity issue in a component that handles student data (FERPA)")
+        sec.deduct(10, "SEC-FERPA", "high-severity issue in a component that handles personal data")
 
     sup = s["supportability"]
     for f in c["findings"]:
@@ -125,7 +125,7 @@ def score_component(c: dict) -> dict:
     if prof.get("pack") == "cobol" and set(prof.get("frameworks") or []) & {"IDMS", "IMS DB/DC"}:
         scarce = "COBOL + " + "/".join(sorted(set(prof["frameworks"]) & {"IDMS", "IMS DB/DC"}))
     if scarce:
-        sup.deduct(10, "SUP-SKILLS", f"{scarce} skills are scarce — support depends on a shrinking MNIT/vendor pool")
+        sup.deduct(10, "SUP-SKILLS", f"{scarce} skills are scarce — support depends on a shrinking in-house/vendor pool")
 
     cx = s["complexity"]
     units = max(1, len(c["units"]))

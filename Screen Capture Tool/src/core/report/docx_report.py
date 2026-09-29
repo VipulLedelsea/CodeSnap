@@ -93,15 +93,20 @@ def render(report: dict, diagrams: dict) -> bytes:
         st = doc.styles[f"Heading {lvl}"]
         st.font.color.rgb = INK if lvl == 2 else COPPER
         st.font.size = Pt(size)
+    cp = doc.core_properties
+    cp.author = cp.last_modified_by = report.get("prepared_by") or "Ledelsea"
+    cp.title = f"{report['program']} — Application Assessment Report"
+    cp.subject = f"Prepared for {report['client']}"
+    cp.comments = cp.keywords = cp.category = ""
     footer = sec.footer.paragraphs[0]
-    _runs(footer, f"Ledelsea · {report['program']} — Platform Holistic Review · confidential — prepared for "
+    _runs(footer, f"Ledelsea · {report['program']} — Application Assessment Report · confidential — prepared for "
                   f"{report['client']}", 8, MUTED)
     if LOGO.exists():
         doc.add_picture(str(LOGO), width=Inches(2.2))
     title = doc.add_paragraph()
     _runs(title, report["program"], 28, INK, True)
     sub = doc.add_paragraph()
-    _runs(sub, "Platform Holistic Review", 16, COPPER, True)
+    _runs(sub, "Application Assessment Report", 16, COPPER, True)
     meta = doc.add_paragraph()
     _runs(meta, f"Prepared for {report['client']}\nby {report['prepared_by']} · {report['date']}", 11, MUTED)
     v = report.get("verdict") or {}

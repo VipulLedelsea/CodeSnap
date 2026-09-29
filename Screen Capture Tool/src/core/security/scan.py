@@ -183,7 +183,7 @@ def _code(store, ctx, sensitive_artifacts, has_pii):
         severity = escalate(h["severity"]) if student else h["severity"]
         detail = h["detail"][0].upper() + h["detail"][1:] + "."
         if student:
-            detail += " Raised one level: this file or connection handles student data (FERPA scope)."
+            detail += " Raised one level: this file or connection handles personal data."
         store.add_finding("security", severity, f"{base['title']}: {ctx.artifacts[h['artifact_id']]['name']}"
                           f"{':' + str(h['line']) if h.get('line') else ''}", detail=detail, source=f"rule {rule}",
                           target_type="artifact", target_id=h["artifact_id"],

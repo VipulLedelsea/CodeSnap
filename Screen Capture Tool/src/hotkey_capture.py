@@ -196,6 +196,12 @@ class App:
             print("(single-file mode: still analysing the previous capture)")
             return
         self._ensure_client()
+        try:
+            kind = (CAPTURES_ROOT / ".capture_kind").read_text().strip()
+            if kind in ("code", "screen"):
+                self.capture_kind = kind   # switching Code / App screen no longer restarts the worker
+        except OSError:
+            pass
         from core import status
         status.clear()
         status.publish("Burst capture — scroll through the file steadily", "start")
@@ -221,8 +227,18 @@ class App:
             from core.analysis import extract_to_cache
             self.tracker.set_thread_bucket(str(Path(path).parent))
             extract_to_cache(self.client, path, cache_dir)
+            self._sync_text_cache(Path(path).parent, [Path(path)], load=False)   # keep the text even if the worker restarts
         except Exception:  # noqa: BLE001
             pass
+
+    def _own_window_in_front(self) -> bool:
+        """True while CodeSnap itself is the front window, so its own screen is never captured as a file."""
+        try:
+            from AppKit import NSWorkspace
+            app = NSWorkspace.sharedWorkspace().frontmostApplication()
+            return app.processIdentifier() in (os.getpid(), os.getppid()) or app.localizedName() == "CodeSnap"
+        except Exception:  # noqa: BLE001 - not macOS / no AppKit: capture as before
+            return False
 
     def _burst_loop(self, session_dir):
         from core.capture import capture_full_png, capture_region_fixed, next_png_path
@@ -233,6 +249,11 @@ class App:
         last_change = time.monotonic()
         started = time.monotonic()
         while self.running and kept < BURST_MAX_FRAMES:
+            if self._own_window_in_front():
+                time.sleep(BURST_INTERVAL)
+                if kept == 0:
+                    started = time.monotonic()
+                continue
             try:
                 data = capture_region_fixed(self.region) if self.region else capture_full_png()
             except Exception as exc:  # noqa: BLE001
@@ -376,10 +397,12 @@ class App:
             client=self.client, images=list(imgs),
             cache_dir=session_dir / ".cache", out_dir=REPORTS_ROOT,
             out_name=f"report_{ts}", session_dir=session_dir, interactive=False, confirm_saves=False,
+            program_mode=bool(self.program),
         )
         self._analysis_lock.acquire()   # serialise overlapping analyses (captures stay non-blocking)
         self._analysing = True
         self._sync_text_cache(session_dir, imgs, load=True)
+        self._stage(artifact_id, "reading screenshots")
         bucket = str(session_dir)
         self.tracker.default_bucket = bucket
         try:
@@ -401,7 +424,9 @@ class App:
             self._report_usage(records)
             self._sync_text_cache(session_dir, imgs, load=False)
             if self.program:
+                self._stage(artifact_id, "adding to the program")
                 self._ingest_into_program(imgs, ctx, records, artifact_id=artifact_id)
+                self._report_if_done()
             self.tracker.take(bucket)
         except Exception as exc:  # noqa: BLE001
             print(f"Analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -449,7 +474,34 @@ class App:
         steps = ", ".join(f"{k} ${v['cost']:.3f}" for k, v in sorted(total["by_step"].items(), key=lambda kv: -kv[1]["cost"]))
         print(f"[usage] {total['calls']} calls, {total['input_tokens']:,} in / {total['output_tokens']:,} out tokens, "
               f"${total['cost']:.3f} ({steps})")
-        status.publish(f"Cost for this file: ${total['cost']:.3f} ({total['calls']} calls)", "info")
+        print(f"(cost for this file: ${total['cost']:.3f}, {total['calls']} calls)")
+
+    def _stage(self, artifact_id, stage):
+        if not (self.program and artifact_id):
+            return
+        from core.model import ProgramStore
+        try:
+            with ProgramStore.open(self.program) as store:
+                store.update_pending(artifact_id, stage=stage)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _report_if_done(self):
+        """Build the program report once, when the last waiting capture has been analysed."""
+        from core import status
+        from core.model import ProgramStore
+        from core.report import cached_package, waiting
+        try:
+            with ProgramStore.open(self.program) as store:
+                if waiting(store) or any(a["status"] == "captured" for a in store.artifacts()):
+                    return
+                status.publish("All files analysed — building the report", "tool", stage="save")
+                res = cached_package(store)
+                n = len(store.artifacts())
+            if res.get("built"):
+                status.publish(f"Report ready — {n} files", "done", stage="done")
+        except Exception as exc:  # noqa: BLE001
+            print(f"(report build: {exc})", file=sys.stderr)
 
     def _sync_text_cache(self, session_dir, imgs, load: bool):
         """Share per-screenshot transcriptions with the program (load before analysis, save after)."""
@@ -464,7 +516,7 @@ class App:
             local.mkdir(exist_ok=True)
             for img in imgs:
                 name = cache_path_for(img, local).name
-                for suffix in ("", ".corr.json"):
+                for suffix in ("", ".corr.json", ".verify.json"):
                     fn = name if not suffix else name[:-3] + suffix
                     src, dst = (shared / fn, local / fn) if load else (local / fn, shared / fn)
                     if src.exists() and not dst.exists():

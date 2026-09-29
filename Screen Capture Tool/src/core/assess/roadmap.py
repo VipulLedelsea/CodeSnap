@@ -13,7 +13,7 @@ FIXES = {
     "SEC-AUTH": ("Harden authentication", "Enforce authenticated access, remove clear-text credentials, stop cookieless sessions.", 0.5, 1.5),
     "SEC-CONF": ("Production configuration", "Turn off debug/trace, enable custom error pages, stop showing exception text.", 0.05, 0.2),
     "SEC-MEM": ("Replace unsafe C functions", "Swap gets/strcpy/sprintf for bounded versions (fgets, strncpy_s, snprintf).", 0.05, 0.2),
-    "SEC-PII": ("Protect student data", "Inventory student fields, restrict access, encrypt at rest, log disclosures (FERPA).", 0.5, 1.5),
+    "SEC-PII": ("Protect personal data", "Inventory personal data fields, restrict access, encrypt at rest, log disclosures.", 0.5, 1.5),
 }
 UI_FIXES = [
     ("ACC-TERMINAL", "Web front end for 3270 screens", "Put an accessible web UI over the CICS transactions (or rebuild the screens) — terminals cannot meet WCAG 2.1 AA.", 2.0, 6.0, "modernize"),
@@ -21,7 +21,7 @@ UI_FIXES = [
     ("UIB-CRASH", "Stop system failures reaching users", "Trace the abend/exception shown on screen, fix the cause, and show a friendly, logged error instead.", 0.5, 2.0, "stabilize"),
     ("USE-", "Usability fixes", "Clear labels and buttons, input validation, confirmation steps for consequential actions, legends for codes.", 0.05, 0.25, "remediate"),
     ("UIB-", "Usability fixes", "Clear labels and buttons, input validation, confirmation steps for consequential actions, legends for codes.", 0.05, 0.25, "remediate"),
-    ("UIS-", "Harden UI security", "POST sensitive forms, add anti-forgery tokens, mask passwords and student identifiers, remove trusted values from hidden fields.", 0.1, 0.5, None),
+    ("UIS-", "Harden UI security", "POST sensitive forms, add anti-forgery tokens, mask passwords and personal identifiers, remove trusted values from hidden fields.", 0.1, 0.5, None),
     ("WEB-HTTPS", "Enforce HTTPS / modern TLS", "Redirect all HTTP to HTTPS, TLS 1.2+ only, valid certificate, then enable HSTS.", 0.5, 2.0, "stabilize"),
     ("WEB-CERT", "Enforce HTTPS / modern TLS", "Redirect all HTTP to HTTPS, TLS 1.2+ only, valid certificate, then enable HSTS.", 0.5, 2.0, "stabilize"),
     ("WEB-TLS", "Enforce HTTPS / modern TLS", "Redirect all HTTP to HTTPS, TLS 1.2+ only, valid certificate, then enable HSTS.", 0.5, 2.0, "stabilize"),
@@ -141,10 +141,10 @@ def solutions(components: list, program: dict) -> list:
             None, [], "disposition")
     gaps = program["coverage"].get("missing_counts", {}).get("missing_code", 0)
     if gaps:
-        add("ASSESS:gaps", f"Capture {gaps} missing component(s)", "Screenshot the programs/classes referenced but not "
-            "yet captured so the verdict covers the whole program.", "assess", 0.2, 0.5, None, [], "assess")
+        add("ASSESS:gaps", f"Provide {gaps} missing component(s)", "Provide the source of the programs and classes that "
+            "are referenced but were not reviewed, so the verdict covers the whole program.", "assess", 0.2, 0.5, None, [], "assess")
     if not program["inputs"].get("components"):
-        add("ASSESS:criticality", "Confirm business criticality", "MDE staff rate each component's criticality and "
+        add("ASSESS:criticality", "Confirm business criticality", "Business owners rate each component's criticality and "
             "failure impact (1–5) on the Assessment panel.", "assess", 0.1, 0.2, None, [], "assess")
     out = []
     for it in items.values():

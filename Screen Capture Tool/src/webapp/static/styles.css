@@ -569,6 +569,8 @@ body.dark .seg-opt{ color:#B6B6BE; }
 .pf-status.structured{ color:#1F7A4D; border-color:#BFE3CF; }
 .pf-status.failed{ color:#B42318; border-color:#F3C4BE; }
 .pf-status.captured{ color:#8A5A00; border-color:#F1D9A6; }
+.pf-status.busy{ color:#1D5FBF; border-color:#BFD4F6; }
+a.disabled{ opacity:.45; pointer-events:none; }
 .pf-acts{ display:inline-flex; gap:8px; margin-left:auto; }
 .pf-acts .btn-link{ font-size:12px; }
 .prog-capbar:empty{ display:none; }
@@ -577,6 +579,15 @@ body.dark .seg-opt{ color:#B6B6BE; }
 .prog-capbar .cb.recap{ border-color:#BFD4F6; }
 .prog-capbar .cb.wait{ border-color:#F1D9A6; }
 .pf-err{ color:#B42318; font-size:12px; flex-basis:100%; }
+.pf-check{ font-size:11px; border-radius:6px; padding:2px 7px; border:0.5px solid var(--line); color:var(--muted); }
+.pf-check.ok{ color:#1F7A4D; border-color:#BFE3CF; }
+.pf-check.warn{ color:#8A5A00; border-color:#F1D9A6; }
+.pf-verify{ font-size:12px; margin:6px 0 10px; display:flex; flex-direction:column; gap:4px; }
+.pf-vhead{ font-weight:600; }
+.pf-gap{ color:#8A5A00; }
+.pf-flag{ display:flex; flex-wrap:wrap; gap:6px; align-items:baseline; }
+.pf-flag code{ font-size:11px; overflow-wrap:anywhere; }
+.pf-flag small{ color:var(--muted); flex-basis:100%; }
 .pf-detail{ margin-top:10px; display:flex; flex-direction:column; gap:8px; }
 .pf-rename{ display:flex; gap:8px; }
 .pf-rename input{ flex:1; padding:5px 9px; border:0.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
@@ -657,3 +668,7 @@ body.dark .seg-opt{ color:#B6B6BE; }
 .prog-health .ph-row{ padding:3px 10px; }
 .pm-cat.partial, .pm-cat.invalid{ color:#A86A00; border-color:#EBCB8B; }
 .pm-cat.failed{ color:#B42318; border-color:#F3C4BE; }
+
+.rs-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:8px 12px; margin-bottom:10px; }
+.rs-grid label{ display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
+.rs-grid input{ font:inherit; font-size:13px; padding:5px 7px; border:0.5px solid var(--line); border-radius:6px; color:inherit; background:transparent; }

@@ -131,10 +131,10 @@ def render(report: dict, diagrams: dict) -> str:
         body.append(f'<section id="{s["id"]}"><h2><span class="n">{i}</span>{escape(s["title"])}</h2>'
                     + "".join(_block(b, diagrams) for b in s["blocks"]) + "</section>")
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<title>{escape(report["program"])} — Platform Holistic Review</title><style>{CSS}</style></head><body><div class="page">'
+            f'<title>{escape(report["program"])} — Application Assessment Report</title><style>{CSS}</style></head><body><div class="page">'
             f'<div class="cover"><div>{logo_html}'
-            f'<h1>{escape(report["program"])}<small>Platform Holistic Review</small></h1></div>'
+            f'<h1>{escape(report["program"])}<small>Application Assessment Report</small></h1></div>'
             f'<div class="meta">Prepared for<br><b>{escape(report["client"])}</b><br>by {escape(report["prepared_by"])}<br>'
             f'{escape(report["date"])}</div></div><nav class="toc">{toc}</nav>{"".join(body)}'
-            f'<footer><span>Ledelsea · Platform Holistic Review</span><span>Generated {escape(report["date"])} · '
+            f'<footer><span>Ledelsea · Application Assessment Report</span><span>{escape(report["date"])} · '
             f'confidential — prepared for {escape(report["client"])}</span></footer></div></body></html>')

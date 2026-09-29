@@ -4,7 +4,7 @@ DISPOSITIONS = {
     "replatform": ("Replatform", "patch", "Upgrade runtime/framework to a supported version with targeted code changes."),
     "refactor": ("Refactor", "patch", "Keep the platform; fix security and restructure the worst code."),
     "rearchitect": ("Re-architect / rebuild", "rebuild", "Rewrite on a modern, supported stack; the current platform has no upgrade path."),
-    "replace": ("Replace", "rebuild", "Retire the custom code in favour of an off-the-shelf or shared state solution."),
+    "replace": ("Replace", "rebuild", "Retire the custom code in favour of an off-the-shelf or shared solution."),
     "retire": ("Retire", "rebuild", "Decommission; function is no longer needed or is duplicated elsewhere."),
 }
 NO_PATH = ("ASP.NET Web Forms", "Pre-standard C++", "Adobe Flash", "Microsoft Silverlight", "ActiveX", "Java applets",
@@ -24,7 +24,7 @@ def likelihood(scores: dict) -> tuple:
 
 def default_impact(c: dict) -> tuple:
     if c["student_data"]:
-        return 4, "handles student data"
+        return 4, "handles personal data"
     if c["writes"]:
         return 4, "writes program data"
     if c["entry"]:

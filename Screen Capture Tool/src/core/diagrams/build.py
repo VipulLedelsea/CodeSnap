@@ -509,7 +509,7 @@ def architecture(store) -> dict:
                                     "sub": k})
     if lanes_["presentation"] or any(g for g in lanes_["integration"] if g in ("g-api", "g-tx")):
         put("users", "g-actors", "People & schedulers", {"id": "u-users", "title": "Program users", "icon": _icon("users"),
-                                                          "sub": "MDE staff / districts"}, dashed=False)
+                                                          "sub": "Business users"}, dashed=False)
     if "g-job" in lanes_["integration"]:
         put("users", "g-actors", "People & schedulers", {"id": "u-sched", "title": "Batch scheduler", "icon": _icon("job"),
                                                           "sub": "JCL / job control"}, dashed=False)

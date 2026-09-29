@@ -47,7 +47,7 @@
           </div>
         </div>
         <div class="prog-new" id="progNew" style="display:none">
-          <input type="text" id="progNewName" placeholder="Program name, e.g. MDE Aid Calc" spellcheck="false">
+          <input type="text" id="progNewName" placeholder="Program name, e.g. Payments Batch" spellcheck="false">
           <button class="btn-primary" id="progCreate" type="button">Create</button>
           <button class="btn-link" id="progNewCancel" type="button">Cancel</button>
         </div>
@@ -72,10 +72,12 @@
           <details class="prog-map" id="progAssessBox"><summary id="progAssessSummary">Assessment &amp; verdict</summary>
             <div class="sec-bar">
               <button class="btn-primary" id="progAssessRun" type="button">Run assessment</button>
-              <span class="project-hint">Re-scans security, then scores the program. No API cost.</span>
+              <span class="project-hint">Re-scans security, then scores the program.</span>
             </div>
             <div id="progAssess"></div>
           </details>
+          <details class="prog-map" id="progReportBox"><summary>Report details (client, IDs, reviewers)</summary>
+            <div id="progReportForm"></div></details>
           <details class="prog-map" id="progFixBox"><summary id="progFixSummary">Corrections &amp; feedback</summary>
             <div class="fix-grid">
               <div>
@@ -119,6 +121,7 @@
             <span style="display:flex;gap:8px">
               <a class="btn-primary" id="progReportHtml" href="#" target="_blank" rel="noopener">View report</a>
               <a class="btn-secondary" id="progReportDocx" href="#">Word report</a>
+              <a class="btn-secondary" id="progReportPdf" href="#">PDF report</a>
               <a class="btn-link" id="progReportZip" href="#">Full package (zip)</a>
               <button class="btn-link" id="progRelink" type="button">Re-link</button>
               <button class="btn-link" id="progImport" type="button">Import past reports</button>

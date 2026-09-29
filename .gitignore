@@ -23,3 +23,6 @@ captures/
 
 # Cowork / Claude cache
 .claude/
+
+# working files from Claude (backups, update bundles)
+Claude outputs/

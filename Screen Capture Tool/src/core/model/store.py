@@ -40,6 +40,18 @@ def entity_key(kind: str, name: str, parent_key: str | None = None) -> str:
     return f"{kind}:{base}"
 
 
+def _owner_alive(owner) -> bool:
+    """A claim by a capture worker that has since exited (e.g. restarted for a mode switch) no longer counts."""
+    import os
+    try:
+        os.kill(int(str(owner).split(":")[0]), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except (ValueError, PermissionError, OSError):
+        return True
+
+
 class ProgramStore:
     def __init__(self, path):
         self.path = Path(path)
@@ -238,6 +250,19 @@ class ProgramStore:
                 return cand
             n += 1
 
+    def verification(self, artifact_id=None):
+        """The line check of each file (core.verify.summarize), keyed by artifact id."""
+        allv = self.get_meta("verification") or {}
+        return allv if artifact_id is None else allv.get(str(artifact_id))
+
+    def set_verification(self, artifact_id, v):
+        allv = self.get_meta("verification") or {}
+        if v:
+            allv[str(artifact_id)] = v
+        else:
+            allv.pop(str(artifact_id), None)
+        self.set_meta("verification", allv)
+
     def pending_captures(self) -> dict:
         return {int(k): v for k, v in (self.get_meta("pending_captures", {}) or {}).items()}
 
@@ -283,7 +308,8 @@ class ProgramStore:
             if info is None:
                 return False
             claim = info.get("claim") or {}
-            if claim and claim.get("owner") != owner and _time.time() - float(claim.get("at", 0)) < stale_after:
+            if (claim and claim.get("owner") != owner and _owner_alive(claim.get("owner"))
+                    and _time.time() - float(claim.get("at", 0)) < stale_after):
                 return False
             info["claim"] = {"owner": owner, "at": _time.time()}
             info["attempts"] = int(info.get("attempts") or 0) + 1
@@ -302,6 +328,27 @@ class ProgramStore:
                        "status = ?, updated = ? WHERE id = ?",
                        (artifact_type, language or "", transcription or "", source.name, status, _now(), artifact_id))
 
+    def model_stamp(self) -> str:
+        """Changes whenever something the report depends on changes: files, corrections, staff inputs, reviewed findings."""
+        import hashlib as _h
+        parts = [self._all("SELECT id, name, version, updated, length(transcription) FROM artifact WHERE is_current = 1 ORDER BY id"),
+                 self._all("SELECT id, active FROM correction ORDER BY id"),
+                 self._all("SELECT title, status FROM finding WHERE status != 'open' OR origin != 'auto' ORDER BY title"),
+                 self.get_meta("assessment_inputs", {}),
+                 self.get_meta("verification", {}),
+                 self.get_meta("report_settings", {})]
+        return _h.sha1(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+    def capture_progress(self, artifact_id: int) -> dict:
+        """How far a waiting capture has got: screenshots read so far, and whether a worker is on it now."""
+        frames = self.artifact_evidence(artifact_id)
+        text = self.evidence_dir / ".text"
+        read = sum(1 for e in frames if (text / f"{e['sha256']}.md").exists())
+        info = self.pending_captures().get(artifact_id) or {}
+        claim = info.get("claim") or {}
+        return {"frames": len(frames), "read": read, "stage": info.get("stage"),
+                "analysing": bool(claim) and _owner_alive(claim.get("owner"))}
+
     def repoint_runs(self, old_id: int, new_id: int):
         with self.transaction() as db:
             db.execute("UPDATE run SET artifact_id = ? WHERE artifact_id = ?", (new_id, old_id))
@@ -314,6 +361,8 @@ class ProgramStore:
             db.execute("DELETE FROM evidence_link WHERE target_type = 'artifact' AND target_id = ?", (artifact_id,))
             db.execute("DELETE FROM artifact WHERE id = ?", (artifact_id,))
         self.clear_pending(artifact_id)
+        if self.verification(artifact_id):
+            self.set_verification(artifact_id, None)
 
     def export_copybooks(self) -> Path:
         target = self.path / "copybooks"

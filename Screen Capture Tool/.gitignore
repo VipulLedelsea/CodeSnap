@@ -46,7 +46,7 @@ tests/
 demo_samples/
 deliverables/
 Previous Versions/
-assets/
+/assets/
 docs/DEMO_GUIDE.md
 docs/TEST_REPORT.md
 docs/DEEP_DIVE.md

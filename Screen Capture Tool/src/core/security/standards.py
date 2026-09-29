@@ -1,6 +1,6 @@
 FERPA = "FERPA 34 CFR §99.31 (reasonable methods to protect education records)"
-MN_GDPA = "Minn. Stat. §13.32 (educational data) / §13.055 (breach of not-public data)"
-MNIT = "MNIT Enterprise Security standards (NIST SP 800-53 based)"
+MN_GDPA = ""   # a state data-practices law is client-specific: set per engagement, never assumed
+MNIT = "NIST SP 800-53"
 
 RULES = {
     "SEC-CRED": {"title": "Hard-coded credential", "cwe": "CWE-798", "owasp": "A07:2021 Identification and Authentication Failures",

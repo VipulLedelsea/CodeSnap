@@ -44,7 +44,7 @@ def _refs(f):
     r = dict(f.get("refs") or {})
     out = {k: v for k, v in r.items() if k in ("wcag", "cwe", "nist", "cve", "eol_status", "eol_date")}
     if r.get("wcag"):
-        out["standard"] = "WCAG 2.1 AA · Section 508 · Minn. Stat. §16E.03 (state IT accessibility)"
+        out["standard"] = "WCAG 2.1 AA · Section 508"
     if r.get("ferpa"):
         out["ferpa"], out["mn_gdpa"] = FERPA, MN_GDPA
     if f["category"] in ("ui_security", "website"):

@@ -5,19 +5,24 @@ from core.assess.scores import DIMENSIONS, LABELS
 from core.model.corrections import history
 from core.security.scan import technologies
 
+from .rationale import explain_program, risk_reason
+
 SEV_ORDER = ["critical", "high", "medium", "low", "info"]
 STATUS_TEXT = {"eol": "End of life", "extended": "Extended support only", "ending": "Ends within 12 months",
                "legacy": "Legacy — no upgrade path", "supported": "Supported", "unknown": "Version not confirmed"}
 DIAGRAM_NOTES = {
-    "architecture": "Every captured component by layer, with risk and end-of-life badges; platform, configuration, "
+    "architecture": "Every component by layer, with risk and end-of-life badges; platform, configuration, "
                     "security and coverage along the bottom.",
     "context": "The program as one system: who uses it, what triggers it, and every external system and data store it touches.",
-    "component": "Every captured file, what it depends on, and the data it reads and writes. Dashed = referenced but not captured.",
+    "component": "Every file, what it depends on, and the data it reads and writes. Dashed = referenced but not provided.",
     "class": "Classes and COBOL programs with their fields and routines; inheritance, calls and copybook includes.",
-    "data": "Tables with columns and keys. Dashed tables are used by code but no DDL was captured.",
-    "userflow": "How users move between screens (links, form submits, CICS XCTL/LINK). Dashed = screen referenced but not captured.",
+    "data": "Tables with columns and keys. Dashed tables are used by code but no DDL was provided.",
+    "userflow": "How users move between screens (links, form submits, CICS XCTL/LINK). Dashed = screen referenced but not provided.",
     "sequence": "Step-by-step flow from an entry point through the code to the data it touches (line numbers from the source).",
 }
+
+
+_PRIVACY = ["Privacy"]     # the client's data privacy obligation, from the report settings
 
 
 def _pct(v):
@@ -35,23 +40,21 @@ def _refs(r):
     r = r or {}
     out = [r.get("cve"), r.get("cwe")] + [f"NIST {n}" for n in (r.get("nist") or [])[:2]]
     if r.get("ferpa"):
-        out.append("FERPA")
-    if r.get("mn_gdpa"):
-        out.append("MN ch.13")
+        out.append(_PRIVACY[0])
     return ", ".join(x for x in out if x)
 
 
 def summary_text(a, sec, eol_count, name):
     v = a.get("verdict") or {}
     if not v:
-        return f"No components have been captured for {name} yet, so no verdict can be given."
+        return f"No components of {name} have been reviewed yet, so no verdict can be given."
     top = [c for c in a["components"] if c["risk"]["level"] in ("critical", "high")]
     parts = [f"{name} is assessed as **{v['label']}** ({v['bucket']}), with {a['confidence']['level']} confidence."]
     parts.append(v.get("meaning", ""))
     if sec["by_severity"].get("critical") or sec["by_severity"].get("high"):
-        parts.append(f"The scan found {sec['by_severity'].get('critical', 0)} critical and "
+        parts.append(f"The review found {sec['by_severity'].get('critical', 0)} critical and "
                      f"{sec['by_severity'].get('high', 0)} high-severity security issues"
-                     + (", several in code that handles student data (FERPA scope)." if any(c["student_data"] for c in top)
+                     + (", several in code that handles personal data." if any(c["student_data"] for c in top)
                         else "."))
     if eol_count:
         parts.append(f"{eol_count} technolog{'y is' if eol_count == 1 else 'ies are'} past end of life or have no "
@@ -65,8 +68,12 @@ def summary_text(a, sec, eol_count, name):
     return " ".join(p for p in parts if p)
 
 
-def build(store, *, rescan=True, client="Minnesota Department of Education — School Finance", prepared_by="Ledelsea",
-          today=None) -> dict:
+def build(store, *, rescan=True, client=None, prepared_by=None, today=None) -> dict:
+    from .settings import get as _settings
+    _s = _settings(store)
+    client = client or _s["client"] or "the client"
+    prepared_by = prepared_by or _s["firm"] or _s["prepared_by"]
+    _PRIVACY[0] = _s["privacy_obligations"] or "Privacy"
     a = store.get_meta("assessment")
     if rescan or not a:
         a = run_assessment(store, scan=True, today=today)
@@ -100,12 +107,12 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
             ("Critical / high findings", f"{sec['by_severity'].get('critical', 0)} / {sec['by_severity'].get('high', 0)}"),
             ("Unsupported technologies", str(eol_count)),
             ("Roadmap effort", f"{a['roadmap']['total']['low']}–{a['roadmap']['total']['high']} person-weeks"),
-            ("Captured", f"{len(arts)} files · {_pct(cov.get('resolved_ratio'))} of referenced code"),
+            ("Scope", f"{len(arts)} files · {_pct(cov.get('resolved_ratio'))} of referenced code"),
         ]},
         {"type": "h", "text": "Why this verdict"},
-        {"type": "bullets", "items": v.get("reasons") or ["No components captured."]},
+        {"type": "bullets", "items": v.get("reasons") or ["No components reviewed."]},
         {"type": "h", "text": "Highest-risk components"},
-        {"type": "table", "head": ["Component", "Risk", "Score", "Disposition", "Student data"],
+        {"type": "table", "head": ["Component", "Risk", "Score", "Disposition", "Personal data"],
          "rows": [[c["name"], f"{c['risk']['level'].title()} ({c['risk']['likelihood']}×{c['risk']['impact']})",
                    str(c["overall"]), (c["disposition"] or {}).get("label", "as program"),
                    "yes" if c["student_data"] else ""] for c in top_risks], "sev_col": 1},
@@ -120,9 +127,9 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
         by_type.setdefault(art.get("language") or art.get("artifact_type") or "other", []).append(art["name"])
     kinds = cov.get("entities_by_kind") or {}
     sections.append({"id": "current", "title": "Current state", "blocks": [
-        {"type": "p", "text": f"{len(arts)} files were captured from screenshots and turned into a model of "
-                              f"{cov.get('entities', 0)} program elements. Every fact in this report links back to the "
-                              f"screenshot it came from."},
+        {"type": "p", "text": f"{len(arts)} files were reviewed, covering {cov.get('entities', 0)} program elements "
+                              f"(programs, classes, routines, screens, jobs, tables and interfaces). Every finding in this "
+                              f"report names the file and line it comes from."},
         {"type": "table", "head": ["Language / type", "Files", "Examples"],
          "rows": [[k, str(len(v_)), ", ".join(sorted(v_)[:4]) + (" …" if len(v_) > 4 else "")]
                   for k, v_ in sorted(by_type.items(), key=lambda kv: -len(kv[1]))]},
@@ -137,7 +144,7 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
         s = a["scores"].get(d) or {}
         worst = s.get("worst") or {}
         dim_rows.append([LABELS[d], f"{s.get('score', 'n/a')}", (s.get("grade") or "").title(),
-                         f"{worst.get('component', '')} ({worst.get('score', '')})" if worst else ""])
+                         f"{worst.get('component', '')} ({worst.get('score', '')})" if worst else "", explain_program(a, d)])
     comp_rows = [[c["name"], c.get("language") or c.get("type") or "", str(c["lines"])]
                  + [str(c["scores"][d]["score"]) for d in DIMENSIONS] for c in sorted(a["components"], key=lambda c: c["name"])]
     factor_rows = []
@@ -149,8 +156,9 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
     factor_rows.sort(key=lambda r: float(r[2]))
     sections.append({"id": "technical", "title": "Technical state & health", "blocks": [
         {"type": "p", "text": "Each component is scored 0–100 on six dimensions (100 = best). Every point deducted is "
-                              "listed below with the rule and finding that caused it. " + a["grade_scale"] + "."},
-        {"type": "table", "head": ["Dimension", "Score", "Grade", "Weakest component"], "rows": dim_rows, "score_col": 1},
+                              "listed below with the finding that caused it. " + a["grade_scale"] + "."},
+        {"type": "table", "head": ["Dimension", "Score", "Grade", "Weakest component", "Why this score"], "rows": dim_rows, "score_col": 1,
+         "small": True},
         {"type": "h", "text": "Scores by component"},
         {"type": "table", "head": ["Component", "Language", "Lines"] + [LABELS[d] for d in DIMENSIONS], "rows": comp_rows,
          "score_cols": list(range(3, 3 + len(DIMENSIONS))), "small": True},
@@ -161,12 +169,12 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
 
     sections.append({"id": "risk", "title": "Total risk & risk-impact matrix", "blocks": [
         {"type": "p", "text": f"Total risk is **{a['total_risk']['level']}**. Likelihood comes from each component's weakest "
-                              f"security, supportability and health scores; impact comes from MDE's criticality rating, "
+                              f"security, supportability and health scores; impact comes from the business criticality rating, "
                               f"or a default where none has been entered yet."},
         {"type": "matrix", "cells": a["matrix"]["cells"]},
-        {"type": "table", "head": ["Component", "Likelihood", "Impact", "Level", "Impact source"],
+        {"type": "table", "head": ["Component", "Likelihood", "Impact", "Level", "Why"],
          "rows": [[c["name"], str(c["risk"]["likelihood"]), str(c["risk"]["impact"]), c["risk"]["level"].title(),
-                   c["risk"]["impact_source"]] for c in a["components"]], "sev_col": 3, "small": True},
+                   risk_reason(c)] for c in a["components"]], "sev_col": 3, "small": True},
     ]})
 
     sec_rows = []
@@ -178,15 +186,15 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
     pii = [f for f in findings if f["category"] == "privacy"]
     sections.append({"id": "security", "title": "Security analysis & vulnerabilities", "blocks": [
         {"type": "kv", "items": [(k.title(), str(sec["by_severity"].get(k, 0))) for k in SEV_ORDER]},
-        {"type": "p", "text": "Findings come from deterministic rules over the transcribed code and configuration, a CVE "
-                              "check of versioned libraries, and a student-data classifier. Issues in code or connections "
-                              "that handle student data are raised one level and tagged FERPA / Minn. Stat. ch. 13. "
-                              "Secrets are masked."},
+        {"type": "p", "text": "Findings cover the application code and configuration, known vulnerabilities (CVEs) in "
+                              "versioned libraries, and the handling of personal and regulated data. Issues in code or "
+                              "connections that handle personal data are raised one level and tagged with the applicable "
+                              "privacy obligation. Secrets are masked."},
         {"type": "table", "head": ["Severity", "Finding", "Location", "Evidence", "Standards"], "rows": sec_rows,
          "sev_col": 0, "small": True},
-        {"type": "h", "text": "Student and personal data"},
+        {"type": "h", "text": "Personal and regulated data"},
         {"type": "bullets", "items": [f"{f['title']} — {f['detail'].split('. Treat')[0]}" for f in pii]
-         or ["No student data fields were identified in the captured files."]},
+         or ["No personal data fields were identified in the files reviewed."]},
     ]})
 
     ui_cats = {"accessibility": "Accessibility", "usability": "Usability", "ui_security": "UI security",
@@ -201,17 +209,18 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
             r = f.get("refs") or {}
             std = r.get("wcag") and f"WCAG {r['wcag']}" or ", ".join(x for x in [r.get("cve"), r.get("cwe")] if x)
             if r.get("ferpa"):
-                std += ", FERPA"
+                std += ", " + _PRIVACY[0]
             rows.append([f["severity"].title(), f["title"].split(":")[0], _loc(f.get("evidence")), f["detail"][:110], std,
-                         "vision" if "vision" in (f.get("source") or "") else ("live" if (f.get("source") or "").startswith("live") else "source")])
+                         "Screen" if "vision" in (f.get("source") or "") or "(screens)" in (f.get("source") or "")
+                         else ("Website" if (f.get("source") or "").startswith("live") else "Source")])
         return rows
 
     ui_blocks = [
         {"type": "kv", "items": [(v, f"{sum(1 for f in ui_f if f['category'] == k)}") for k, v in ui_cats.items()]},
-        {"type": "p", "text": "Page source (HTML/ASPX/JSP) is checked against WCAG 2.1 AA / Section 508 rules and for "
-                              "UI-level security issues; captured app screens are checked for visible errors, unlabeled "
-                              "fields and student data shown in full. Items marked **vision** were observed by the screen "
-                              "reader model and should be confirmed by a person; **live** items come from the website scan."},
+        {"type": "p", "text": "Page source (HTML/ASPX/JSP) is reviewed against WCAG 2.1 AA / Section 508 and for UI-level "
+                              "security issues; application screens are reviewed for visible errors, unlabeled fields and "
+                              "personal data shown in full. **Screen** items were observed on the running application and "
+                              "should be confirmed with a user; **Website** items come from the public site."},
         {"type": "h", "text": "Accessibility"},
         {"type": "table", "head": ["Severity", "Issue", "Location", "Detail", "Standard", "From"],
          "rows": ui_rows({"accessibility"}), "sev_col": 0, "small": True},
@@ -221,33 +230,31 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
         {"type": "h", "text": "UI & website security"},
         {"type": "table", "head": ["Severity", "Issue", "Location", "Detail", "Standard", "From"],
          "rows": ui_rows({"ui_security", "website"}), "sev_col": 0, "small": True},
-        {"type": "h", "text": "Live website scan"},
+        {"type": "h", "text": "Public website"},
     ]
     if site:
         hdr = site.get("headers") or {}
         ui_blocks.append({"type": "kv", "items": [
             ("Site", site.get("final_url") or site.get("start") or ""), ("TLS", ((site.get("tls") or {}).get("version") or "none")),
-            ("Pages scanned", str(sum(1 for p in site.get("pages") or [] if p.get("status") and p["status"] < 400))),
-            ("Server", hdr.get("server", "—")), ("Scanned", (site.get("scanned") or "")[:10]),
+            ("Pages reviewed", str(sum(1 for p in site.get("pages") or [] if p.get("status") and p["status"] < 400))),
+            ("Server", hdr.get("server", "—")), ("Reviewed", (site.get("scanned") or "")[:10]),
             ("Libraries", str(len(site.get("libraries") or [])))]})
     else:
-        ui_blocks.append({"type": "p", "text": "No live scan has been run. Enter the program's URL in the UI & website "
-                                               "panel to add TLS, header, cookie and page checks."})
+        ui_blocks.append({"type": "p", "text": "The public website was not part of this review."})
     ui_blocks.append({"type": "h", "text": "User journeys"})
     ui_blocks.append({"type": "bullets", "items": [
-        " → ".join(s_["screen"] + ("" if s_["captured"] else " (not captured)") for s_ in j["steps"])
-        for j in (flows.get("journeys") or [])[:20]] or ["No multi-screen journeys found in the captured screens."]})
+        " → ".join(s_["screen"] + ("" if s_["captured"] else " (not provided)") for s_ in j["steps"])
+        for j in (flows.get("journeys") or [])[:20]] or ["No multi-screen journeys found in the screens reviewed."]})
     if flows.get("dead_ends") or flows.get("orphans"):
         ui_blocks.append({"type": "bullets", "items": (
-            [f"Links to screens not captured: {', '.join(flows['dead_ends'][:10])}"] if flows.get("dead_ends") else []) + (
-            [f"Standalone screens (no navigation captured): {', '.join(flows['orphans'][:10])}"] if flows.get("orphans") else [])})
+            [f"Links to screens not provided: {', '.join(flows['dead_ends'][:10])}"] if flows.get("dead_ends") else []) + (
+            [f"Standalone screens (no navigation found): {', '.join(flows['orphans'][:10])}"] if flows.get("orphans") else [])})
     ui_blocks.append({"type": "diagram", "id": "userflow", "caption": "User flow"})
     sections.append({"id": "ui", "title": "UI, process & website review", "blocks": ui_blocks})
 
     sections.append({"id": "eol", "title": "End-of-life & supportability", "blocks": [
-        {"type": "p", "text": "Support dates come from a bundled endoflife.date snapshot plus vendor notices for "
-                              "technologies it does not track. Versions marked unconfirmed need a build or server "
-                              "configuration capture to confirm."},
+        {"type": "p", "text": f"Support dates are from published vendor lifecycle information as of {eol_snapshot}. "
+                              "Versions marked unconfirmed should be confirmed from the build or server configuration."},
         {"type": "table", "head": ["Technology", "Version", "Status", "End of life", "Basis", "Files"],
          "rows": [[t.get("name") or "", t.get("version") or t.get("cycle") or "", STATUS_TEXT.get(t.get("status"), t.get("status") or ""),
                    t.get("eol") or "", t.get("basis") or "", t.get("file") or ""] for t in techs], "status_col": 2, "small": True},
@@ -265,8 +272,8 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
     ]})
 
     road_blocks = [{"type": "p", "text": f"Estimated total: **{a['roadmap']['total']['low']}–{a['roadmap']['total']['high']} "
-                                         f"person-weeks**. Ranges come from rules per fix type and file size; MDE and "
-                                         f"Ledelsea should adjust them with local rates and staffing."}]
+                                         f"person-weeks**. Ranges are based on the type of change and the size of each file; the client and "
+                                         f"the assessment team should adjust them with local rates and staffing."}]
     for p in a["roadmap"]["phases"]:
         road_blocks.append({"type": "h", "text": f"{p['title']}  ·  {p['window']}  ·  {p['low']}–{p['high']} person-weeks"})
         road_blocks.append({"type": "table", "head": ["Item", "What to do", "Effort", "Components"],
@@ -282,7 +289,7 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
     sections.append({"id": "roadmap", "title": "Potential solutions & modernization roadmap", "blocks": road_blocks})
 
     sections.append({"id": "diagrams", "title": "Diagrams", "blocks": [
-        {"type": "p", "text": "All diagrams are generated from the program model, not drawn by hand or by AI. The full set, "
+        {"type": "p", "text": "Each diagram is drawn from the program's source code and configuration. The full set, "
                               "including one class diagram per file, is in the accompanying Visio (.vsdx) and draw.io files."},
         {"type": "diagram", "id": "class", "caption": "Classes & programs"},
         {"type": "diagram", "id": "data", "caption": "Data model"},
@@ -290,30 +297,30 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
     ]})
 
     missing = [m for m in cov.get("missing") or [] if m["category"] == "missing_code"]
-    sections.append({"id": "coverage", "title": "Coverage, confidence & method", "blocks": [
+    sections.append({"id": "coverage", "title": "Scope & confidence", "blocks": [
         {"type": "kv", "items": [("Confidence", a["confidence"]["level"].title()),
-                                 ("Referenced code captured", _pct(cov.get("resolved_ratio"))),
+                                 ("Referenced code reviewed", _pct(cov.get("resolved_ratio"))),
                                  ("Missing code references", str(len(missing))),
                                  ("External resources", str((cov.get("missing_counts") or {}).get("external", 0)))]},
         {"type": "bullets", "items": a["confidence"]["notes"]},
         *_health_blocks(a.get("health") or {}),
-        {"type": "h", "text": "Referenced but not captured"},
+        {"type": "h", "text": "Referenced but not provided"},
         {"type": "bullets", "items": [f"{m['kind']} {m['name']} — used by "
                                       + ", ".join(sorted({r.get('artifact') or r['name'] for r in m['referenced_by']})[:3])
                                       for m in missing[:40]] or ["Nothing missing."]},
-        {"type": "h", "text": "Analyst corrections"},
+        {"type": "h", "text": "Review adjustments"},
         {"type": "table", "head": ["Date", "Change", "Note"],
          "rows": [[c["created"][:10], c["description"], c.get("note") or ""] for c in history(store) if c["active"]]
-         or [["—", "No corrections applied — the model is exactly as extracted.", ""]], "small": True},
-        {"type": "h", "text": "Method"},
+         or [["—", "No adjustments.", ""]], "small": True},
+        {"type": "h", "text": "Approach"},
         {"type": "bullets", "items": [
-            "Code, screens, schemas and configuration were captured as screenshots and transcribed with a vision model; "
-            "transcriptions were syntax-checked with real compilers/parsers (GnuCOBOL, tree-sitter).",
-            "Program structure, security rules, end-of-life matching, scoring, verdict and diagrams are deterministic "
-            "code — the same inputs always give the same report.",
-            f"End-of-life data: endoflife.date snapshot {eol_snapshot} plus vendor notices; CVEs: OSV (when online) or a "
-            f"curated list.",
-            "Nothing was executed against MDE systems; findings should be confirmed with MNIT before remediation.",
+            "The review covered the application source code, screens, database schemas, job control and configuration "
+            "provided for the program; each file was checked to compile or parse in its own language.",
+            "Structure, security, end-of-life status, scoring, the verdict and the diagrams are derived from that source, so "
+            "the same inputs always give the same result.",
+            f"Support dates reflect published vendor lifecycle information as of {eol_snapshot}; vulnerabilities reflect "
+            "public CVE records.",
+            "Nothing was executed against production systems; findings should be confirmed with the IT owner before remediation.",
         ]},
     ]})
     return {"program": name, "slug": store.info["slug"], "client": client, "prepared_by": prepared_by,
@@ -321,10 +328,43 @@ def build(store, *, rescan=True, client="Minnesota Department of Education — S
 
 
 def _health_blocks(h: dict) -> list:
-    rows = [[p["name"], "Partially captured", "; ".join(p["reasons"])[:220]] for p in h.get("partial") or []]
-    rows += [[p["name"], "Not analysed", p["reason"]] for p in h.get("failed") or []]
-    rows += [[p["name"], f"Syntax check failed ({p['tool']})", p["error"]] for p in h.get("invalid") or []]
+    rows = [[p["name"], "Incomplete source", "; ".join(p["reasons"])[:220]] for p in h.get("partial") or []]
+    rows += [[p["name"], "Not reviewed", "The source could not be read."] for p in h.get("failed") or []]
+    rows += [[p["name"], "Does not compile", p["error"]] for p in h.get("invalid") or []]
     if not rows:
         return []
-    return [{"type": "h", "text": "Files to recapture or review"},
+    return [{"type": "h", "text": "Files to confirm"},
             {"type": "table", "head": ["File", "Issue", "Detail"], "rows": rows[:60], "small": True}]
+
+
+def _verification_blocks(store) -> list:
+    """How much of each transcription was proven against the screenshot pixels, and the lines to look at."""
+    allv = store.verification() or {}
+    rows, flags, tot = [], [], {"lines": 0, "ok": 0, "reread": 0, "flagged": 0, "unchecked": 0}
+    for art in store.artifacts():
+        v = allv.get(str(art["id"]))
+        if not v or not v.get("lines"):
+            continue
+        ok = v.get("verified", 0) + v.get("reread", 0)
+        gaps = ", ".join((f"{g[0]}" if g[0] == g[1] else f"{g[0]}–{g[1]}") for g in v.get("gaps") or [])
+        rows.append([art["name"], str(v["lines"]), f"{ok} ({round(100 * ok / v['lines'])}%)", str(v.get("reread", 0)),
+                     str(v.get("flagged", 0)), str(v.get("unchecked", 0)), f"lines {gaps} never on screen" if gaps else ""])
+        tot["lines"] += v["lines"]
+        tot["ok"] += ok
+        for k in ("reread", "flagged", "unchecked"):
+            tot[k] += v.get(k, 0)
+        flags += [[art["name"], str(f["line"]), f["text"][:90], f["reason"]] for f in v.get("flags") or []]
+    if not rows:
+        return []
+    pct = round(100 * tot["ok"] / tot["lines"], 1) if tot["lines"] else 0
+    return [
+        {"type": "h", "text": "Transcription check"},
+        {"type": "p", "text": f"**{tot['ok']} of {tot['lines']} lines ({pct}%)** were verified against the screenshots: "
+                              "every word has the length and column the pixels show. Lines where the pixels disagreed "
+                              f"were zoomed and read again ({tot['reread']} fixed that way). {tot['flagged']} line(s) are "
+                              f"listed to check, and {tot['unchecked']} could not be checked because the text isn't on a "
+                              "fixed-width grid (proportional fonts, UI screens)."},
+        {"type": "table", "head": ["File", "Lines", "Verified", "Re-read", "To check", "Not checkable", "Note"],
+         "rows": rows, "small": True},
+        *([{"type": "table", "head": ["File", "Line", "Text", "Why"], "rows": flags[:40], "small": True}] if flags else []),
+    ]

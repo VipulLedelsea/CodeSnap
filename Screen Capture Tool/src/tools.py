@@ -34,6 +34,8 @@ class ToolContext:
     ready_event: object = None           # threading.Event set by the "next" hotkey
     confirm_saves: bool = True            # False in owned/auto mode -> save without asking
     last_report: dict = None
+    program_mode: bool = False           # feeding a program: its report is built once, from the whole model
+    verify_info: tuple = None            # (statuses, notes, code as read) from the extractor, for the line check
 
 
 def _bg_extract(ctx, path):
@@ -136,6 +138,15 @@ def _t_save_output(ctx, inp):
         "diagrams": inp.get("diagrams", ""), "code_name": getattr(ctx, "code_name", None),
         "out_name": ctx.out_name,
     }
+    if ctx.verify_info and content:
+        try:
+            from core.verify import summarize
+            statuses, notes, read = ctx.verify_info
+            ctx.last_report["verification"] = summarize(content, statuses, notes, read_code=read)
+        except Exception:  # noqa: BLE001 - the line check is a report extra
+            pass
+    if ctx.program_mode:
+        return "Added to the program."
     if fmt == "source":
         out = outputs.save_report_bundle({
             "code": content, "extension": inp.get("extension", "txt"),

@@ -282,7 +282,7 @@ def _html(n):
 
 
 def drawio(scenes: list) -> str:
-    out = ['<mxfile host="CodeSnap" type="device">']
+    out = ['<mxfile host="Ledelsea" type="device">']
     for di, sc in enumerate(scenes):
         out.append(f'<diagram id="d{di}" name={quoteattr(sc["title"][:60])}><mxGraphModel dx="0" dy="0" grid="1" '
                    f'gridSize="10" page="1" pageWidth="{sc["width"]}" pageHeight="{sc["height"]}"><root>'
@@ -439,7 +439,7 @@ def _vsdx_page(sc):
     return v.xml()
 
 
-def vsdx(scenes: list, title="CodeSnap diagrams") -> bytes:
+def vsdx(scenes: list, title="Diagrams") -> bytes:
     buf = io.BytesIO()
     pages_xml, page_rels, overrides = [], [], []
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -471,7 +471,7 @@ def vsdx(scenes: list, title="CodeSnap diagrams") -> bytes:
                    '</Relationships>')
         z.writestr("docProps/core.xml",
                    '<?xml version="1.0" encoding="utf-8"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
-                   f'xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>{escape(title)}</dc:title><dc:creator>CodeSnap · Ledelsea</dc:creator></cp:coreProperties>')
+                   f'xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>{escape(title)}</dc:title><dc:creator>Ledelsea</dc:creator></cp:coreProperties>')
         z.writestr("docProps/app.xml",
                    '<?xml version="1.0" encoding="utf-8"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">'
                    '<Application>Microsoft Visio</Application><Company>Ledelsea</Company></Properties>')

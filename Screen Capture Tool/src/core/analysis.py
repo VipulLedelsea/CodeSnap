@@ -240,7 +240,11 @@ EXTRACT_JSON_SYSTEM_PROMPT = (
     "visible, transcribe ONLY the primary focused editor pane; ignore other windows, the dock, and "
     "menu bars. If a line is cut off at the screen edge or truly unreadable, transcribe what is "
     "visible and end that line's string with the marker [CUT OFF] \u2014 never guess the hidden part. "
-    'If there is no meaningful text, return {"raw_transcription": [], "corrections_applied": []}.'
+    'If there is no meaningful text, return {"raw_transcription": [], "corrections_applied": []}.\n'
+    'Also return a third key "line_numbers": when the editor shows a line-number gutter, an array with the gutter '
+    "number of each entry of raw_transcription (same length and order; null for a row with no number, such as the "
+    "continuation of a word-wrapped line). Use [] when no line numbers are visible. These numbers go ONLY in "
+    "line_numbers, never in raw_transcription. COBOL/RPG sequence numbers typed in the source are text, not line numbers."
 )
 
 
@@ -257,7 +261,21 @@ def _normalize_extract(text: str) -> dict:
     raw = "\n".join(str(x) for x in rt) if isinstance(rt, list) else str(rt)
     corr = data.get("corrections_applied", [])
     corr = [c for c in corr if isinstance(c, dict)] if isinstance(corr, list) else []
-    return {"raw": raw.strip("\n"), "corrections": corr}
+    nums = data.get("line_numbers") or []
+    if isinstance(rt, list) and isinstance(nums, list) and len(nums) == len(rt):
+        # keep the numbers aligned with raw after the blank lines at either end are trimmed
+        lines = [str(x) for x in rt]
+        while lines and not lines[0].strip():
+            lines.pop(0)
+            nums = nums[1:]
+        while lines and not lines[-1].strip():
+            lines.pop()
+            nums = nums[:-1]
+        from core.verify import valid_numbers
+        nums = valid_numbers(nums, lines)
+    else:
+        nums = []
+    return {"raw": raw.strip("\n"), "corrections": corr, "numbers": nums}
 
 
 EXTRACT_INDENT_SYSTEM_PROMPT = (
@@ -349,7 +367,68 @@ def extract_structured(client, path: Path) -> dict:
     if _os.environ.get("CODESNAP_COLUMN_FIX", "1") != "0":
         from core.colfix import respace
         out["raw"], out["respaced_lines"] = respace(path, out["raw"])
+    out["verify"] = verify_screenshot(client, path, out["raw"])
+    out["raw"] = out["verify"].pop("text")
+    out["verify"]["numbers"] = out.get("numbers") or []
     return out
+
+
+REREAD_SYSTEM_PROMPT = (
+    "You are a LITERAL OCR engine. Each image is ONE line of source code cut from an editor screenshot and zoomed in. "
+    "Copy every visible character of that line exactly, mistakes included; count repeated characters (------, ======, "
+    "spaces) exactly. Return ONLY a JSON object: {\"lines\": [{\"text\": <the line>, \"overlay\": <true if a mouse "
+    "pointer, text cursor or selection box covers part of the text, else false>}, ...]}, one entry per image, in order."
+)
+REREAD_MAX = 24
+
+
+def verify_screenshot(client, path: Path, raw: str) -> dict:
+    """Check every transcribed line against the pixels (core.colfix.check). Lines whose pixels show a different
+    character count are fixed for free when only the spacing was wrong; otherwise only those lines are cropped, zoomed
+    and read again, and a re-read is kept only if it now matches the pixels. Returns
+    {"text", "grid", "status": [per line], "reread": n}. Never raises: a failed check leaves the lines "unchecked"."""
+    from core import colfix
+    lines = raw.split("\n")
+    try:
+        chk = colfix.check(path, raw)
+    except Exception:  # noqa: BLE001
+        return {"text": raw, "grid": False, "status": ["" if not l.strip() else "unchecked" for l in lines], "reread": 0}
+    status, rows = chk["status"], chk["rows"]
+    todo = {}
+    for i, row in rows.items():
+        fixed = colfix.accept_reread(lines[i], row)
+        if fixed is not None and max(abs(a - b) for a, b in zip(colfix._starts(fixed), colfix._starts(lines[i]))) <= colfix.MAX_SHIFT:
+            lines[i], status[i] = fixed, "verified"
+        else:
+            todo[i] = row
+    n_re = 0
+    if todo and client is not None and _os.environ.get("CODESNAP_REREAD", "1") != "0":
+        items = list(todo.items())[:REREAD_MAX]
+        for k in range(0, len(items), 12):
+            batch = dict(items[k:k + 12])
+            try:
+                crops = colfix.crop_rows(path, batch, x0=chk.get("x0", 0), pitch=chk.get("pitch", 10.0))
+                content = [{"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                                        "data": base64.standard_b64encode(c).decode()}} for c in crops]
+                content.append({"type": "text", "text": f"{len(crops)} images. Return only the JSON object."})
+                msg = client.messages.create(model=EXTRACT_MODEL, max_tokens=2048, system=REREAD_SYSTEM_PROMPT,
+                                             messages=[{"role": "user", "content": content}])
+                data = _parse_json("".join(getattr(b, "text", "") for b in msg.content).strip()) or {}
+                got = data.get("lines") if isinstance(data, dict) else None
+            except Exception:  # noqa: BLE001 - the re-read is an extra; the first read stands
+                got = None
+            if not isinstance(got, list):
+                continue
+            for (i, row), g in zip(batch.items(), got):
+                text = str(g.get("text", "")) if isinstance(g, dict) else str(g)
+                fixed = colfix.accept_reread(text, row)
+                if fixed is not None:
+                    status[i] = "reread"
+                    lines[i] = fixed
+                    n_re += 1
+                elif isinstance(g, dict) and g.get("overlay") and text.split() == lines[i].split():
+                    status[i] = "confirmed"      # a pointer over the text explains the pixels; both reads agree
+    return {"text": "\n".join(lines), "grid": chk["grid"], "status": status, "reread": n_re}
 
 
 def extract_legacy(client, path: Path) -> str:
@@ -665,26 +744,55 @@ def _fix_leading_indent(code: str) -> str:
     return "\n".join(lines)
 
 
-def merge_frames(raw_parts: list):
+def merge_frames(raw_parts: list, metas: list | None = None):
     """Clean each frame (fences/gutters/dup blocks), collapse frames that are the
     same code (keeping the best-indented copy), stitch overlapping ones. Returns
     (merged_code, clean_parts). Safety net: if stitching duplicated a class/function
     (a mis-merge on messy OCR), fall back to the longest single frame with no such
     duplication — one clean copy beats tripled garbage."""
+    code, parts, _, _ = merge_verified(raw_parts, metas)
+    return code, parts
+
+
+def merge_verified(raw_parts: list, metas: list | None = None):
+    """merge_frames plus verification: returns (code, clean_parts, notes, statuses). `metas` are the per-screenshot
+    checks (verify_for); when every screenshot has editor line numbers the lines are placed by number, otherwise by
+    overlap. statuses maps each line's text to the best check any screenshot gave it (core.verify)."""
+    from core import verify
+    metas = list(metas or [])
+    metas += [{}] * (len(raw_parts) - len(metas))
     mode = source_mode(raw_parts)
+    statuses = verify.lookup(raw_parts, metas)
+    from core.cobol import is_column_sensitive
+    from core.langpacks.formats import detect_format
+    byn = verify.merge_by_numbers(raw_parts, metas)
+    if byn is not None:
+        text, notes, st = byn
+        for k, v in st.items():
+            statuses[k] = verify.best(statuses.get(k, ""), v) if v != "joined" else "joined"
+        best = clean_source(text, mode)
+        parts = [c for c in (clean_source(r, mode) for r in raw_parts) if c.strip()]
+        keep = mode or is_column_sensitive(best) or detect_format(best)
+        return (best if keep else _fix_leading_indent(best)), parts, notes, statuses
+    notes = {"numbers": False, "gaps": [], "sideways": 0, "wrapped": 0}
     cleaned = [clean_source(r, mode) for r in raw_parts]
     parts = _dedup_best(cleaned) or [c for c in cleaned if c.strip()]
-    stitched = stitch_parts(parts)
+    prefer = {k for k, v in statuses.items() if v in ("verified", "reread")}
+    stitched = _stitch(parts, prefer, notes)
     candidates = [stitched] + parts
     clean = [c for c in candidates if c.strip() and not _has_dup_headers(c)]
     best = max(clean or candidates, key=lambda c: len(c.splitlines())) if candidates else stitched
-    from core.cobol import is_column_sensitive
-    from core.langpacks.formats import detect_format
+    if best is not stitched:
+        notes["sideways"] = 0
+    for j in notes.pop("joined", []):
+        k = j.rstrip()
+        if "[CUT OFF]" not in k and statuses.get(k) not in ("verified", "reread"):
+            statuses[k] = "joined"
     keep = mode or is_column_sensitive(best) or detect_format(best)
-    return (best if keep else _fix_leading_indent(best)), parts
+    return (best if keep else _fix_leading_indent(best)), parts, notes, statuses
 
 
-def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8) -> "list | None":
+def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8, prefer=frozenset()) -> "list | None":
     """Merge frame b onto merged. Finds where the TAIL of merged reappears *inside* b
     (frames often re-show earlier lines), then appends only what follows. Returns the
     merged list, or None if no overlap is found."""
@@ -701,6 +809,9 @@ def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8
             if sims and sum(sims) / len(sims) >= thresh and min(sims) >= 0.7:
                 # a line cut off at the bottom of one screen is usually whole on the next — keep the whole copy
                 tail = [w if "[CUT OFF]" in t and "[CUT OFF]" not in w else t for t, w in zip(tail, window)]
+                # two screenshots read a line differently: keep the copy the pixel check verified
+                tail = [w if w != t and w.rstrip() in prefer and t.rstrip() not in prefer else t
+                        for t, w in zip(tail, window)]
                 return merged[:-k] + tail + b[o + k:]
     return None
 
@@ -716,9 +827,27 @@ def _prepend(merged: list, b: list, min_overlap: int = 2) -> "list | None":
     return None
 
 
+def _upgrade_cut(merged: list, b: list) -> list:
+    """Replace a line cut off at a screen edge with the whole copy of it from another screenshot."""
+    whole = [l for l in b if l.strip() and "[CUT OFF]" not in l]
+    out = []
+    for line in merged:
+        if "[CUT OFF]" in line:
+            stem = line.replace("[CUT OFF]", "").rstrip()
+            full = next((w for w in whole if len(w.rstrip()) > len(stem) and w.rstrip().startswith(stem)), None)
+            line = full if full is not None else line
+        out.append(line)
+    return out
+
+
 def stitch_parts(parts: list) -> str:
     """Join per-image text, merging the overlap between consecutive chunks so
     scroll captures don't repeat their shared lines."""
+    return _stitch(parts, frozenset(), {})
+
+
+def _stitch(parts: list, prefer, notes: dict) -> str:
+    from core.verify import sideways_merge
     merged: list = []
     for part in parts:
         lines = part.split("\n")
@@ -732,11 +861,18 @@ def stitch_parts(parts: list) -> str:
             merged = lines
             continue
         if _mostly_contained(lines, merged):
-            continue  # a re-capture of content we already have — don't duplicate it
-        stitched = _stitch_two(merged, lines)
+            merged = _upgrade_cut(merged, lines)  # a re-capture adds nothing new, but may show cut lines whole
+            continue
+        side = sideways_merge(merged, lines)      # scrolled right: the rest of long lines, not new lines
+        if side is not None:
+            merged = side[0]
+            notes["sideways"] = notes.get("sideways", 0) + side[1]
+            notes.setdefault("joined", []).extend(getattr(sideways_merge, "joined", []))
+            continue
+        stitched = _stitch_two(merged, lines, prefer=prefer)
         if stitched is None:
             stitched = _prepend(merged, lines)   # a screenshot added later can show an earlier part of the file
-        merged = stitched if stitched is not None else merged + [""] + lines
+        merged = _upgrade_cut(stitched if stitched is not None else merged + [""] + lines, lines)
     return "\n".join(merged)
 
 
@@ -811,6 +947,21 @@ def extract_to_cache(client, path: Path, cache_dir: Path) -> None:
         cf.with_suffix(".corr.json").write_text(json.dumps(res["corrections"]))
     except Exception:  # noqa: BLE001 - corrections are advisory; never fail the cache write
         pass
+    try:
+        if res.get("verify"):
+            cf.with_suffix(".verify.json").write_text(json.dumps(res["verify"]))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def verify_for(path: Path, cache_dir: Path) -> dict:
+    """The pixel check and line numbers cached next to an image's text ({} for older captures)."""
+    cf = cache_path_for(path, cache_dir).with_suffix(".verify.json")
+    try:
+        data = json.loads(cf.read_text()) if cf.exists() else {}
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 # ── Code fix loop (Milestone 7, Layer C) ─────────────────────────────────────────

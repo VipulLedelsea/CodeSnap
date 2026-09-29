@@ -204,6 +204,8 @@ def ingest_capture(store, client, images, report: dict, *, session_id: int | Non
         report.get("code", ""),
         evidence_ids=evidence_ids,
     )
+    if report.get("verification"):
+        store.set_verification(artifact_id, report["verification"])
     if is_code:
         ok, errors = validation_from_errors(report.get("errors", ""))
         store.set_validation(artifact_id, report.get("validation_tool", "compiler"), ok, errors)
@@ -216,6 +218,8 @@ def ingest_capture(store, client, images, report: dict, *, session_id: int | Non
 
 
 def _finish(store, client, artifact_id, report, is_code):
+    if (report or {}).get("verification"):
+        store.set_verification(artifact_id, report["verification"])
     if is_code:
         ok, errors = validation_from_errors(report.get("errors", ""))
         store.set_validation(artifact_id, report.get("validation_tool", "compiler"), ok, errors)

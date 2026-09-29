@@ -822,10 +822,9 @@ async function loadHealth() {
   ];
   const label = { waiting: "waiting", failed: "not analysed", partial: "partial capture", invalid: "syntax check failed" };
   const api = h.api.failures ? ` · ${h.api.failures} API error(s)${h.api.fallbacks ? `, ${h.api.fallbacks} recovered by local parser` : ""}` : "";
-  box.innerHTML = `<div class="ph-line ${_attr(h.status)}"><b>Pipeline:</b> ${rows.length ? new Set(rows.map(r => r[1])).size + " file(s) need attention" : "all " + h.files + " files analysed"}${api} · ${budget}
-      <button class="btn-link" id="progBudgetEdit" type="button">set budget</button></div>` +
+  box.innerHTML = `<div class="ph-line ${_attr(h.status)}"><b>Pipeline:</b> ${rows.length ? new Set(rows.map(r => r[1])).size + " file(s) need attention" : "all " + h.files + " files analysed"}${api}${b.limit && b.remaining <= 0 ? " · " + budget : ""}</div>` +
     rows.map(r => `<div class="ph-row"><span class="pm-cat ${_attr(r[0])}">${label[r[0]]}</span> <b>${escapeHtml(r[1])}</b> <small>${escapeHtml(r[2])}</small></div>`).join("");
-  $("progBudgetEdit").addEventListener("click", () => {
+  if ($("progBudgetEdit")) $("progBudgetEdit").addEventListener("click", () => {
     inlineAsk(box, [{ name: "v", label: "API budget for this program, USD (0 = no limit)", value: String(b.limit || "") }]).then(async res => {
       if (!res) return;
       const n = parseFloat(res.v || "0");
@@ -847,20 +846,16 @@ async function loadProgram() {
   $("progSub").textContent = d.program.description || "Every capture is transcribed, checked, and added to this program's model.";
   const c = d.coverage, u = d.usage;
   $("progStats").innerHTML = _stat(c.files, "files") + _stat(c.entities, "entities") +
-    _stat(c.missing.length, "missing") + _stat(c.resolved_ratio == null ? "—" : Math.round(c.resolved_ratio * 100) + "%", "resolved") +
-    _stat(((u.input_tokens + u.output_tokens) / 1000).toFixed(1) + "k", "tokens") +
-    _stat("$" + (u.cost || 0).toFixed(2), "est. cost");
-  const steps = (d.usage_by_step || []).filter(x => x.cost > 0 || x.calls > 0);
-  $("progCost").innerHTML = steps.length ? "Cost by step: " + steps.map(x =>
-    `${escapeHtml(x.step)} <b>$${(x.cost || 0).toFixed(3)}</b> <small>(${x.calls} calls)</small>`).join(" · ") +
-    ` <small>— estimated from list prices</small>` : "";
+    _stat(c.missing.length, "missing") + _stat(c.resolved_ratio == null ? "—" : Math.round(c.resolved_ratio * 100) + "%", "resolved");
+  $("progCost").innerHTML = "";
   const STATUS_LABEL = { captured: "waiting to analyse", failed: "analysis failed" };
   $("progFiles").innerHTML = d.artifacts.length ? d.artifacts.map(a => `
     <details class="prog-file" data-id="${a.id}" data-name="${_attr(a.name)}">
       <summary>
         <span class="pf-name">${escapeHtml(a.name)}</span>
-        <span class="pf-meta">${escapeHtml(a.language || a.artifact_type)} · v${a.version} · ${a.entities} entities · ${a.frames} frames · $${(a.cost || 0).toFixed(3)}${a.pending && a.pending.recapture_of ? " · recapture of " + escapeHtml(a.pending.recapture_of) : ""}</span>
-        <span class="pf-status ${_attr(a.status)}">${escapeHtml(STATUS_LABEL[a.status] || a.status)}</span>
+        <span class="pf-meta">${escapeHtml(a.language || a.artifact_type)} · v${a.version} · ${a.entities} entities · ${a.frames} frames${a.pending && a.pending.recapture_of ? " · recapture of " + escapeHtml(a.pending.recapture_of) : ""}</span>
+        <span class="pf-status ${_attr(a.status)}${a.pending && a.pending.analysing ? " busy" : ""}">${escapeHtml(_statusText(a))}</span>
+        ${_checkBadge(a.check)}
         <span class="pf-acts">
           <button class="btn-link" data-act="rename" type="button">Rename</button>
           ${a.status === "captured" ? "" : `<button class="btn-link" data-act="recapture" type="button">Recapture</button>
@@ -897,6 +892,7 @@ async function loadProgram() {
   const rb = `/api/programs/${encodeURIComponent(_program)}/report`;
   $("progReportHtml").href = `${rb}.html`;
   $("progReportDocx").href = `${rb}.docx`;
+  $("progReportPdf").href = `${rb}.pdf`;
   $("progReportZip").href = `${rb}.zip`;
 }
 let _display = "", _shotDisplay = "";
@@ -912,6 +908,30 @@ async function loadDisplays() {
   sel.onchange = () => { _display = sel.value; if (pickedRegion) $("clearAreaBtn").click(); toast(_display ? `Capturing screen ${_display}. Pick the code area again if you had one.` : "Capturing the screen under the mouse."); };
 }
 loadDisplays();
+function _checkBadge(v) {
+  if (!v || !v.lines) return "";
+  const ok = (v.verified || 0) + (v.reread || 0), gaps = (v.gaps || []).length;
+  const warn = v.flagged || gaps;
+  const txt = `${ok}/${v.lines} lines verified` + (v.flagged ? ` · ${v.flagged} to check` : "") + (gaps ? ` · ${gaps} gap${gaps > 1 ? "s" : ""}` : "");
+  const tip = "Verified = every word has the length and column the screenshot's pixels show." +
+    (v.unchecked ? ` ${v.unchecked} line(s) couldn't be checked (no fixed-width text grid).` : "");
+  return `<span class="pf-check ${warn ? "warn" : ok === v.lines ? "ok" : ""}" title="${_attr(tip)}">${escapeHtml(txt)}</span>`;
+}
+function _checkHtml(v) {
+  if (!v || !v.lines) return "";
+  const span = g => g[0] === g[1] ? `line ${g[0]}` : `lines ${g[0]}–${g[1]}`;
+  const gaps = (v.gaps || []).length ? `<div class="pf-gap">Never on screen: ${(v.gaps || []).map(span).map(escapeHtml).join(", ")}. Scroll to them and use Add screenshots.</div>` : "";
+  const flags = (v.flags || []).map(f => `<div class="pf-flag"><b>L${f.line}</b> <code>${escapeHtml(f.text)}</code><small>${escapeHtml(f.reason)}</small></div>`).join("");
+  return `<div class="pf-verify"><div class="pf-vhead">Transcription check</div><div>${escapeHtml(v.headline || "")}</div>${gaps}${flags}</div>`;
+}
+function _statusText(a) {
+  const p = a.pending || {};
+  if (a.status === "captured" && p.analysing)
+    return p.stage === "adding to the program" ? "analysing · checking" : `analysing · read ${p.read || 0}/${p.frames || a.frames} screenshots`;
+  if (a.status === "captured") return "waiting to analyse";
+  if (a.status === "failed") return "analysis failed";
+  return a.status;
+}
 function _pbase() { return `/api/programs/${encodeURIComponent(_program)}`; }
 function renderCaptureBar(d) {
   const bar = $("progCapBar");
@@ -919,7 +939,10 @@ function renderCaptureBar(d) {
   bar.innerHTML = (t ? `<div class="cb recap">${t.mode === "append"
       ? `Next capture adds to <b>${escapeHtml(t.name)}</b>: its screenshots are read together with the new ones as v${(t.version || 1) + 1}.`
       : `Next capture replaces <b>${escapeHtml(t.name)}</b> as v${(t.version || 1) + 1} (v${t.version || 1} is kept as history).`} <button class="btn-link" data-cb="cancel" type="button">Cancel</button></div>` : "")
-    + (d.waiting ? `<div class="cb wait">${d.waiting} capture(s) saved and waiting to be analysed${d.session_running ? " — the capture session is working through them." : "."} ${d.session_running ? "" : `<button class="btn-link" data-cb="process" type="button">Analyse now</button>`}</div>` : "");
+    + (d.waiting ? `<div class="cb wait">${(() => { const busy = d.artifacts.filter(a => a.status === "captured" && a.pending && a.pending.analysing).length;
+        return `${busy ? busy + " analysing now, " : ""}${d.waiting - busy} waiting`; })()} · the report is built once all are done.
+        ${d.artifacts.some(a => a.status === "captured" && a.pending && a.pending.analysing) ? "" : `<button class="btn-link" data-cb="process" type="button">Analyse now</button>`}</div>` : "");
+  ["progReportHtml", "progReportDocx", "progReportPdf", "progReportZip"].forEach(id => { const el = $(id); if (el) el.classList.toggle("disabled", !!d.waiting); });
   bar.querySelectorAll("[data-cb]").forEach(b => b.addEventListener("click", async () => {
     try {
       if (b.dataset.cb === "cancel") { await _json(`${_pbase()}/recapture`, { method: "DELETE" }); toast("Recapture cancelled."); }
@@ -992,6 +1015,7 @@ async function loadArtifact(el) {
       <button class="btn-link pf-save" type="button">Rename</button>
       <button class="btn-link pf-re" type="button">Re-extract</button></div>
     ${errs}
+    ${_checkHtml(d.verification)}
     ${profileHtml(d.profile)}
     <div class="pf-entities">${d.entities.map(e => `<div>${escapeHtml(e.name)} <i>${escapeHtml(e.kind)}${e.line_start ? " · L" + e.line_start : ""}</i></div>`).join("") || "<div><i>No entities extracted.</i></div>"}</div>
     <div class="pf-version">Same file captured earlier? Make this a new version of
@@ -1098,7 +1122,7 @@ function renderFindings() {
   const cat = $("progSecFilter").value;
   const rows = _findings.filter(f => !cat || f.category === cat)
     .sort((a, b) => _SEV.indexOf(a.severity) - _SEV.indexOf(b.severity));
-  if (!rows.length) { box.innerHTML = `<p class="project-hint">${_findings.length ? "Nothing in this category." : "Not scanned yet — Run scan (no API cost)."}</p>`; return; }
+  if (!rows.length) { box.innerHTML = `<p class="project-hint">${_findings.length ? "Nothing in this category." : "Not scanned yet — Run scan."}</p>`; return; }
   findingList(box, rows, nf => { _findings = _findings.map(f => f.id === nf.id ? nf : f); renderFindings(); });
 }
 const _UI_CATS = { accessibility: "Accessibility", usability: "Usability", ui_security: "UI security", website: "Website" };
@@ -1423,14 +1447,26 @@ document.querySelectorAll("#kindSeg .seg-opt").forEach(b => b.addEventListener("
   document.querySelectorAll("#kindSeg .seg-opt").forEach(x => x.classList.toggle("active", x === b));
   $("kindHint").textContent = _captureKind === "screen"
     ? "A running app's screen: fields, buttons, messages (no data values)" : "Source code, SQL, config, web pages";
-  if (sessionRunning) {
-    await fetch("/api/session/stop", { method: "POST" });
-    toast("Capture mode changed — press Start capture again.");
-    pollStatus();
-  }
+  try { await fetch("/api/session/kind?kind=" + _captureKind, { method: "POST" }); } catch (e) {}
+  if (sessionRunning) toast(_captureKind === "screen" ? "Next capture reads an app screen." : "Next capture reads code.");
 }));
 
 $("progFixBox").addEventListener("toggle", () => { if ($("progFixBox").open) loadCorrections(); });
+$("progReportBox").addEventListener("toggle", () => { if ($("progReportBox").open) loadReportSettings(); });
+async function loadReportSettings() {
+  const box = $("progReportForm");
+  let d;
+  try { d = await _json(`${_pbase()}/report-settings`); } catch (e) { box.textContent = e.message; return; }
+  box.innerHTML = `<p class="project-hint" style="margin:4px 0 8px">Shown in the Word/PDF report. Anything left empty is written as "Unknown" and listed as an open item.</p>
+    <div class="rs-grid">${d.fields.map(f => `<label>${escapeHtml(f.label)}<input type="text" data-k="${_attr(f.key)}" value="${_attr(d.values[f.key] || "")}" spellcheck="false"></label>`).join("")}</div>
+    <button class="btn-secondary" id="rsSave" type="button">Save report details</button>`;
+  $("rsSave").addEventListener("click", async () => {
+    const body = {};
+    box.querySelectorAll("input[data-k]").forEach(i => { body[i.dataset.k] = i.value; });
+    try { await _json(`${_pbase()}/report-settings`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); toast("Report details saved — the report will be rebuilt."); }
+    catch (e) { toast(e.message); }
+  });
+}
 $("progFixInterpret").addEventListener("click", interpretCorrection);
 $("progFixSearch").addEventListener("input", () => { clearTimeout(_fixTimer); _fixTimer = setTimeout(searchEntities, 250); });
 $("progUiBox").addEventListener("toggle", () => { if ($("progUiBox").open) loadUiReview(); });

@@ -42,17 +42,25 @@ def agent_extract(ctx) -> dict:
     Faithfulness is structural: extraction goes through the Haiku OCR path and
     the returned code is the stitched cache, never a paraphrase."""
     raws = []
+    metas = []
     corrections = []
     for p in sorted(ctx.images):
         if ctx.cache_dir is not None:
             analysis.extract_to_cache(ctx.client, p, ctx.cache_dir)
             raws.append(analysis.cache_path_for(p, ctx.cache_dir).read_text())
             corrections.extend(analysis.corrections_for(p, ctx.cache_dir))
+            metas.append(analysis.verify_for(p, ctx.cache_dir))
         else:
             r = analysis.extract_structured(ctx.client, p)
             raws.append(r["raw"])
             corrections.extend(r["corrections"])
-    code, parts = analysis.merge_frames(raws)   # clean + collapse dups + stitch
+            metas.append(r.get("verify") or {})
+    # clean + collapse dups + stitch (by editor line number when every screenshot shows them), with the line check
+    code, parts, notes, statuses = analysis.merge_verified(raws, metas)
+    try:
+        ctx.verify_info = (statuses, notes, code)
+    except Exception:  # noqa: BLE001 - a context without the field (older callers)
+        pass
     marked = "\n\n".join(f"===== Screenshot {i + 1} =====\n{t}" for i, t in enumerate(parts))
     numbered = "\n".join(f"{i + 1:>4}  {line}" for i, line in enumerate(code.splitlines()))
     return {"code": code, "marked": marked, "numbered": numbered, "parts": parts,
@@ -610,7 +618,7 @@ def run_team_fast(client, ctx, goal=None, verbose=True, audit=None, max_iters=No
     code = de.get("code", code0)          # Decoder ships the fixed code if the error-only fix compiled
     # Stage 3 — Diagrammer draws the REPAIRED code (waits for the Decoder on purpose)
     audit.append("diagram"); _pub("diagram", stage="save")
-    di = agent_diagrammer(client, code, language)
+    di = "" if getattr(ctx, "program_mode", False) else agent_diagrammer(client, code, language)
 
     overview = an.get("overview") or base.get("overview", "")
     tech = an.get("tech_stack", "")

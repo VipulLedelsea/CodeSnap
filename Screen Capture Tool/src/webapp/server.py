@@ -118,6 +118,7 @@ def api_session_start(single: bool = False, idle_stop: float | None = None, regi
         if limit and spent >= limit:
             return JSONResponse({"error": f"API budget reached for this program (${spent:.2f} of ${limit:.2f}). "
                                           f"Raise the budget to keep capturing."}, status_code=402)
+    api_session_kind(capture_kind)
     started = _session.start(single=single, idle_stop=idle_stop, region=region, project_mode=project_mode,
                              program=program, capture_kind=capture_kind, display=display)
     return {"running": _session.running(), "started": started, "single": single,
@@ -157,7 +158,12 @@ def _artifact_summary(store, artifact: dict) -> dict:
     pend = store.pending_captures().get(artifact["id"])
     if pend:
         out["pending"] = {k: pend.get(k) for k in ("kind", "error", "recapture_of", "attempts")}
+        if artifact["status"] == "captured":
+            out["pending"].update(store.capture_progress(artifact["id"]))
     out["cost"] = store.artifact_cost(artifact["id"])
+    v = store.verification(artifact["id"])
+    if v and artifact["status"] != "captured":
+        out["check"] = {k: v.get(k) for k in ("lines", "verified", "reread", "confirmed", "flagged", "unchecked", "gaps")}
     return out
 
 
@@ -187,6 +193,8 @@ def api_program(slug: str):
             "usage_by_step": store.usage_by_step()["steps"],
             "artifacts": [_artifact_summary(store, a) for a in store.artifacts()],
             "recapture_target": store.get_meta("recapture_target"),
+            "report": {"built_at": store.get_meta("report_built_at"),
+                       "current": store.get_meta("report_stamp") == store.model_stamp()},
             "waiting": sum(1 for a in store.artifacts() if a["status"] == "captured"),
             "session_running": _session.running(),
         }
@@ -295,7 +303,8 @@ def api_program_artifact(slug: str, artifact_id: int):
         evidence = [{"id": e["id"], "ord": e["ord"]} for e in store.artifact_evidence(artifact_id)]
         file_entity = store.entity_by_key(f"file:{artifact['name']}")
         profile = (file_entity or {}).get("attrs", {}).get("profile")
-        return {"artifact": artifact, "entities": entities, "evidence": evidence, "profile": profile}
+        return {"artifact": artifact, "entities": entities, "evidence": evidence, "profile": profile,
+                "verification": store.verification(artifact_id)}
 
 
 @app.post("/api/programs/{slug}/artifacts/{artifact_id}/rename")
@@ -490,18 +499,59 @@ def api_program_diagram(slug: str, diagram_id: str, fmt: str):
 @app.get("/api/programs/{slug}/report.{fmt}")
 def api_program_report(slug: str, fmt: str, rescan: bool = True, client: str | None = None):
     from core import report as rep
+    if fmt not in ("html", "docx", "pdf", "zip"):
+        raise HTTPException(status_code=404, detail="Use html, docx, pdf or zip.")
     with _open_program(slug) as store:
+        if client:   # a report for a different client name is built fresh, not cached
+            if fmt == "html":
+                return HTMLResponse(rep.html_report(store, rescan=rescan, client=client))
+            if fmt == "pdf":
+                body = rep.pdf_from_docx(rep.docx_bytes(store, rescan=rescan, client=client))
+                if body is None:
+                    return JSONResponse({"error": rep.PDF_MISSING}, status_code=501)
+                return Response(body, media_type="application/pdf",
+                                headers={"Content-Disposition": f'attachment; filename="{slug}_assessment_report.pdf"'})
+            body = (rep.docx_bytes(store, rescan=rescan, client=client) if fmt == "docx"
+                    else rep.package(store, rescan=rescan, client=client)["zip"])
+            mt = "application/zip" if fmt == "zip" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            name = f"{slug}_assessment_report.{fmt}" if fmt != "zip" else f"{slug}_assessment_report_package.zip"
+            return Response(body, media_type=mt, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+        n = rep.waiting(store)
+        if n:
+            msg = f"The report is built once every file is analysed — {n} still waiting."
+            if fmt == "html":
+                return HTMLResponse(f"<!doctype html><meta charset=utf-8><body style='font:16px system-ui;padding:40px'>"
+                                    f"<h2>Not ready yet</h2><p>{msg}</p><p>This page can be refreshed.</p>", status_code=409)
+            return JSONResponse({"error": msg}, status_code=409)
+        res = rep.cached_package(store)
+        if fmt == "pdf":
+            path = Path(res["dir"]) / f"{slug}_assessment_report.pdf"
+            if not path.exists():
+                return HTMLResponse(f"<!doctype html><meta charset=utf-8><body style='font:16px system-ui;padding:40px'>"
+                                    f"<h2>PDF not available</h2><p>{rep.PDF_MISSING}</p>", status_code=501)
+            return Response(path.read_bytes(), media_type="application/pdf",
+                            headers={"Content-Disposition": f'attachment; filename="{slug}_assessment_report.pdf"'})
+        path = Path(res["dir"]) / {"html": res["files"][0], "docx": res["files"][1], "zip": res["files"][4]}[fmt]
+        body = path.read_bytes()
         if fmt == "html":
-            return HTMLResponse(rep.html_report(store, rescan=rescan, client=client))
-        if fmt == "docx":
-            body = rep.docx_bytes(store, rescan=rescan, client=client)
-            mt = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        elif fmt == "zip":
-            body, mt = rep.package(store, rescan=rescan, client=client)["zip"], "application/zip"
-        else:
-            raise HTTPException(status_code=404, detail="Use html, docx or zip.")
-    name = f"{slug}_holistic_review.{fmt}" if fmt != "zip" else f"{slug}_holistic_review_package.zip"
+            return HTMLResponse(body.decode())
+        mt = "application/zip" if fmt == "zip" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    name = f"{slug}_assessment_report.{fmt}" if fmt != "zip" else f"{slug}_assessment_report_package.zip"
     return Response(body, media_type=mt, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/api/programs/{slug}/report-settings")
+def api_report_settings(slug: str):
+    from core.report.settings import FIELDS, get
+    with _open_program(slug) as store:
+        return {"fields": [{"key": k, "label": l} for k, l in FIELDS], "values": get(store)}
+
+
+@app.post("/api/programs/{slug}/report-settings")
+def api_report_settings_save(slug: str, payload: dict = Body(...)):
+    from core.report.settings import save
+    with _open_program(slug) as store:
+        return {"ok": True, "values": save(store, payload or {})}
 
 
 @app.post("/api/programs/{slug}/ui/review")
@@ -831,6 +881,16 @@ def api_screen(delay: float = 0.0, notify: bool = False, display: str | None = N
             pass
     return Response(content=png, media_type="image/png",
                     headers={"Cache-Control": "no-store", "X-CodeSnap-Display": str(shown)})
+
+
+@app.post("/api/session/kind")
+def api_session_kind(kind: str = "code"):
+    if kind not in ("code", "screen"):
+        return JSONResponse({"error": "kind must be code or screen"}, status_code=400)
+    d = PROJECT / "captures"
+    d.mkdir(exist_ok=True)
+    (d / ".capture_kind").write_text(kind)
+    return {"ok": True, "kind": kind, "running": _session.running()}
 
 
 @app.get("/api/displays")
