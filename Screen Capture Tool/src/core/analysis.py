@@ -333,9 +333,11 @@ def extract_structured(client, path: Path) -> dict:
     compiler checks; corrections is an advisory second signal for the report.
     """
     b64 = base64.standard_b64encode(_robust.read_bytes(path)).decode()
+    temp = _os.environ.get("CODESNAP_EXTRACT_TEMPERATURE")   # A/B switch for the fidelity evals; unset = API default
     msg = client.messages.create(
         model=EXTRACT_MODEL,
         max_tokens=4096,
+        **({"temperature": float(temp)} if temp else {}),
         system=EXTRACT_JSON_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": _media_type(path), "data": b64}},
@@ -343,7 +345,11 @@ def extract_structured(client, path: Path) -> dict:
         ]}],
     )
     text = "".join(getattr(b, "text", "") for b in msg.content).strip()
-    return _normalize_extract(text)
+    out = _normalize_extract(text)
+    if _os.environ.get("CODESNAP_COLUMN_FIX", "1") != "0":
+        from core.colfix import respace
+        out["raw"], out["respaced_lines"] = respace(path, out["raw"])
+    return out
 
 
 def extract_legacy(client, path: Path) -> str:
