@@ -13,11 +13,13 @@ PROJECT = HERE.parent.parent
 class SessionManager:
     def __init__(self):
         self._proc = None
+        self._pending = None
 
     def running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
-    def start(self, single: bool = False, idle_stop=None, region=None, project_mode=False, program=None, capture_kind="code") -> bool:
+    def start(self, single: bool = False, idle_stop=None, region=None, project_mode=False, program=None, capture_kind="code",
+              display=None) -> bool:
         if self.running():
             return False
         from core import status
@@ -40,9 +42,20 @@ class SessionManager:
             argv += ["--program", program]
         if capture_kind and capture_kind != "code":
             argv += ["--capture-kind", capture_kind]
+        if display not in (None, "", "auto"):
+            argv += ["--display", str(display)]
         if single:
             argv.append("--single")   # backup: single agent instead of the default team
         self._proc = subprocess.Popen(argv, cwd=str(PROJECT))
+        return True
+
+    def process_pending(self, program: str) -> bool:
+        """Analyse a program's saved-but-unanalysed captures in a background worker (no hotkeys, exits when done)."""
+        if self._pending is not None and self._pending.poll() is None:
+            return False
+        base = [sys.executable, "--capture"] if getattr(sys, "frozen", False) else \
+            [sys.executable, str(PROJECT / "src" / "main.py"), "--capture"]
+        self._pending = subprocess.Popen(base + ["--program", program, "--process-pending"], cwd=str(PROJECT))
         return True
 
     def stop(self) -> bool:

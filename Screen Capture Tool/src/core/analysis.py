@@ -426,6 +426,7 @@ def _sim(x: str, y: str) -> float:
     mx, my = _SEQNO.match(x), _SEQNO.match(y)
     if mx and my and mx.group(1) != my.group(1):
         return 0.0
+    x, y = x.replace("[CUT OFF]", ""), y.replace("[CUT OFF]", "")
     return _difflib.SequenceMatcher(None, x.strip(), y.strip()).ratio()
 
 
@@ -692,7 +693,20 @@ def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8
             sims = [_sim(x, y) for x, y in zip(tail, window)]
             # every line must match (OCR noise allowed), not just the average
             if sims and sum(sims) / len(sims) >= thresh and min(sims) >= 0.7:
-                return merged + b[o + k:]
+                # a line cut off at the bottom of one screen is usually whole on the next — keep the whole copy
+                tail = [w if "[CUT OFF]" in t and "[CUT OFF]" not in w else t for t, w in zip(tail, window)]
+                return merged[:-k] + tail + b[o + k:]
+    return None
+
+
+def _prepend(merged: list, b: list, min_overlap: int = 2) -> "list | None":
+    """b is an earlier part of the file when its last lines are exactly where merged begins."""
+    for k in range(min(len(b), len(merged), 60), min_overlap - 1, -1):
+        head, tail = merged[:k], b[-k:]
+        if k < 4 and sum(len(_re.sub(r"\W", "", x)) for x in head) < 12:
+            continue
+        if min(_sim(x, y) for x, y in zip(tail, head)) >= 0.85:
+            return b[:-k] + merged
     return None
 
 
@@ -714,6 +728,8 @@ def stitch_parts(parts: list) -> str:
         if _mostly_contained(lines, merged):
             continue  # a re-capture of content we already have — don't duplicate it
         stitched = _stitch_two(merged, lines)
+        if stitched is None:
+            stitched = _prepend(merged, lines)   # a screenshot added later can show an earlier part of the file
         merged = stitched if stitched is not None else merged + [""] + lines
     return "\n".join(merged)
 

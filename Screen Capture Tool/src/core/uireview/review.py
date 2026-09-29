@@ -20,6 +20,7 @@ TITLES = {
     "USE-CONFIRM": "No confirmation for a consequential action", "USE-BUTTON": "Unclear button label",
     "USE-CODES": "Cryptic codes on screen", "UIB-CRASH": "System failure visible to users",
     "UIB-ERROR": "Error shown to users", "UIB-OBSERVED": "Observed usability problem",
+    "ACC-COLOR": "Meaning shown by colour only", "ACC-TEXTSIZE": "Text too small", "UIB-OBSOLETE": "Built for an obsolete browser",
     "UIS-GET": "Sensitive data sent in the URL", "UIS-CSRF": "No cross-site request forgery protection",
     "UIS-BLANK": "Reverse tabnabbing", "UIS-MIXED": "Mixed / plain-HTTP content", "UIS-HIDDEN": "Trusted value in hidden field",
     "UIS-PWFIELD": "Password shown as typed", "UIS-PII": "Student data shown in full",
@@ -104,6 +105,8 @@ def run_ui_review(store, *, site_url=None, fetcher=None, max_pages=10, today=Non
 
     def store_f(f, evidence, source, target_id=None):
         title = TITLES.get(f["rule"], f["rule"])
+        if f.get("title"):
+            title = f"{title} — {f['title']}"
         where = evidence.get("file") or ""
         store.add_finding(f["category"], f["severity"], f"{title}: {where}{':' + str(evidence['line']) if evidence.get('line') else ''}",
                           detail=_sentence(f["detail"]), source=source,

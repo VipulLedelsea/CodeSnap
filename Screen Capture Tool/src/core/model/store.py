@@ -217,6 +217,104 @@ class ProgramStore:
             db.execute("UPDATE entity SET key = ?, name = ?, updated = ? WHERE key = ?",
                        (new_key, new_name, _now(), old_key))
 
+    # --- captures: every start/stop of a capture is its own file, saved before analysis ---
+    @property
+    def text_cache_dir(self) -> Path:
+        """Per-screenshot transcriptions, so re-analysing a file with extra screenshots only pays for the new ones."""
+        d = self.evidence_dir / ".text"
+        d.mkdir(exist_ok=True)
+        return d
+
+    def unique_name(self, name: str, exclude_id: int | None = None) -> str:
+        name = (name or "capture").strip() or "capture"
+        taken = {a["name"] for a in self.artifacts() if a["id"] != exclude_id}
+        if name not in taken:
+            return name
+        stem, dot, ext = name.rpartition(".") if "." in name else (name, "", "")
+        n = 2
+        while True:
+            cand = f"{stem} ({n}).{ext}" if dot else f"{name} ({n})"
+            if cand not in taken:
+                return cand
+            n += 1
+
+    def pending_captures(self) -> dict:
+        return {int(k): v for k, v in (self.get_meta("pending_captures", {}) or {}).items()}
+
+    def _set_pending(self, artifact_id: int, info: dict | None):
+        with self._lock:
+            pend = self.get_meta("pending_captures", {}) or {}
+            if info is None:
+                pend.pop(str(artifact_id), None)
+            else:
+                pend[str(artifact_id)] = info
+            self.set_meta("pending_captures", pend)
+
+    def add_pending_capture(self, images, kind: str = "code", session_id: int | None = None,
+                            recapture_of: str | None = None, keep_frames_of: int | None = None) -> int:
+        """Save a finished capture as a file straight away (status 'captured'), before any analysis runs, so a
+        stopped or restarted capture worker can never lose it. Analysis later fills it in (complete_capture)."""
+        evidence_ids = [e["id"] for e in self.artifact_evidence(keep_frames_of)] if keep_frames_of else []
+        evidence_ids += [i for i in (self.add_evidence(Path(p), session_id=session_id) for p in images)
+                         if i not in evidence_ids]
+        stamp = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
+        name = self.unique_name(f"Capture {stamp}" + (" (screen)" if kind == "screen" else ""))
+        artifact_id = self.add_artifact(name, "ui_screen" if kind == "screen" else "code", "", "",
+                                        evidence_ids=evidence_ids, status="captured")
+        self._set_pending(artifact_id, {"kind": kind, "provisional_name": name, "recapture_of": recapture_of,
+                                        "added_to": keep_frames_of,
+                                        "created": _now(), "attempts": 0, "error": None, "claim": None})
+        return artifact_id
+
+    def update_pending(self, artifact_id: int, **changes):
+        info = self.pending_captures().get(artifact_id)
+        if info is not None:
+            info.update(changes)
+            self._set_pending(artifact_id, info)
+
+    def clear_pending(self, artifact_id: int):
+        self._set_pending(artifact_id, None)
+
+    def claim_pending(self, artifact_id: int, owner: str, stale_after: float = 900.0) -> bool:
+        """One analysis per capture, even with two workers running: a claim older than stale_after is ignored."""
+        import time as _time
+        with self._lock:
+            info = self.pending_captures().get(artifact_id)
+            if info is None:
+                return False
+            claim = info.get("claim") or {}
+            if claim and claim.get("owner") != owner and _time.time() - float(claim.get("at", 0)) < stale_after:
+                return False
+            info["claim"] = {"owner": owner, "at": _time.time()}
+            info["attempts"] = int(info.get("attempts") or 0) + 1
+            self._set_pending(artifact_id, info)
+            return True
+
+    def fill_artifact(self, artifact_id: int, *, artifact_type: str, language: str, transcription: str,
+                      status: str = "transcribed"):
+        check_kind(artifact_type, ARTIFACT_TYPES, "artifact type")
+        check_kind(status, ARTIFACT_STATUSES, "artifact status")
+        art = self.artifact(artifact_id)
+        source = self.sources_dir / f"{safe_filename(art['name'])}.v{art['version']}"
+        source.write_text(transcription or "")
+        with self.transaction() as db:
+            db.execute("UPDATE artifact SET artifact_type = ?, language = ?, transcription = ?, source_path = ?, "
+                       "status = ?, updated = ? WHERE id = ?",
+                       (artifact_type, language or "", transcription or "", source.name, status, _now(), artifact_id))
+
+    def repoint_runs(self, old_id: int, new_id: int):
+        with self.transaction() as db:
+            db.execute("UPDATE run SET artifact_id = ? WHERE artifact_id = ?", (new_id, old_id))
+
+    def delete_artifact(self, artifact_id: int):
+        """Remove one artifact row (its evidence files stay — other captures may share them)."""
+        self.clear_artifact(artifact_id)
+        with self.transaction() as db:
+            db.execute("DELETE FROM artifact_evidence WHERE artifact_id = ?", (artifact_id,))
+            db.execute("DELETE FROM evidence_link WHERE target_type = 'artifact' AND target_id = ?", (artifact_id,))
+            db.execute("DELETE FROM artifact WHERE id = ?", (artifact_id,))
+        self.clear_pending(artifact_id)
+
     def export_copybooks(self) -> Path:
         target = self.path / "copybooks"
         target.mkdir(exist_ok=True)
@@ -263,7 +361,7 @@ class ProgramStore:
                 "UPDATE artifact SET validation_tool = ?, validation_ok = ?, validation_errors = ?, "
                 "status = CASE WHEN status IN ('captured', 'transcribed') THEN 'validated' ELSE status END, "
                 "updated = ? WHERE id = ?",
-                (tool, int(bool(ok)), errors or "", _now(), artifact_id),
+                (tool, None if ok is None else int(bool(ok)), errors or "", _now(), artifact_id),
             )
 
     def upsert_entity(self, kind: str, name: str, *, key: str | None = None, parent_id: int | None = None,

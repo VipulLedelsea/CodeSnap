@@ -48,6 +48,8 @@ def _pii(store, ctx):
         attrs = ent.get("attrs") or {}
         if attrs.get("no_pii") or ((parent or {}).get("attrs") or {}).get("no_pii") or ent["artifact_id"] in no_pii_arts:
             continue
+        if attrs.get("action"):  # a button or link ("Email support") is not a stored data field
+            continue
         hit = pii_class(ent["name"])
         if attrs.get("pii"):
             hit = (str(attrs["pii"]) if isinstance(attrs["pii"], str) else "student data (analyst)", "high")

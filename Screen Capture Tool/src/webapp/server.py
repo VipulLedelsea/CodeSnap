@@ -105,7 +105,8 @@ def api_pending_download(name: str):
 
 @app.post("/api/session/start")
 def api_session_start(single: bool = False, idle_stop: float | None = None, region: str | None = None,
-                      project_mode: bool = False, program: str | None = None, capture_kind: str = "code"):
+                      project_mode: bool = False, program: str | None = None, capture_kind: str = "code",
+                      display: str | None = None):
     if program and not _program_exists(program):
         return JSONResponse({"error": f"Unknown program: {program}"}, status_code=404)
     if capture_kind not in ("code", "screen"):
@@ -118,7 +119,7 @@ def api_session_start(single: bool = False, idle_stop: float | None = None, regi
             return JSONResponse({"error": f"API budget reached for this program (${spent:.2f} of ${limit:.2f}). "
                                           f"Raise the budget to keep capturing."}, status_code=402)
     started = _session.start(single=single, idle_stop=idle_stop, region=region, project_mode=project_mode,
-                             program=program, capture_kind=capture_kind)
+                             program=program, capture_kind=capture_kind, display=display)
     return {"running": _session.running(), "started": started, "single": single,
             "idle_stop": idle_stop, "region": region, "project_mode": project_mode or bool(program),
             "program": program, "capture_kind": capture_kind}
@@ -153,6 +154,9 @@ def _artifact_summary(store, artifact: dict) -> dict:
     out["entities"] = len(store._all("SELECT DISTINCT entity_id FROM entity_source WHERE artifact_id = ?",
                                      (artifact["id"],)))
     out["frames"] = len(store.artifact_evidence(artifact["id"]))
+    pend = store.pending_captures().get(artifact["id"])
+    if pend:
+        out["pending"] = {k: pend.get(k) for k in ("kind", "error", "recapture_of", "attempts")}
     out["cost"] = store.artifact_cost(artifact["id"])
     return out
 
@@ -182,7 +186,99 @@ def api_program(slug: str):
             "usage": store.usage(),
             "usage_by_step": store.usage_by_step()["steps"],
             "artifacts": [_artifact_summary(store, a) for a in store.artifacts()],
+            "recapture_target": store.get_meta("recapture_target"),
+            "waiting": sum(1 for a in store.artifacts() if a["status"] == "captured"),
+            "session_running": _session.running(),
         }
+
+
+@app.post("/api/programs/{slug}/recapture")
+def api_program_recapture(slug: str, payload: dict = Body(...)):
+    with _open_program(slug) as store:
+        art = store.artifact(int((payload or {}).get("artifact_id") or 0))
+        if art is None:
+            raise HTTPException(status_code=404, detail="No such file in this program.")
+        mode = "append" if (payload or {}).get("mode") == "append" else "replace"
+        target = {"name": art["name"], "artifact_id": art["id"], "version": art["version"], "mode": mode}
+        store.set_meta("recapture_target", target)
+        return {"ok": True, "recapture_target": target}
+
+
+@app.delete("/api/programs/{slug}/recapture")
+def api_program_recapture_cancel(slug: str):
+    with _open_program(slug) as store:
+        store.set_meta("recapture_target", None)
+    return {"ok": True}
+
+
+@app.post("/api/programs/{slug}/pending/process")
+def api_program_pending_process(slug: str):
+    with _open_program(slug) as store:
+        waiting = sum(1 for a in store.artifacts() if a["status"] == "captured")
+    if not waiting:
+        return {"ok": True, "waiting": 0}
+    if _session.running():
+        return {"ok": True, "waiting": waiting, "note": "The running capture session is analysing them."}
+    _session.process_pending(slug)
+    return {"ok": True, "waiting": waiting, "note": "Analysing in the background."}
+
+
+@app.post("/api/programs/{slug}/artifacts/{artifact_id}/screenshots")
+def api_program_artifact_screenshots(slug: str, artifact_id: int, payload: dict = Body(...)):
+    """Add screenshots (PNG/JPEG data URLs) to a file; the file is re-read from all its screenshots as a new version."""
+    import base64
+    import tempfile
+    images = [str(x) for x in (payload or {}).get("images") or []][:40]
+    if not images:
+        return JSONResponse({"error": "Choose one or more screenshots."}, status_code=400)
+    tmp = Path(tempfile.mkdtemp())
+    paths = []
+    for i, data in enumerate(images, 1):
+        head, _, body = data.partition(",")
+        if "base64" not in head or not body:
+            return JSONResponse({"error": "Screenshots must be images."}, status_code=400)
+        ext = "jpg" if "jpeg" in head or "jpg" in head else "png"
+        p = tmp / f"{i:03d}.{ext}"
+        p.write_bytes(base64.b64decode(body))
+        paths.append(p)
+    with _open_program(slug) as store:
+        art = store.artifact(artifact_id)
+        if art is None:
+            raise HTTPException(status_code=404, detail="No such file in this program.")
+        info = store.pending_captures().get(artifact_id) or {}
+        kind = "screen" if art["artifact_type"] == "ui_screen" else "code"
+        new_id = store.add_pending_capture(paths, kind=kind, session_id=store.add_session(mode="upload"),
+                                           recapture_of=art["name"], keep_frames_of=artifact_id)
+        frames = len(store.artifact_evidence(new_id))
+    out = api_program_pending_process(slug)
+    return {**out, "artifact_id": new_id, "frames": frames, "added": len(paths)}
+
+
+@app.post("/api/programs/{slug}/artifacts/{artifact_id}/retry")
+def api_program_artifact_retry(slug: str, artifact_id: int):
+    with _open_program(slug) as store:
+        art = store.artifact(artifact_id)
+        if art is None:
+            raise HTTPException(status_code=404, detail="No such file in this program.")
+        if artifact_id not in store.pending_captures():
+            return JSONResponse({"error": "Only a capture that hasn't been analysed can be retried — use Recapture."},
+                                status_code=400)
+        store.update_pending(artifact_id, error=None, claim=None)
+        store.set_status(artifact_id, "captured")
+    return api_program_pending_process(slug)
+
+
+@app.post("/api/programs/{slug}/artifacts/{artifact_id}/version-of")
+def api_program_artifact_version_of(slug: str, artifact_id: int, payload: dict = Body(...)):
+    from core.model import new_version_from
+    with _open_program(slug) as store:
+        src, target = store.artifact(artifact_id), store.artifact(int((payload or {}).get("target_id") or 0))
+        if src is None or target is None or src["id"] == target["id"]:
+            raise HTTPException(status_code=404, detail="Pick another file in this program.")
+        if src["status"] == "captured":
+            return JSONResponse({"error": "Wait until this capture has been analysed."}, status_code=409)
+        new_id = new_version_from(store, None, artifact_id, target["name"])
+        return {"ok": True, "artifact": _artifact_summary(store, store.artifact(new_id))}
 
 
 @app.get("/api/programs/{slug}/artifacts/{artifact_id}")
@@ -715,13 +811,15 @@ def api_report_docx(name: str):
 
 
 @app.get("/api/screen.png")
-def api_screen(delay: float = 0.0, notify: bool = False):
+def api_screen(delay: float = 0.0, notify: bool = False, display: str | None = None):
     """One full screenshot, for the 'pick code area' picker. Optional delay lets the
     user bring their code to the front first; notify pings the desktop when done."""
     import time as _t
     if delay > 0:
         _t.sleep(min(delay, 10.0))
     try:
+        from core.capture import pick_display
+        shown = pick_display(display)
         png = capture_full_png()
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"error": str(exc)}, status_code=500)
@@ -731,7 +829,17 @@ def api_screen(delay: float = 0.0, notify: bool = False):
             _notify("CodeSnap", "Screenshot taken — switch back to draw the code box.")
         except Exception:  # noqa: BLE001 - notification is optional
             pass
-    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "no-store", "X-CodeSnap-Display": str(shown)})
+
+
+@app.get("/api/displays")
+def api_displays():
+    try:
+        from core.capture import displays
+        return {"displays": displays()}
+    except Exception as exc:  # noqa: BLE001
+        return {"displays": [], "error": str(exc)}
 
 
 @app.post("/api/session/stop")

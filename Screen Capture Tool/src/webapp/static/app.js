@@ -431,6 +431,7 @@ $("startBtn").addEventListener("click", async () => {
       params.set("program", _program);
     }
     if (_view === "review" && _captureKind !== "code") params.set("capture_kind", _captureKind);
+    if (_display || (pickedRegion && _shotDisplay)) params.set("display", _display || _shotDisplay);
     const qs = params.toString();
     await fetch("/api/session/start" + (qs ? "?" + qs : ""), { method: "POST" });
     const manual = idle === 0;
@@ -468,8 +469,9 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
     msg.style.display = "block";
     if (delay) { for (let s = delay; s > 0; s--) { msg.textContent = "Bring your code to the front… " + s; await new Promise(r => setTimeout(r, 1000)); } }
     try {
-      const res = await fetch("/api/screen.png?notify=1&t=" + Date.now());
+      const res = await fetch("/api/screen.png?notify=1" + (_display ? "&display=" + _display : "") + "&t=" + Date.now());
       if (!res.ok) throw new Error("screenshot failed");
+      _shotDisplay = res.headers.get("X-CodeSnap-Display") || "";
       const blob = await res.blob();
       shot.src = URL.createObjectURL(blob);
       shot.onload = () => { shot.style.opacity = "1"; msg.style.display = "none"; };
@@ -813,11 +815,12 @@ async function loadHealth() {
   const budget = b.limit ? `API budget: <b>$${b.spent.toFixed(2)}</b> of $${b.limit.toFixed(2)}${b.remaining <= 0 ? " — <b>reached</b>" : ""}`
     : `API spend: <b>$${(b.spent || 0).toFixed(2)}</b> · no budget set`;
   const rows = [
+    ...(h.waiting || []).map(f => ["waiting", f.name, f.reason]),
     ...h.failed.map(f => ["failed", f.name, f.reason]),
     ...h.partial.map(f => ["partial", f.name, f.reasons.join("; ")]),
     ...h.invalid.map(f => ["invalid", f.name, `${f.tool}: ${f.error}`]),
   ];
-  const label = { failed: "not analysed", partial: "partial capture", invalid: "syntax check failed" };
+  const label = { waiting: "waiting", failed: "not analysed", partial: "partial capture", invalid: "syntax check failed" };
   const api = h.api.failures ? ` · ${h.api.failures} API error(s)${h.api.fallbacks ? `, ${h.api.fallbacks} recovered by local parser` : ""}` : "";
   box.innerHTML = `<div class="ph-line ${_attr(h.status)}"><b>Pipeline:</b> ${rows.length ? new Set(rows.map(r => r[1])).size + " file(s) need attention" : "all " + h.files + " files analysed"}${api} · ${budget}
       <button class="btn-link" id="progBudgetEdit" type="button">set budget</button></div>` +
@@ -851,15 +854,27 @@ async function loadProgram() {
   $("progCost").innerHTML = steps.length ? "Cost by step: " + steps.map(x =>
     `${escapeHtml(x.step)} <b>$${(x.cost || 0).toFixed(3)}</b> <small>(${x.calls} calls)</small>`).join(" · ") +
     ` <small>— estimated from list prices</small>` : "";
+  const STATUS_LABEL = { captured: "waiting to analyse", failed: "analysis failed" };
   $("progFiles").innerHTML = d.artifacts.length ? d.artifacts.map(a => `
-    <details class="prog-file" data-id="${a.id}">
+    <details class="prog-file" data-id="${a.id}" data-name="${_attr(a.name)}">
       <summary>
         <span class="pf-name">${escapeHtml(a.name)}</span>
-        <span class="pf-meta">${escapeHtml(a.language || a.artifact_type)} · v${a.version} · ${a.entities} entities · ${a.frames} frames · $${(a.cost || 0).toFixed(3)}</span>
-        <span class="pf-status ${_attr(a.status)}">${escapeHtml(a.status)}</span>
+        <span class="pf-meta">${escapeHtml(a.language || a.artifact_type)} · v${a.version} · ${a.entities} entities · ${a.frames} frames · $${(a.cost || 0).toFixed(3)}${a.pending && a.pending.recapture_of ? " · recapture of " + escapeHtml(a.pending.recapture_of) : ""}</span>
+        <span class="pf-status ${_attr(a.status)}">${escapeHtml(STATUS_LABEL[a.status] || a.status)}</span>
+        <span class="pf-acts">
+          <button class="btn-link" data-act="rename" type="button">Rename</button>
+          ${a.status === "captured" ? "" : `<button class="btn-link" data-act="recapture" type="button">Recapture</button>
+          <button class="btn-link" data-act="add" type="button">Add screenshots</button>`}
+          ${a.status === "failed" && a.pending ? `<button class="btn-link" data-act="retry" type="button">Retry</button>` : ""}
+        </span>
+        ${a.status === "failed" && a.pending && a.pending.error ? `<span class="pf-err">${escapeHtml(a.pending.error)}</span>` : ""}
       </summary>
       <div class="pf-detail"></div>
-    </details>`).join("") : `<p class="project-hint" style="margin:0">No files yet — start a capture.</p>`;
+    </details>`).join("") : `<p class="project-hint" style="margin:0">No files yet — start a capture. Each start/stop becomes one file.</p>`;
+  renderCaptureBar(d);
+  document.querySelectorAll("#progFiles .pf-acts [data-act]").forEach(b => b.addEventListener("click", ev => {
+    ev.preventDefault(); ev.stopPropagation(); fileAction(b.closest(".prog-file"), b.dataset.act);
+  }));
   loadHealth();
   document.querySelectorAll("#progFiles .prog-file").forEach(el =>
     el.addEventListener("toggle", () => { if (el.open) loadArtifact(el); }));
@@ -884,6 +899,84 @@ async function loadProgram() {
   $("progReportDocx").href = `${rb}.docx`;
   $("progReportZip").href = `${rb}.zip`;
 }
+let _display = "", _shotDisplay = "";
+async function loadDisplays() {
+  const sel = $("displaySelect");
+  let list = [];
+  try { list = (await _json("/api/displays")).displays || []; } catch (e) {}
+  if (list.length < 2) { sel.style.display = "none"; _display = ""; return; }
+  sel.innerHTML = `<option value="">Screen under the mouse</option>` + list.map(d =>
+    `<option value="${d.index}">Screen ${d.index}${d.primary ? " (main)" : ""} — ${d.pixels[0]}×${d.pixels[1]}</option>`).join("");
+  sel.style.display = "";
+  sel.value = _display;
+  sel.onchange = () => { _display = sel.value; if (pickedRegion) $("clearAreaBtn").click(); toast(_display ? `Capturing screen ${_display}. Pick the code area again if you had one.` : "Capturing the screen under the mouse."); };
+}
+loadDisplays();
+function _pbase() { return `/api/programs/${encodeURIComponent(_program)}`; }
+function renderCaptureBar(d) {
+  const bar = $("progCapBar");
+  const t = d.recapture_target;
+  bar.innerHTML = (t ? `<div class="cb recap">${t.mode === "append"
+      ? `Next capture adds to <b>${escapeHtml(t.name)}</b>: its screenshots are read together with the new ones as v${(t.version || 1) + 1}.`
+      : `Next capture replaces <b>${escapeHtml(t.name)}</b> as v${(t.version || 1) + 1} (v${t.version || 1} is kept as history).`} <button class="btn-link" data-cb="cancel" type="button">Cancel</button></div>` : "")
+    + (d.waiting ? `<div class="cb wait">${d.waiting} capture(s) saved and waiting to be analysed${d.session_running ? " — the capture session is working through them." : "."} ${d.session_running ? "" : `<button class="btn-link" data-cb="process" type="button">Analyse now</button>`}</div>` : "");
+  bar.querySelectorAll("[data-cb]").forEach(b => b.addEventListener("click", async () => {
+    try {
+      if (b.dataset.cb === "cancel") { await _json(`${_pbase()}/recapture`, { method: "DELETE" }); toast("Recapture cancelled."); }
+      else { const r = await _json(`${_pbase()}/pending/process`, { method: "POST" }); toast(r.note || "Nothing waiting."); }
+    } catch (e) { toast(e.message); }
+    loadProgram();
+  }));
+  if (d.waiting && !_capPoll) _capPoll = setTimeout(function tick() {
+    if (document.querySelector("#progFiles .fix-ask, #progFiles details[open]")) { _capPoll = setTimeout(tick, 8000); return; }
+    _capPoll = null; loadProgram();
+  }, 8000);
+}
+let _capPoll = null;
+function pickImages() {
+  return new Promise(resolve => {
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = "image/png,image/jpeg"; inp.multiple = true;
+    inp.onchange = async () => {
+      const read = f => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); });
+      const files = [...inp.files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      resolve(await Promise.all(files.map(read)));
+    };
+    inp.click();
+  });
+}
+async function fileAction(el, act) {
+  const id = el.dataset.id, name = el.dataset.name;
+  try {
+    if (act === "rename") {
+      el.open = true;
+      const v = await inlineAsk(el, [{ name: "name", label: "File name", value: name }]);
+      if (!v || !v.name.trim() || v.name.trim() === name) return;
+      await _json(`${_pbase()}/artifacts/${id}/rename`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: v.name.trim() }) });
+      toast("Renamed.");
+    } else if (act === "recapture") {
+      await _json(`${_pbase()}/recapture`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_id: Number(id) }) });
+      toast(`Next capture becomes a new version of ${name}. Start a capture when ready.`);
+    } else if (act === "add") {
+      el.open = true;
+      const v = await inlineAsk(el, [{ name: "how", label: "Add screenshots by", options: ["capturing more of it", "choosing image files"] }]);
+      if (!v) return;
+      if (v.how.startsWith("capturing")) {
+        await _json(`${_pbase()}/recapture`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_id: Number(id), mode: "append" }) });
+        toast(`Next capture adds to ${name} — capture the part that was missing.`);
+      } else {
+        const files = await pickImages();
+        if (!files.length) return;
+        const r = await _json(`${_pbase()}/artifacts/${id}/screenshots`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ images: files }) });
+        toast(`Added ${r.added} screenshot(s); re-reading ${name} from all ${r.frames}. ${r.note || ""}`);
+      }
+    } else if (act === "retry") {
+      const r = await _json(`${_pbase()}/artifacts/${id}/retry`, { method: "POST" });
+      toast(r.note || "Queued.");
+    }
+  } catch (e) { toast(e.message); }
+  loadProgram();
+}
 async function loadArtifact(el) {
   const box = el.querySelector(".pf-detail");
   box.innerHTML = `<span class="project-hint">Loading…</span>`;
@@ -901,11 +994,22 @@ async function loadArtifact(el) {
     ${errs}
     ${profileHtml(d.profile)}
     <div class="pf-entities">${d.entities.map(e => `<div>${escapeHtml(e.name)} <i>${escapeHtml(e.kind)}${e.line_start ? " · L" + e.line_start : ""}</i></div>`).join("") || "<div><i>No entities extracted.</i></div>"}</div>
+    <div class="pf-version">Same file captured earlier? Make this a new version of
+      <select class="pf-vof"><option value="">choose a file…</option>${[...document.querySelectorAll("#progFiles .prog-file")].filter(x => x.dataset.id !== el.dataset.id).map(x => `<option value="${_attr(x.dataset.id)}">${escapeHtml(x.dataset.name)}</option>`).join("")}</select>
+      <button class="btn-link pf-vof-go" type="button">Apply</button></div>
     <div class="pf-frames">${d.evidence.map(ev => `<a href="${base}/evidence/${ev.id}" target="_blank" rel="noopener"><img src="${base}/evidence/${ev.id}" alt="frame ${ev.ord + 1}" loading="lazy"></a>`).join("")}</div>`;
   box.querySelector(".pf-type-select").addEventListener("change", async (ev) => {
     try {
       const r = await _json(`${base}/artifacts/${el.dataset.id}/type`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_type: ev.target.value }) });
       toast(`Re-read as ${TYPE_LABELS[ev.target.value] || ev.target.value}: ${r.entities || 0} entities.`); loadProgram();
+    } catch (e) { toast(e.message); }
+  });
+  box.querySelector(".pf-vof-go").addEventListener("click", async () => {
+    const target = box.querySelector(".pf-vof").value;
+    if (!target) { toast("Choose the file this capture is a new version of."); return; }
+    try {
+      const r = await _json(`${base}/artifacts/${el.dataset.id}/version-of`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target_id: Number(target) }) });
+      toast(`Saved as ${r.artifact.name} v${r.artifact.version}.`); loadProgram();
     } catch (e) { toast(e.message); }
   });
   box.querySelector(".pf-save").addEventListener("click", async () => {

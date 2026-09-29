@@ -346,7 +346,7 @@ _PII = [
     (r"^(SSN|SOC_?SEC\w*|SOCIAL_?SECURITY\w*|SSNO)$", "social security number", "critical"),
     (r"^(DOB|BIRTH_?(DATE|DT)|DATE_?OF_?BIRTH|BIRTHDAY)$", "date of birth", "high"),
     (r"^(MARSS\w*|SSID|STATE_?STUDENT_?ID|STUDENT_?(ID|NUM|NBR|NO|NUMBER|KEY)|STU_?(ID|NUM|NBR))$", "student identifier", "high"),
-    (r"^(STUDENT_?NAME|STU_?NAME|PUPIL\w*|FIRST_?NAME|LAST_?NAME|MIDDLE_?NAME)$", "student / person name", "medium"),
+    (r"^(STUDENT_?NAME|STU_?NAME|PUPIL_?(NAME|FIRST\w*|LAST\w*)|FIRST_?NAME|LAST_?NAME|MIDDLE_?NAME)$", "student / person name", "medium"),
     (r"^(GUARDIAN\w*|PARENT_?NAME\w*)$", "parent / guardian", "medium"),
     (r"^(HOME_?ADDR\w*|STREET\w*|ADDRESS\d?|ADDR\d?|PHONE\w*|EMAIL\w*)$", "contact details", "medium"),
     (r"^(FREE_?REDUCED\w*|FRL|FRPL|LUNCH_?STATUS|ECON\w*_?DISADV\w*)$", "free/reduced lunch (economic status)", "high"),

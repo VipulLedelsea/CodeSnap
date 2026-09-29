@@ -56,6 +56,7 @@
           <div class="prog-cost" id="progCost"></div>
           <div class="prog-health" id="progHealth"></div>
           <div class="prog-section-label">Files</div>
+          <div class="prog-capbar" id="progCapBar"></div>
           <div class="prog-files" id="progFiles"></div>
           <div class="prog-section-label" id="progMissingLabel">Referenced but not captured</div>
           <div class="prog-missing" id="progMissing"></div>
@@ -160,6 +161,7 @@
           <span class="tolerance-hint">how long a still screen waits before wrapping up</span>
         </div>
         <div class="region-row">
+          <select id="displaySelect" title="Which screen to capture" style="display:none"></select>
           <button class="btn-secondary" id="pickAreaBtn" type="button">Pick code area</button>
           <span class="region-status" id="regionStatus">Capturing the full screen</span>
           <button class="btn-link" id="clearAreaBtn" type="button" style="display:none">use full screen</button>

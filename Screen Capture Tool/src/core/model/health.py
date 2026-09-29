@@ -15,8 +15,15 @@ def pipeline_health(store) -> dict:
     for r in runs:
         if r["artifact_id"] and not r["ok"] and r["error"]:
             last_error[r["artifact_id"]] = r["error"]
-    failed, partial, invalid, unverified = [], [], [], []
+    failed, partial, invalid, unverified, waiting = [], [], [], [], []
+    pending = store.pending_captures()
     for a in arts:
+        if a["status"] == "captured":
+            waiting.append({"id": a["id"], "name": a["name"], "reason": "saved; analysis not finished yet"})
+            continue
+        if a["status"] == "failed" and (pending.get(a["id"]) or {}).get("error"):
+            failed.append({"id": a["id"], "name": a["name"], "reason": _first_line(pending[a["id"]]["error"])})
+            continue
         if a["status"] == "failed":
             failed.append({"id": a["id"], "name": a["name"], "reason": _first_line(last_error.get(a["id"])) or
                            "could not be structured (no parser matched and the API step failed)"})
@@ -48,10 +55,11 @@ def pipeline_health(store) -> dict:
         since = oks[-2] if len(oks) >= 2 else 0
         local_errors += [{"step": step, "error": _first_line(r["error"], 220)} for r in runs
                          if r["step"] == step and not r["ok"] and r["id"] > since]
-    issues = len(failed) + len(partial) + len(invalid) + len(local_errors)
+    issues = len(failed) + len(partial) + len(invalid) + len(local_errors) + len(waiting)
     return {
         "status": "ok" if not issues else ("attention" if not failed else "errors"),
         "files": len(arts), "analysis_errors": local_errors[-10:], "failed": failed, "partial": partial, "invalid": invalid, "unverified": unverified,
+        "waiting": waiting,
         "api": {"calls": len(api), "failures": len(api_fail), "cost": spent,
                 "recent_errors": [{"step": r["step"], "error": _first_line(r["error"])} for r in api_fail[-5:]],
                 "fallbacks": fallbacks},

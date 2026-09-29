@@ -32,6 +32,8 @@ def artifact_name(report: dict, fallback: str = "capture") -> str:
 
 def validation_from_errors(errors: str) -> tuple:
     text = (errors or "").strip()
+    if text.startswith("Not verified"):
+        return None, text  # no compiler for this language: unverified, not failed
     return text in ("", "None"), "" if text in ("", "None") else text
 
 
@@ -210,6 +212,59 @@ def ingest_capture(store, client, images, report: dict, *, session_id: int | Non
                 ingest_artifact(store, client, artifact_id)
             except Exception:
                 pass
+    return artifact_id
+
+
+def _finish(store, client, artifact_id, report, is_code):
+    if is_code:
+        ok, errors = validation_from_errors(report.get("errors", ""))
+        store.set_validation(artifact_id, report.get("validation_tool", "compiler"), ok, errors)
+        try:
+            ingest_artifact(store, client, artifact_id)
+        except Exception:
+            pass
+
+
+def new_version_from(store, client, source_id: int, target_name: str, report: dict | None = None) -> int:
+    """Make capture `source_id` the next version of file `target_name` (the old version is kept as history)."""
+    src = store.artifact(source_id)
+    ev = [e["id"] for e in store.artifact_evidence(source_id)]
+    report = report or {"code": src["transcription"], "language": src["language"], "artifact_type": src["artifact_type"],
+                        "errors": src["validation_errors"] or ("None" if src["validation_ok"] else ""),
+                        "validation_tool": src["validation_tool"] or "compiler"}
+    code = report.get("code") or ""
+    is_code = bool(code.strip())
+    new_id = store.add_artifact(target_name, artifact_type_for(report, is_code), report.get("language", ""), code,
+                                evidence_ids=ev)
+    store.repoint_runs(source_id, new_id)
+    store.delete_artifact(source_id)
+    _finish(store, client, new_id, report, is_code)
+    return new_id
+
+
+def complete_capture(store, client, artifact_id: int, report: dict | None) -> int:
+    """Fill a saved capture (see ProgramStore.add_pending_capture) with its analysis. Keeps the name the user gave it;
+    otherwise names it from the content without ever replacing another file. A capture started as a recapture becomes
+    the next version of that file."""
+    info = store.pending_captures().get(artifact_id) or {}
+    art = store.artifact(artifact_id)
+    if art is None:
+        return artifact_id
+    code = (report or {}).get("code") or ""
+    is_code = bool((report or {}).get("is_code", True)) and bool(code.strip())
+    if not report or not code.strip():
+        store.update_pending(artifact_id, error="No text could be read from this capture.", claim=None)
+        store.set_status(artifact_id, "failed")
+        return artifact_id
+    target = info.get("recapture_of")
+    if target and (store.current_artifact(target) or {}).get("id") not in (None, artifact_id):
+        return new_version_from(store, client, artifact_id, target, report)
+    if art["name"] == info.get("provisional_name"):
+        store.rename_artifact(artifact_id, store.unique_name(artifact_name(report), exclude_id=artifact_id))
+    store.fill_artifact(artifact_id, artifact_type=artifact_type_for(report, is_code),
+                        language=report.get("language", ""), transcription=code)
+    store.clear_pending(artifact_id)
+    _finish(store, client, artifact_id, report, is_code)
     return artifact_id
 
 

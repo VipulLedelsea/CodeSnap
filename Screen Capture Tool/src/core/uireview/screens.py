@@ -6,6 +6,29 @@ ABEND = re.compile(r"\b(DFH[A-Z]{2}\d{4}|ABEND|ASRA|AEI\d|SQLCODE\s*-?\d+|except
                    r"object reference not set|null pointer|500 internal|server error)\b", re.I)
 
 
+_OBSERVED = [
+    (r"password.*(plain|unmask|not mask|visible|shown|pre-?filled)|(plain|unmasked).*password", "UIS-PWFIELD",
+     "ui_security", "high", {"cwe": "CWE-549"}),
+    (r"contrast|faint|barely (read|visible)|hard to read|\bdim\b", "ACC-CONTRAST", "accessibility", "medium",
+     {"wcag": "1.4.3 (AA)"}),
+    (r"(relies|relying|only) on colou?r|colou?r (alone|only)|colou?r to (show|convey|indicate)", "ACC-COLOR",
+     "accessibility", "medium", {"wcag": "1.4.1 (A)"}),
+    (r"\btiny\b|very small|small (font|text)", "ACC-TEXTSIZE", "accessibility", "low", {"wcag": "1.4.4 (AA)"}),
+    (r"click here|vague link|link text", "ACC-LINK", "accessibility", "low", {"wcag": "2.4.4 (A)"}),
+    (r"broken image|alt text|no alt\b|image.*(missing|placeholder|broken)|(logo|icon).*(broken|missing)", "ACC-ALT",
+     "accessibility", "medium", {"wcag": "1.1.1 (A)"}),
+    (r"no (visible )?label|unlabell?ed|label.*missing", "ACC-LABEL", "accessibility", "medium", {"wcag": "1.3.1 / 3.3.2 (A)"}),
+    (r"\bIE ?[5-9]\b|internet explorer|outdated browser|obsolete browser", "UIB-OBSOLETE", "usability", "medium", {}),
+]
+_OBSERVED_RX = [(re.compile(rx, re.I), rule, cat, sev, refs) for rx, rule, cat, sev, refs in _OBSERVED]
+
+
+def classify_observed(issue: str) -> list:
+    """Map a vision-observed issue sentence onto the review's rules (WCAG / UI security), falling back to usability."""
+    hits = [(rule, cat, sev, dict(refs)) for rx, rule, cat, sev, refs in _OBSERVED_RX if rx.search(issue or "")]
+    return hits or [("UIB-OBSERVED", "usability", "low", {})]
+
+
 def check_screens(store) -> list:
     out = []
     ents = store.entities()
@@ -41,7 +64,9 @@ def check_screens(store) -> list:
             elif sev in ("error", "fatal"):
                 add("UIB-ERROR", "usability", "medium", f"visible error message: {text}", text)
         for issue in attrs.get("issues") or []:
-            add("UIB-OBSERVED", "usability", "low", f"observed on screen: {issue}", issue)
+            for rule, cat, sev, refs in classify_observed(issue):
+                add(rule, cat, sev, f"observed on screen: {issue}", issue, **refs)
+                out[-1]["title"] = f"{issue[:90]}"
         for f in children.get(s["id"], []):
             fa = f.get("attrs") or {}
             if fa.get("action"):

@@ -1,4 +1,4 @@
-from .ingest import import_reports, ingest_artifact, ingest_capture
+from .ingest import complete_capture, import_reports, ingest_artifact, ingest_capture, new_version_from
 from .kinds import ARTIFACT_TYPES, ENTITY_KINDS, RELATION_KINDS
 from .schema import SCHEMA_VERSION
 from .store import ProgramStore, entity_key

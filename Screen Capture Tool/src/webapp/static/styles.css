@@ -568,6 +568,15 @@ body.dark .seg-opt{ color:#B6B6BE; }
 .pf-status{ font-size:11px; border-radius:6px; padding:2px 7px; border:0.5px solid var(--line); color:var(--muted); }
 .pf-status.structured{ color:#1F7A4D; border-color:#BFE3CF; }
 .pf-status.failed{ color:#B42318; border-color:#F3C4BE; }
+.pf-status.captured{ color:#8A5A00; border-color:#F1D9A6; }
+.pf-acts{ display:inline-flex; gap:8px; margin-left:auto; }
+.pf-acts .btn-link{ font-size:12px; }
+.prog-capbar:empty{ display:none; }
+.prog-capbar{ display:flex; flex-direction:column; gap:6px; margin:0 0 8px; }
+.prog-capbar .cb{ font-size:13px; padding:8px 10px; border-radius:8px; border:0.5px solid var(--line); display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.prog-capbar .cb.recap{ border-color:#BFD4F6; }
+.prog-capbar .cb.wait{ border-color:#F1D9A6; }
+.pf-err{ color:#B42318; font-size:12px; flex-basis:100%; }
 .pf-detail{ margin-top:10px; display:flex; flex-direction:column; gap:8px; }
 .pf-rename{ display:flex; gap:8px; }
 .pf-rename input{ flex:1; padding:5px 9px; border:0.5px solid var(--line); border-radius:8px; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }

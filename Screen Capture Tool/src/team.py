@@ -171,7 +171,7 @@ def agent_decoder(client, code: str, extension: str, language: str) -> dict:
     whether the fix resolved them."""
     res = _check(code, extension)
     if not res.get("checked"):
-        return {"errors": res.get("note") or "Not checked (no toolchain).",
+        return {"errors": "Not verified: " + (res.get("note") or "no checker for this language."),
                 "code": code, "checked": False, "tool": res.get("tool", ""), "resolved": None}
     if res.get("ok"):
         return {"errors": "None", "code": code, "checked": True,
@@ -621,7 +621,7 @@ def run_team_fast(client, ctx, goal=None, verbose=True, audit=None, max_iters=No
     # indentation review, which catches misalignments the transcription may have
     # silently auto-corrected (so the compiled text looked clean).
     compile_errors = de.get("errors") or "None"
-    if compile_errors != "None" and not de.get("truncated"):
+    if compile_errors != "None" and not de.get("truncated") and de.get("checked") is not False:
         _expl = analysis.explain_error(client, language, compile_errors, code)
         if _expl:
             compile_errors = _expl + "\n\nCompiler details:\n" + compile_errors

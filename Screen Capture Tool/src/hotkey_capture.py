@@ -128,6 +128,8 @@ class App:
         self.count = 0                            # captures taken this session
         self._last_phash = None                   # for near-duplicate detection
         self.sessions = []                        # every session folder this run
+        self._inflight = set()                    # saved captures this worker is analysing right now
+        self.display = None                       # display for captures: index, or None = the one under the mouse
         self._capture_lock = threading.Lock()     # serialises the actual screen grab
         self._analysis_lock = threading.Lock()    # serialises stop/quit analysis
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=BG_WORKERS)
@@ -203,6 +205,11 @@ class App:
         self.session_dir = CAPTURES_ROOT / f"session_{ts}"
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self.sessions.append(self.session_dir)
+        try:
+            from core.capture import pick_display
+            print(f"[burst] capturing display {pick_display(self.display)}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"(display selection skipped: {exc})", file=sys.stderr)
         self.running = True
         self.capture_enabled = True
         print("[burst] Scroll through the file steadily. It captures automatically and "
@@ -240,6 +247,11 @@ class App:
                 last_hash = h
                 last_change = time.monotonic()
                 status.publish(f"Captured frame {kept}")
+                if kept == 1:
+                    from core.capture import clarity_warning
+                    warn = clarity_warning()
+                    if warn:
+                        status.publish(warn, "info")
                 print(f"  burst frame {kept}: {out.name}")
                 self._pool.submit(self._safe_extract, out, cache)
             if self.idle_stop > 0:
@@ -253,18 +265,101 @@ class App:
         status.publish(f"Scrolling stopped — {kept} unique frame(s), analysing", "info")
         from core.notify import notify
         notify("CodeSnap", f"Capture complete — {kept} frame(s), analysing")
+        artifact_id = self._register_capture(session_dir)
         if self.project_mode:
             print(f"[burst] done capturing: {kept} unique frame(s). Analysing in background — start the next file.")
             self.running = False        # project mode: free the session so the next file can be captured now
             self.capture_enabled = False
-            threading.Thread(target=self._analyse_burst, args=(session_dir,), daemon=True).start()
+            threading.Thread(target=self._analyse_burst, args=(session_dir,), kwargs={"artifact_id": artifact_id},
+                             daemon=True).start()
         else:
             print(f"[burst] done capturing: {kept} unique frame(s). Analysing...")
             self.running = False          # free run-state; the _analysing gate blocks a new capture until done
             self.capture_enabled = False
-            self._analyse_burst(session_dir)   # inline (blocks this thread); one file at a time
+            self._analyse_burst(session_dir, artifact_id=artifact_id)   # inline (blocks this thread); one file at a time
 
-    def _analyse_burst(self, session_dir):
+    # --- every start/stop is a file: saved to the program before analysis, resumed if the worker stops ---
+    def _register_capture(self, session_dir):
+        if not self.program:
+            return None
+        imgs = sorted(Path(session_dir).glob("*.png"))
+        if not imgs:
+            return None
+        from core import status
+        from core.model import ProgramStore
+        try:
+            with ProgramStore.open(self.program) as store:
+                target = store.get_meta("recapture_target") or {}
+                if target:
+                    store.set_meta("recapture_target", None)
+                session_id = store.add_session(mode="burst", region=",".join(map(str, self.region)) if self.region else None)
+                append_to = target.get("artifact_id") if target.get("mode") == "append" else None
+                if append_to and store.artifact(append_to) is None:
+                    append_to = None
+                artifact_id = store.add_pending_capture(imgs, kind=self.capture_kind, session_id=session_id,
+                                                        recapture_of=target.get("name"), keep_frames_of=append_to)
+                if append_to:   # analyse the file's earlier screenshots together with the new ones
+                    for i, e in enumerate(store.artifact_evidence(append_to), 1):
+                        shutil.copyfile(store.evidence(e["id"])["abs_path"], Path(session_dir) / f"0000_{i:03d}.png")
+                store.claim_pending(artifact_id, self._owner)
+                self._inflight.add(artifact_id)
+                name = store.artifact(artifact_id)["name"]
+            what = ((f"added screenshots to {target['name']}" if target.get("mode") == "append" else
+                     f"new version of {target['name']}") if target.get("name") else name)
+            status.publish(f"Saved capture as {what} — analysing", "info")
+            return artifact_id
+        except Exception as exc:  # noqa: BLE001
+            print(f"Couldn't save the capture to the program: {exc}", file=sys.stderr)
+            return None
+
+    @property
+    def _owner(self):
+        return f"{os.getpid()}:{id(self)}"
+
+    def _pending_work(self):
+        from core.model import ProgramStore
+        with ProgramStore.open(self.program) as store:
+            pend = store.pending_captures()
+            todo = []
+            for aid, info in sorted(pend.items()):
+                art = store.artifact(aid)
+                if art is None:
+                    store.clear_pending(aid)
+                    continue
+                if aid in self._inflight or art["status"] != "captured" or not store.claim_pending(aid, self._owner):
+                    continue
+                self._inflight.add(aid)
+                todo.append((aid, info.get("kind") or "code", [e["abs_path"] for e in
+                            (store.evidence(x["id"]) for x in store.artifact_evidence(aid)) if e]))
+        return todo
+
+    def process_pending(self):
+        """Analyse every saved capture still waiting (e.g. the worker was stopped mid-queue). Returns how many ran."""
+        if not self.program:
+            return 0
+        done = 0
+        for aid, kind, frames in self._pending_work():
+            d = CAPTURES_ROOT / f"resume_{aid}_{time.strftime('%H%M%S')}"
+            d.mkdir(parents=True, exist_ok=True)
+            self.sessions.append(d)
+            for i, src in enumerate(frames, 1):
+                shutil.copyfile(src, d / f"{i:03d}.png")
+            print(f"[pending] analysing saved capture {aid} ({len(frames)} frame(s))")
+            self._analyse_burst(d, artifact_id=aid, kind=kind)
+            done += 1
+        return done
+
+    def _pending_loop(self, every: float = 10.0):
+        while True:
+            try:
+                if not self.running:
+                    self.process_pending()
+            except Exception as exc:  # noqa: BLE001
+                print(f"(pending captures: {exc})", file=sys.stderr)
+            time.sleep(every)
+
+    def _analyse_burst(self, session_dir, artifact_id=None, kind=None):
+        kind = kind or self.capture_kind
         imgs = sorted(session_dir.glob("*.png"))
         if not imgs:
             print("[burst] no frames captured.")
@@ -284,6 +379,7 @@ class App:
         )
         self._analysis_lock.acquire()   # serialise overlapping analyses (captures stay non-blocking)
         self._analysing = True
+        self._sync_text_cache(session_dir, imgs, load=True)
         bucket = str(session_dir)
         self.tracker.default_bucket = bucket
         try:
@@ -292,7 +388,7 @@ class App:
             audit = []
             goal = (f"There are {len(imgs)} screenshots of one scrolled document/code, in order "
                     f"(consecutive shots overlap). Produce the best verified output.")
-            if self.capture_kind == "screen":
+            if kind == "screen":
                 self._analyse_screen(imgs, ctx)
             else:
                 if self.team_mode:
@@ -303,20 +399,23 @@ class App:
                 print(f"\n{'=' * 60}\n{final}\n{'=' * 60}")
             records = self.tracker.take(bucket)
             self._report_usage(records)
+            self._sync_text_cache(session_dir, imgs, load=False)
             if self.program:
-                self._ingest_into_program(imgs, ctx, records)
+                self._ingest_into_program(imgs, ctx, records, artifact_id=artifact_id)
             self.tracker.take(bucket)
         except Exception as exc:  # noqa: BLE001
             print(f"Analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            self._mark_failed(artifact_id, f"{type(exc).__name__}: {exc}")
             try:
                 from core import status
-                status.publish("Analysis failed — please start a new session and try again.", "error", stage="done")
+                status.publish("Analysis failed — the capture is saved; use Retry on it in the program.", "error", stage="done")
                 from core.notify import notify
                 notify("CodeSnap", "Analysis failed — please try again.")
             except Exception:  # noqa: BLE001
                 pass
         finally:
             self._analysing = False
+            self._inflight.discard(artifact_id)
             self._analysis_lock.release()
             print("\n[idle] Cmd+Shift+1 for a new burst, Cmd+Shift+9 to quit.")
 
@@ -352,9 +451,59 @@ class App:
               f"${total['cost']:.3f} ({steps})")
         status.publish(f"Cost for this file: ${total['cost']:.3f} ({total['calls']} calls)", "info")
 
-    def _ingest_into_program(self, imgs, ctx, records=()):
+    def _sync_text_cache(self, session_dir, imgs, load: bool):
+        """Share per-screenshot transcriptions with the program (load before analysis, save after)."""
+        if not self.program:
+            return
+        from core.analysis import cache_path_for
+        from core.model import ProgramStore
+        try:
+            with ProgramStore.open(self.program) as store:
+                shared = store.text_cache_dir
+            local = Path(session_dir) / ".cache"
+            local.mkdir(exist_ok=True)
+            for img in imgs:
+                name = cache_path_for(img, local).name
+                for suffix in ("", ".corr.json"):
+                    fn = name if not suffix else name[:-3] + suffix
+                    src, dst = (shared / fn, local / fn) if load else (local / fn, shared / fn)
+                    if src.exists() and not dst.exists():
+                        shutil.copyfile(src, dst)
+        except Exception as exc:  # noqa: BLE001
+            print(f"(screenshot text cache: {exc})", file=sys.stderr)
+
+    def _mark_failed(self, artifact_id, error):
+        if not (self.program and artifact_id):
+            return
+        from core.model import ProgramStore
+        try:
+            with ProgramStore.open(self.program) as store:
+                if store.artifact(artifact_id) and artifact_id in store.pending_captures():
+                    store.update_pending(artifact_id, error=error, claim=None)
+                    store.set_status(artifact_id, "failed")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _ingest_into_program(self, imgs, ctx, records=(), artifact_id=None):
         from core import status
-        from core.model import ProgramStore, ingest_capture
+        from core.model import ProgramStore, complete_capture, ingest_capture
+        if artifact_id:
+            try:
+                with ProgramStore.open(self.program) as store:
+                    final_id = complete_capture(store, self.client, artifact_id, ctx.last_report)
+                    for r in records:
+                        store.log_run(r["step"], artifact_id=final_id, model=r["model"], input_tokens=r["input_tokens"],
+                                      output_tokens=r["output_tokens"], cost=r["cost"], ms=r["ms"], ok=r["ok"],
+                                      error=r["error"])
+                    art = store.artifact(final_id)
+                ok = art["status"] != "failed"
+                status.publish(f"Added {art['name']} (v{art['version']}) to program {self.program}" if ok else
+                               f"Couldn't read {art['name']} — it's saved; Retry or Recapture it", "info" if ok else "error",
+                               stage="done")
+            except Exception as exc:  # noqa: BLE001
+                print(f"Program update failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+                self._mark_failed(artifact_id, str(exc))
+            return
         if not ctx.last_report:
             return
         try:
@@ -670,6 +819,9 @@ def main() -> int:
     ap.add_argument("--region", default=None, help="Capture only a screen sub-rectangle: \"L,T,W,H\" as fractions 0-1 (left,top,width,height).")
     ap.add_argument("--project-mode", action="store_true", dest="project_mode", help="Project mode: capture many files back-to-back; analysis runs in the background.")
     ap.add_argument("--program", default=None, help="Program slug: add each analysed file to that program's model.")
+    ap.add_argument("--display", default=None, help="Display to capture: 1 = primary, 2 = second... (default: the one under the mouse).")
+    ap.add_argument("--process-pending", action="store_true", dest="process_pending",
+                    help="Analyse the program's saved-but-unanalysed captures, then exit (no hotkeys).")
     ap.add_argument("--capture-kind", default="code", choices=["code", "screen"], dest="capture_kind",
                     help="code (default) transcribes source; screen documents a running application screen.")
     args = ap.parse_args()
@@ -704,6 +856,7 @@ def main() -> int:
     app.project_mode = args.project_mode or bool(args.program)
     app.program = args.program
     app.capture_kind = args.capture_kind
+    app.display = args.display
     if app.program:
         attach_budget(app.tracker, app.program)
     if args.region:
@@ -714,6 +867,12 @@ def main() -> int:
             print(f"Ignoring bad --region {args.region!r}", file=sys.stderr)
             app.region = None
     mode += " + SINGLE-AGENT (backup)" if args.single else " + TEAM (multi-agent, default)"
+    if args.process_pending:
+        n = app.process_pending() if app.program else 0
+        print(f"[pending] analysed {n} saved capture(s).")
+        return 0
+    if app.program:
+        threading.Thread(target=app._pending_loop, daemon=True).start()
 
     print(
         f"Screen Capture Tool — {mode}\n"
