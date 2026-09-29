@@ -1,0 +1,82 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+<title>MDE School Finance - District Aid Lookup</title>
+<meta http-equiv="X-UA-Compatible" content="IE=5">
+<script type="text/javascript" src="http://code.jquery.com/jquery-1.4.2.min.js"></script>
+<script language="JavaScript">
+var apiKey = "AIDAPI-DEMO-KEY-7F3K9Q2M";
+function doLookup() {
+  var id = document.forms[0].distId.value;
+  if (id == "") { alert("Enter a district"); return false; }
+  document.getElementById("result").innerHTML = "Searching for " + id + "...";
+  document.forms[0].action = "aidlookup.asp?dist=" + id;
+  document.forms[0].submit();
+}
+function showSsn(ssn) {
+  document.write("Student SSN: " + ssn);
+}
+</script>
+<style>
+body { font-family: Verdana; font-size: 10px; background: #FFFFFF; }
+.hdr { background: #003366; color: #FFFFFF; font-size: 14px; }
+.hint { color: #BBBBBB; font-size: 9px; }
+.btn { background: #CCCCCC; border: 1px solid #999999; }
+</style>
+</head>
+<body onload="document.forms[0].distId.focus()">
+<table width="760" border="0" cellpadding="2" cellspacing="0">
+  <tr><td class="hdr" colspan="3"><img src="images/mde_logo.gif" width="120" height="40"> School Finance - State Aid</td></tr>
+  <tr><td colspan="3"><font color="red"><b>NOTICE:</b> This system is best viewed in Internet Explorer 6.</font></td></tr>
+</table>
+<form method="get" name="lookupForm" onsubmit="return doLookup()">
+<table width="760" border="1" cellpadding="3" cellspacing="0">
+  <tr>
+    <td>District ID</td>
+    <td><input type="text" name="distId" size="8" maxlength="6"></td>
+    <td class="hint">6 digits, e.g. 000625</td>
+  </tr>
+  <tr>
+    <td>Fiscal Year</td>
+    <td>
+      <select name="fy">
+        <option value="2026">FY2026</option>
+        <option value="2025">FY2025</option>
+        <option value="2024">FY2024</option>
+      </select>
+    </td>
+    <td class="hint">Defaults to current year</td>
+  </tr>
+  <tr>
+    <td>Aid Type</td>
+    <td>
+      <input type="radio" name="aidType" value="GEN" checked> General
+      <input type="radio" name="aidType" value="SPED"> Special Ed
+      <input type="radio" name="aidType" value="TRAN"> Transportation
+    </td>
+    <td></td>
+  </tr>
+  <tr>
+    <td>Password</td>
+    <td><input type="text" name="pwd" size="12" value="aid2003"></td>
+    <td class="hint">Shared lookup password</td>
+  </tr>
+  <tr>
+    <td colspan="3" align="center">
+      <input type="submit" class="btn" value="Look Up">
+      <input type="reset" class="btn" value="Clear">
+      <a href="javascript:window.print()">click here</a> to print
+    </td>
+  </tr>
+</table>
+</form>
+<div id="result"></div>
+<table width="760" border="1" cellpadding="3" cellspacing="0">
+  <tr bgcolor="#DDDDDD"><td><b>District</b></td><td><b>Pupil Units</b></td><td><b>Gross Aid</b></td><td><b>Holdback</b></td><td><b>Net Paid</b></td></tr>
+  <tr><td>000625 ST PAUL</td><td>34,112.500</td><td>$312,448,120.00</td><td>$31,244,812.00</td><td>$281,203,308.00</td></tr>
+  <tr><td>000001 AITKIN</td><td>1,020.250</td><td>$9,388,201.00</td><td>$938,820.10</td><td>$8,449,380.90</td></tr>
+  <tr><td>000011 ANOKA-HENNEPIN</td><td>41,873.000</td><td>$381,904,772.00</td><td>$38,190,477.20</td><td>$343,714,294.80</td></tr>
+</table>
+<p class="hint">Last updated 06/14/2004 &copy; Minnesota Department of Education. <a href="mailto:aidhelp@example.org">Email support</a></p>
+</body>
+</html>

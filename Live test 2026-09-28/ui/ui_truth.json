@@ -1,0 +1,22 @@
+{
+ "district_aid_lookup.html": {
+  "title": "MDE School Finance - District Aid Lookup",
+  "fields": ["District ID", "Fiscal Year", "Aid Type", "Password"],
+  "buttons": ["Look Up", "Clear"],
+  "table_columns": ["District", "Pupil Units", "Gross Aid", "Holdback", "Net Paid"],
+  "planted_issues": ["form inputs have no <label> (text in table cells only)", "low-contrast hint text #BBBBBB on white",
+                     "10px/9px font", "logo image has no alt text", "'click here' link text", "table-based layout",
+                     "password shown in a plain text field with a default value", "'best viewed in IE6' notice / IE=5 mode",
+                     "jQuery 1.4.2 over http", "hard-coded API key in page script", "document.write of SSN",
+                     "innerHTML with user input (XSS)", "no HTTPS"]
+ },
+ "aidinq_3270.html": {
+  "title": "AIDI - DISTRICT AID INQUIRY",
+  "fields": ["DISTRICT ID", "FISCAL YEAR", "DISTRICT NAME", "COUNTY", "HOLDBACK PCT", "NEXT PAYMENT"],
+  "table_columns": ["AID COMPONENT", "ENTITLEMENT", "PAID TO DATE", "BALANCE"],
+  "values": {"TOTAL": ["385,242,550.00", "231,145,530.00", "154,097,020.00"]},
+  "messages": ["AID0142W PRIOR-YEAR ADJUSTMENT PENDING - SEE SCREEN AIDA"],
+  "pf_keys": ["PF1=HELP", "PF3=EXIT", "PF5=REFRESH", "PF7=BACK", "PF8=FWD", "PF10=ADJUST", "CLEAR=MENU"],
+  "planted_issues": ["message shown only by colour (red)", "dim PF-key line low contrast", "numbers must transcribe exactly"]
+ }
+}
