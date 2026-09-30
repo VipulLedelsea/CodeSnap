@@ -394,12 +394,20 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
     top = BR[0] if BR else None
     from . import options as OP
     texts = {x["name"]: x.get("transcription") or "" for x in arts}
-    CD = OP.components(AM, techs, sec_f, texts)
+    legacy_ui = {x["name"] for x in arts if re.search(r"IE ?6|best viewed|<frameset|<font\b|bgcolor=|ActiveX|3270",
+                                                         x.get("transcription") or "", re.I)}
+    legacy_ui |= {c["name"] for c in comps if any((f.get("rule") or "") in ("UIB-OBSOLETE", "ACC-TERMINAL")
+                                                  for f in ((c.get("scores") or {}).get("ux") or {}).get("factors", []))}
+    CD = OP.components(AM, techs, sec_f, texts, fin, legacy_ui, copies=any(len(g["copies"]) >= 2 for g in DM["entities"]))
     PR = OP.program(CD, len(HP))
     multi_copies = sum(len(g["engines"]) for g in DM["entities"] if len(g["copies"]) >= 2)
     EST = OP.estimate(CD, {"fin": fin, "copies": multi_copies})
     phased = PR["code"] in ("rearchitect", "replace")
-    elapsed = "18–30 months elapsed" if phased else f"{EST['months'][0]}–{EST['months'][1]} months elapsed"
+    elapsed = OP.elapsed({"phased": phased, "platforms": len(HP)}, EST)
+    cyc = "payment cycles" if fin else "business cycles"
+    est_incl = [x for x in ("the test harness" if any(g["skill"] == "Test and QA" for g in EST["lines"]) else "",
+                            "parallel runs" if fin and any("parallel" in w for g in EST["lines"] for w in g["work"]) else "",
+                            "data migration" if multi_copies else "") if x]
     no_path_names = sorted({f"{t.get('name')}" for t in techs if t.get("status") in ("eol", "legacy")
                             and any(k.lower() in (t.get("name") or "").lower() for k in OP.NO_PATH)})
     OPTS = OP.scores({"no_path": no_path_names, "platforms": len(HP), "program_code": PR["code"],
@@ -473,13 +481,13 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
                      if f["severity"] in ("critical", "high")}) or 1
     sec_worst = (a["scores"]["security"].get("worst") or {})
     findings_txt = [
-        f"In short: the most important findings are business risks rather than code quality: "
+        f"In short, the most important findings are: "
         + P.sentence([f"{r_['title'][:1].lower() + r_['title'][1:]}" for r_ in BR[:3]]) + ". "
         + (DA.fragmentation_sentence(DM) + " " if DA.fragmentation_sentence(DM) else "")
         + f"Overall condition is {RT.words(health_c)} (1 is best, 5 is worst)"
         + (", and the application relies on technology the vendor no longer supports" if eol else "")
         + f". The recommended direction is to {disposition.lower()}: {_disp_plain(v).rstrip('.').lower()} (Section 12).",
-        (f"Financial controls (Section 8.6). " + _cap(P.sentence([f"{r_[0].lower()} is rated {r_[3]} – {P.LEVEL[r_[3]].lower()}"
+        (f"Financial controls (Section 8.6). " + _cap(P.sentence([f"{r_[0].lower()} is rated {r_[3]} – {P.LEVEL[r_[3]]}"
                                                               for r_ in FCR if r_[3] and r_[3] >= 4]))
          + ". For a payment system these touch segregation of duties, audit integrity and undetected misstatement.")
         if any(r_[3] and r_[3] >= 4 for r_ in FCR) else "",
@@ -497,11 +505,11 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
         (f"Risk (Section 9). {sum(1 for r_ in BR if r_['rating'] == 'High')} of {len(BR)} risks are rated High. The highest: "
          + P.sentence([f"{r_['title'].lower()} ({r_['score']} of 25)" for r_ in BR[:3]]) + ".") if top else "",
         f"Effort (Section 12.4). The work is estimated at {EST['low']}–{EST['high']} person-weeks across "
-        f"{len(EST['skills'])} skill sets; {elapsed}, because the order of work and the payment cycles, not the effort, set "
-        f"the pace. "
-        f"This covers the {len(arts)} components provided only and includes the test harness, parallel runs and data "
-        f"migration; with {len(missing_all)} referenced components not provided, treat it as a floor. The first items are "
-        f"security and control fixes that should be made before any wider decision (Section 1.3).",
+        f"{len(EST['skills'])} skill set(s); {elapsed}" + (f", because the order of work and the {cyc}, not the effort, set "
+        f"the pace" if phased else "") + ". "
+        f"This covers the {len(arts)} components provided only" + (f" and includes {P.sentence(est_incl)}" if est_incl else "")
+        + (f"; with {len(missing_all)} referenced components not provided, treat it as a floor" if missing_all else "")
+        + ". The first items are security and control fixes that should be made before any wider decision (Section 1.3).",
     ]
     doc.replace("Summarize in three to five", findings_txt)
     doc.replace("List any condition that warrants action", "These problems should be fixed now, before any decision on "
@@ -555,7 +563,7 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
                          pic._p, italic=True)
         proc._p.getparent().remove(proc._p)
     doc.replace("Document each business process the application supports", "The process below is drawn from what each "
-                "component reads, calculates and writes, from the arrival of input files to payment and look-up. Manual steps, "
+                "component reads, calculates and writes, from the arrival of inputs to the outputs and look-ups. Manual steps, "
                 "approval points outside the application and handoffs are to be mapped with stakeholders (open item).")
     doc.unknown("Swimlane process map with business actors and manual steps", "2.3")
     steps = []
@@ -720,11 +728,32 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
         doc.unknown("Frequency, owner and failure handling of each interface in 4.2", "4.2", "IT")
     missing = missing_all
     extern = [m for m in cov.get("missing") or [] if m["category"] == "external"]
-    for starts, text in (("Systems this application depends on", "Systems this application depends on: " + (", ".join(m["name"] for m in extern[:8]) or "none identified in the source")),
-                         ("Systems that depend on this application", "Systems that depend on this application: " + doc.unknown("Downstream systems", "4.3", "IT")),
-                         ("Shared components", "Shared components: " + (", ".join(e["name"] for e in store.entities("table")[:8]) or "none identified")),
+    rd_, wr_ = {}, {}
+    for o in DM["occurrences"]:
+        (wr_ if "W" in o["access"] else rd_).setdefault(o["store"], set()).add(o["component"])
+    in_files = sorted(s_ for s_ in rd_ if s_.endswith("-FILE") and not wr_.get(s_))
+    out_files = sorted(s_ for s_ in wr_ if s_.endswith("-FILE"))
+    shared_ro = sorted({o["store"] for o in DM["occurrences"] if o["placeholder"] and o["business"] and "W" not in o["access"]})
+    ups = [f"the system that produces {f_} (not identified)" for f_ in in_files] + (
+        [f"the systems that own the shared tables {', '.join(shared_ro)} (not identified)"] if shared_ro else []) + \
+        [m["name"] for m in extern if m.get("kind") in ("external_system", "system")]
+    downs = [f"the system that receives {f_}" + (" (in practice the accounting system, a bank or EFT process, or district "
+                                                  "notification; to be named by APP ID)" if "PAY" in f_ else " (to be named)")
+             for f_ in out_files]
+    shared = sorted(s_ for s_ in set(rd_) | set(wr_) if len(rd_.get(s_, set()) | wr_.get(s_, set())) > 1)
+    if downs:
+        doc.unknown("Name the downstream systems (by APP ID) that receive " + ", ".join(out_files), "4.3", "IT")
+    if ups:
+        doc.unknown("Name the upstream systems (by APP ID) that produce " + (", ".join(in_files) or "the shared data"), "4.3", "IT")
+    for starts, text in (("Systems this application depends on", "Systems this application depends on: " + (P.sentence(ups) or "none identified in the source") + "."),
+                         ("Systems that depend on this application", "Systems that depend on this application: " + (
+                             P.sentence(downs) if downs else doc.unknown("Downstream systems", "4.3", "IT")) + "."),
+                         ("Shared components", "Shared components: " + (
+                             "data used by more than one component: " + ", ".join(shared) if shared else "no data is shared directly between components")
+                          + "; the same business data is also copied across platforms (5.5)."),
                          ("Hidden or informal dependencies", "Hidden or informal dependencies: " + (
-                             "programs referenced but not provided: " + ", ".join(m["name"] for m in missing[:8]) if missing else "none identified in the source"))):
+                             f"{len(missing)} components referenced but not provided: " + ", ".join(m["name"] for m in missing) + "."
+                             if missing else "none identified in the source."))):
         p = doc.para(starts)
         if p is not None:
             _set_para(p, text)
@@ -773,9 +802,21 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
                                                     + (f"Errors swallowed in {', '.join(swallowed)}, so bad data can pass silently (8.6)."
                                                        if swallowed else "") + " Rated from the code only."]})
     doc.unknown("Data quality ratings (requires production data)", "5.2")
-    rpts = [x for x in arts if re.search(r"report|rpt", (x["name"] + " " + (x.get("language") or "")).lower())]
-    rows(T[18], [[f"RPT-{num}-{i:02d}", x["name"], UNKNOWN, x.get("language") or UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN,
-                              "Retain" ] for i, x in enumerate(rpts[:15], 1)])
+    rpt_rows = []
+    for o in DM["occurrences"]:
+        if re.search(r"REPORT|RPT", o["store"], re.I) and "W" in o["access"]:
+            rpt_rows.append([o["store"], f"Written by {o['component']}" + (" (the run's control report)" if "cobol" in o["component"].lower()
+                                                                             or o["component"].lower().endswith(".cbl") else ""),
+                             "Batch print / dataset", "Each run"])
+    for m in missing_all:
+        if re.search(r"RPT|REPORT", m["name"], re.I):
+            caller = sorted(n_ for n_, t_ in texts.items() if m["name"] in t_)
+            rpt_rows.append([m["name"], f"Report program started by {', '.join(caller) or 'the application'}; source not provided",
+                             "Batch program", "Each run (to confirm)"])
+    rows(T[18], [[f"RPT-{num}-{i:02d}", r_[0], UNKNOWN, r_[2], r_[3], UNKNOWN, UNKNOWN,
+                  "Replace with reporting from the system of record (12.3)"] for i, r_ in enumerate(rpt_rows[:15], 1)])
+    if rpt_rows:
+        doc.new_para("Report notes: " + "; ".join(f"{r_[0]}: {r_[1]}" for r_ in rpt_rows) + ".", T[18]._tbl)
     stats = [x for x in arts if re.search(r"spss|sas|excel|access|vba", (x.get("language") or "").lower())]
     doc.replace("Describe analytical and statistical tools", (
         f"Analytical tooling in the source: {', '.join(sorted({x['language'] for x in stats}))}. Users, skills and licensing "
@@ -934,9 +975,12 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
         "Database configuration": ["Not performed", "", "Not in scope", "", "", "", ""],
         "Penetration test": ["Not performed", "", "Not in scope", "", "", "", ""],
     })
-    doc.new_para("Composition analysis checks component versions against published vulnerability data. The legacy runtimes "
-                 "in use (for example the VB6 runtime, ADO and ActiveX/OCX controls) have no maintained vulnerability feed, "
-                 "so zero findings here does not mean zero risk; their coverage must be confirmed by information security.",
+    legacy_rt = [t for t in eol_names] + (["ADO and ActiveX/OCX controls"] if any(
+        re.search(r"ADODB|\.OCX", x.get("transcription") or "", re.I) for x in arts) else [])
+    doc.new_para("Composition analysis checks component versions against published vulnerability data"
+                 + (f". The legacy runtimes in use ({', '.join(legacy_rt)}) have no maintained vulnerability feed, so zero "
+                    f"findings here does not mean zero risk; their coverage must be confirmed by information security."
+                    if legacy_rt else "; components whose version is not confirmed (3.2) cannot be checked until it is."),
                  T[25]._tbl)
     vr, vgroups = [], {}
     for i, f in enumerate(sorted(sec_f, key=lambda f: (SEV.index(f["severity"]), f["title"]))[:40], 1):
@@ -1123,18 +1167,25 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
             last = doc.new_para(f"{o[0]}: {o[2]}", last, bullet=True)._p
     high_n = sum(1 for r_ in BR if r_["rating"] == "High")
     kv(T[37], {"Recommended disposition": disposition,
-               "Rationale": (f"{len(HP)} platforms, {len(no_path_names)} component technology with no upgrade path"
-                             f"{' (' + np_txt + ')' if np_txt else ''}, {crit_high} critical or high findings in 8.3 and "
-                             f"{high_n} High risks in 9.1 cannot be closed by fixing code in place; each component gets "
-                             f"its own disposition (table below)."),
-               "Consolidation grouping": s["related_apps"] or "Within the application: the payment posting components",
+               "Rationale": ((P.sentence([x for x in (f"{len(HP)} platforms" if len(HP) >= 3 else "",
+                                                      f"technology with no upgrade path ({np_txt})" if np_txt else "",
+                                                      f"{crit_high} critical or high findings in 8.3" if crit_high else "",
+                                                      f"{high_n} High risks in 9.1" if high_n else "") if x])
+                              + " cannot be closed by fixing code in place; each component gets its own disposition (table below).")
+                             if PR["code"] in ("rearchitect", "replace") else
+                             f"{_cap(PR['meaning'])}. Each component's disposition is in the table below."),
+               "Consolidation grouping": s["related_apps"] or ("Within the application: the payment posting components"
+                                                               if any(c["code"] == "consolidate" for c in CD) else "None identified"),
                "Prerequisites": P.sentence([f"provide the {len(missing_all)} missing components" if missing_all else "",
-                                            "confirm business criticality", "name the system of record for each entity (5.5)",
+                                            "confirm business criticality",
+                                            "name the system of record for each entity (5.5)" if multi_copies else "",
                                             "characterization tests for the calculations" if fin else ""]),
-               "Key risks of the recommended option": "Regression in payment calculations and data loss during migration; "
-                                                      "mitigated by characterization tests, reconciliation and parallel runs "
-                                                      "over at least two payment cycles",
-               "Interim risk mitigation": "The immediate actions in 1.3 and the control fixes in 8.6"})
+               "Key risks of the recommended option": (("Regression in payment calculations and data loss during migration; mitigated "
+                                                       "by characterization tests, reconciliation and parallel runs over at least "
+                                                       "two payment cycles") if fin else
+                                                      "Regression in business logic during change; mitigated by characterization "
+                                                      "tests and running old and new side by side until results agree"),
+               "Interim risk mitigation": "The immediate actions in 1.3" + (" and the control fixes in 8.6" if FCR else "")})
     anchor = doc.new_para("Disposition by component", T[37]._tbl, bold=True)._p
     ct = _table_after(doc, T[26], anchor, ["Component", "Platform", "Disposition", "Reason", "Skill set"],
                       [[c["name"], c["platform"], c["label"], _cap(c["why"]) + ".", c["skill"]] for c in CD])
@@ -1147,14 +1198,20 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
         anchor = doc.new_para(t_, anchor, bullet=True)._p
     kv(T[38], {"Recommended horizon": horizon,
                "Proposed start window": doc.unknown("Proposed start window (fiscal year and quarter)", "12.4"),
-               "Estimated duration": f"{_cap(elapsed)} (set by the order of work below and by parallel runs over payment "
-                                     f"cycles); {EST['low']}–{EST['high']} person-weeks of effort across {len(EST['skills'])} "
-                                     f"skill sets (breakdown below)",
+               "Estimated duration": f"{_cap(elapsed)}" + (f" (set by the order of work below and by parallel runs over {cyc})"
+                                                            if phased else "")
+                                     + f"; {EST['low']}–{EST['high']} person-weeks of effort across {len(EST['skills'])} "
+                                       f"skill set(s) (breakdown below)",
                "Predecessor initiatives": "Security and control fixes (1.3, 8.6); system-of-record decision (5.5); missing code",
                "Successor initiatives": "Platform retirement once the last component on each platform has moved",
-               "Business blackout periods": doc.unknown("Business blackout periods (payment cycles, year-end)", "12.4")})
+               "Business blackout periods": doc.unknown(f"Business blackout periods ({cyc}, year-end)", "12.4")})
     anchor = doc.new_para("Order of work, by dependency", T[38]._tbl, bold=True)._p
-    for ph, txt in OP.sequence({"fin": fin}):
+    for ph, txt in OP.sequence({"fin": fin, "fixes": [P.fix(r_) for r_ in dict.fromkeys(f.get("rule") for f in sec_f
+                                                                   if f["severity"] in ("critical", "high", "medium")) if P.fix(r_ or "")],
+                                "copies": multi_copies, "consolidate": any(c["code"] == "consolidate" for c in CD),
+                                "front_end": any(c["layer"] == "Presentation" and c["code"] != "retain" or c["code"] == "rearchitect" for c in CD),
+                                "platforms": len(HP), "phased": phased,
+                                "changing": any(c["code"] not in ("retain", "retire") for c in CD)}):
         anchor = doc.new_para(f"{ph}: {txt}", anchor, bullet=True)._p
     anchor = doc.new_para("Estimate by skill set", anchor, bold=True)._p
     et = _table_after(doc, T[26], anchor, ["Skill set", "Work", "Person-weeks", "Basis"],
@@ -1166,7 +1223,8 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
     doc.new_para(f"Assumptions: the estimate covers the {len(arts)} components provided ({sum(c['lines'] for c in CD):,} lines); "
                  f"{len(missing_all)} referenced components were not provided and the full application size is unknown, so "
                  f"this is a floor, not a budget. Rates are planning-level and need validating with the delivery teams; "
-                 f"each skill set needs its own people (COBOL, RPG, PL/SQL and .NET skills rarely sit in one person).",
+                 + (f"each skill set needs its own people ({', '.join(EST['skills'][:5])} rarely sit in one person)."
+                    if len(EST["skills"]) >= 3 else "the work can be done by one small team."),
                  et._tbl)
 
     # 13 evidence
@@ -1236,9 +1294,10 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
     SX.identity(doc, T, AM, CT, DM)
     local_logs = [o for o in DM["occurrences"] if o["engine"].startswith("Windows desktop (local file)")]
     SX.operations(doc, T, AM, DM, skill_list, "; ".join(f"{o['component']} writes {o['store']} on the desktop" for o in local_logs)
-                  + ("; audit calls elsewhere have implementations that were not provided" if local_logs else ""))
+                  + ("; audit calls elsewhere have implementations that were not provided" if local_logs else ""), fin)
     SX.strategy(doc, T, {"overall": RT.words(SC["overall"][0])}, PR, CD, HP, fin,
-                (tier or "").split(" (")[0] + (" provisional" if tier and not yes(s["criticality_confirmed"]) else ""), no_path_names)
+                (tier or "").split(" (")[0] + (" provisional" if tier and not yes(s["criticality_confirmed"]) else ""), no_path_names,
+                DM, CT)
     for t in techs:
         if not (t.get("version") or t.get("confidence") == "confirmed"):
             doc.open_items.append((f"Confirm the version of {t.get('name')} in use", "3.2", "IT"))

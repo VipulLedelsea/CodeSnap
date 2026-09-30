@@ -88,7 +88,7 @@ def controls(sec_f, audit_logs, sources_of, eol_techs, financial=False) -> list:
                            why="4 – Poor: shared service accounts with embedded passwords")
         elif area == "Audit logging":
             logs = [e for e in audit_logs]
-            local = [e for e in logs if re.match(r"^[A-Za-z]:\\\\|^/|\.LOG$|\.TXT$", e["name"], re.I)]
+            local = [e for e in logs if re.search(r"^[A-Za-z]:\\|^/|\.LOG$|\.TXT$", e["name"], re.I)]
             errs = [f for f in fs if f.get("rule") == "SEC-ERR"]
             bits, r_ = [], None
             if local:
@@ -149,7 +149,7 @@ def posture(rows) -> tuple:
     if not rated:
         return None, "Insufficient evidence: no security control could be assessed from the code."
     worst, mean = max(rated), sum(rated) / len(rated)
-    c = max(round(mean), worst - 1)
+    c = max(math.floor(mean + 0.5), worst - 1)
     poor = [r["area"].lower() for r in rows if r["rating"] and r["rating"] >= 4]
     na = sum(1 for r in rows if not r["rating"])
     txt = (f"{words(c)}. Derived from the {len(rated)} controls in 8.1 that the code shows (average {mean:.1f}, worst "
