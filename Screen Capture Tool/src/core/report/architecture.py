@@ -2,6 +2,8 @@
 any change, and an outline target architecture. Written for architects: technical names are kept, and each point
 says in plain English why it matters."""
 
+import re
+
 PLATFORMS = [
     ("IBM mainframe (z/OS)", ("cobol", "jcl", "cics", "ims", "pl/i", "assembler", "assembly", "hlasm", "bms", "mfs", "rexx", "idms", "3270")),
     ("IBM i (AS/400)", ("rpg", "cl", "ibm i", "dds")),
@@ -79,8 +81,10 @@ def build(store, a: dict, techs: list) -> dict:
         lang = art.get("language") or c.get("language") or ""
         if role == "Database definition" and "dbd" in c["name"].lower():
             lang = "IMS DBD"
-        if lang.lower() in ("ui screen", "screen"):
-            lang = ""
+        if lang.lower() in ("ui screen", "screen", ""):
+            lang = ("3270 terminal screen" if role == "3270 terminal screen" else "Web page (HTML)"
+                    if layer == "Presentation" and re.search(r"https?:|www\.|<html|browser|\.gov|\.com", (art.get("transcription") or "")[:3000], re.I)
+                    else "Graphical screen" if layer == "Presentation" else lang)
         comps.append({"name": c["name"], "layer": layer, "role": role, "language": lang,
                       "platform": _platform(art.get("language") or "", c["name"], role), "tech": ts, "reads": reads,
                       "writes": writes, "calls": [x for x in calls if x not in routines], "displays": displays,

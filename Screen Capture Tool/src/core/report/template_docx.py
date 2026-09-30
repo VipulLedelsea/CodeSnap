@@ -558,15 +558,35 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         ins._p.getparent().remove(ins._p)
 
     ints = []
-    ext = [e for e in store.entities() if e["kind"] in ("external_system", "data_store", "api_endpoint") and e["origin"] != "placeholder"]
+    ext = [e for e in store.entities() if _is_interface(e)]
+    by_art = {x["name"]: x for x in arts}
+    comp_of = {c["name"]: c for c in AM["components"]}
     for i, e in enumerate(ext[:25], 1):
         rels = store.relations(to_id=e["id"]) + store.relations(from_id=e["id"])
         kinds_ = {r["kind"] for r in rels}
-        direction = "Bidirectional" if {"reads", "writes"} <= kinds_ else "Outbound" if "writes" in kinds_ else "Inbound" if "reads" in kinds_ else UNKNOWN
-        method = {"data_store": "File or dataset", "api_endpoint": "API", "external_system": "System call"}[e["kind"]]
-        ints.append([f"INT-{num}-{i:02d}", direction, e["name"], (e.get("attrs") or {}).get("record") or UNKNOWN, method,
-                     "Fixed width" if e["kind"] == "data_store" and cobolish else UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN, "No"])
+        at = e.get("attrs") or {}
+        users = sorted(_sources_of(store, e["id"]))
+        ucomp = [comp_of[u] for u in users if u in comp_of]
+        if e["kind"] == "api_endpoint":
+            direction, method = "Inbound", f"REST API (HTTP {at.get('method') or 'request'})"
+            data = f"Served by {', '.join(users) or 'the application'}"
+            fmt, freq = "HTTP", "On demand, per request"
+        else:
+            direction = ("Bidirectional" if {"reads", "writes"} <= kinds_ else "Outbound" if "writes" in kinds_
+                         else "Inbound" if "reads" in kinds_ else UNKNOWN)
+            method = {"data_store": "File or dataset", "external_system": "System call"}[e["kind"]]
+            who = ", ".join(users) or "the application"
+            data = (f"{'Written' if direction == 'Outbound' else 'Read' if direction == 'Inbound' else 'Used'} by {who}"
+                    + (f" (DD {at['assign']})" if at.get("assign") else ""))
+            if at.get("record"):
+                data = f"{at['record']}; {data}"
+            batch = any(u["role"] == "Batch program" for u in ucomp)
+            fmt = "Fixed-width records" if cobolish and at.get("assign") else ("Text log file" if "LOG" in e["name"].upper() else UNKNOWN)
+            freq = ("Each batch run (schedule to confirm)" if batch else
+                    "Each user transaction" if any("Interactive" in u["role"] for u in ucomp) else UNKNOWN)
+        ints.append([f"INT-{num}-{i:02d}", direction, e["name"], data, method, fmt, freq, "IT (to confirm)", UNKNOWN, "No"])
     rows(T[15], ints)
+    _col_widths(T[15], [0.7, 0.7, 1.0, 1.35, 0.8, 0.7, 0.85, 0.7, 0.7, 0.75])
     anchor = doc.new_para("How data moves between the components", T[15]._tbl, bold=True)._p
     for fl in A_.flows(AM) or ["No data movement could be traced in the source."]:
         anchor = doc.new_para(fl, anchor, bullet=True)._p
@@ -594,9 +614,11 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
 
     # 5 data
     tables = store.entities("table")
-    rows(T[16], [[t_["name"], UNKNOWN, UNKNOWN, UNKNOWN, "Restricted" if pii else "Internal",
-                              "Personal data" if pii else "None identified"] for t_ in tables[:30]] +
-         [[d_["name"] + " (file)", UNKNOWN, UNKNOWN, UNKNOWN, "Internal", UNKNOWN] for d_ in store.entities("data_store")[:10]])
+    dstores = [d_ for d_ in store.entities("data_store") if d_["origin"] != "placeholder" and not _is_interface(d_)]
+    cls_, pd_ = ("Restricted" if pii else "Internal"), ("Personal data" if pii else "None identified")
+    rows(T[16], [[_entity_label(t_), _sor(store, t_), _volume(t_), UNKNOWN, cls_, pd_] for t_ in tables[:30]] +
+         [[_entity_label(d_), _sor(store, d_), UNKNOWN, UNKNOWN, cls_, pd_] for d_ in dstores[:10]])
+    _col_widths(T[16], [1.7, 1.45, 1.1, 0.9, 0.85, 0.9])
     doc.unknown("Data volumes, retention requirements and system-of-record status (5.1)", "5.1")
     fill_col(T[17], 1, {"": ["Not rated", "Requires access to production data; not part of this review."]})
     doc.unknown("Data quality ratings (requires production data)", "5.2")
@@ -698,6 +720,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         f"Because the recommended disposition ({disposition}) keeps the current code, every item in 7.3 can be fixed directly."])
 
     # 8 security
+    audit_logs = [e for e in store.entities("data_store") if re.search(r"AUDIT|\bLOG\b|\.LOG$", e["name"].upper())]
     t24 = T[24]
     for row in t24.rows[1:]:
         label = row.cells[0].text.strip()
@@ -725,6 +748,12 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
             set_cell(row.cells[1], "No issues found in the source reviewed")
             set_cell(row.cells[2], "None identified")
             set_cell(row.cells[3], "2 – Good: nothing found in the code; not yet confirmed on the running system")
+        elif area[0] == "Audit logging" and audit_logs:
+            set_cell(row.cells[1], "Local log only: " + "; ".join(f"{', '.join(sorted(_sources_of(store, e['id']))) or 'the application'} "
+                                                          f"writes {e['name']}" for e in audit_logs[:3])
+                     + ". No central logging or monitoring was seen in the code.")
+            set_cell(row.cells[2], "A local file can be changed or lost and nobody is alerted; retention to confirm")
+            set_cell(row.cells[3], "3 – Fair: some logging exists but it is local and unmonitored")
         else:
             set_cell(row.cells[1], doc.unknown(f"Security control: {area[0].lower()}", "8.1", "Information security"))
             set_cell(row.cells[2], "Not assessed")
@@ -754,7 +783,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         vr.append([f"VUL-{num}-{i:02d}", loc,
                    ", ".join(x for x in (refs.get("cve"), refs.get("cwe")) if x) or "",
                    str(refs.get("cvss") or "Not scored"), f["severity"].title(),
-                   "Internet facing" if f["category"] in ("website", "ui_security") else UNKNOWN,
+                   "Internet facing" if f["category"] in ("website", "ui_security") else _exposure(loc),
                    "Y" if refs.get("cve") else "N",
                    _cap(P.fix(f.get("rule") or "") or (f.get("detail") or "").split(". ")[-1][:140])
                    if not restricted else "Change the password and move it to a secrets store",
@@ -791,7 +820,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
 
     # 9 risk
     rows(T[28], [[r_["id"], r_["short"], r_["cat"], str(r_["L"]), str(r_["I"]), str(r_["score"]),
-                             R.template_rating(r_["score"]), UNKNOWN, r_["mit"]] for r_ in risks])
+                             R.template_rating(r_["score"]), _risk_owner(s, r_["cat"]), r_["mit"]] for r_ in risks])
     anchor = doc.new_para("Why each risk is rated as it is:", T[28]._tbl)._p
     for r_ in risks:
         anchor = doc.new_para(f"{r_['id']} ({r_['c']['name']}): {R.risk_reason(r_['c'])}", anchor, bullet=True)._p
@@ -991,6 +1020,76 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
 
 
 # ── helpers for the build ───────────────────────────────────────────────────────────────────────────────────────
+
+def _sources_of(store, eid) -> set:
+    return {r["name"] for r in store._all(
+        "SELECT a.name FROM entity_source es JOIN artifact a ON a.id = es.artifact_id "
+        "WHERE a.is_current = 1 AND es.entity_id = ?", (eid,))}
+
+
+def _is_interface(e) -> bool:
+    """Files, APIs and external systems cross the application boundary; databases are data it holds (5.1)."""
+    if e["origin"] == "placeholder":
+        return False
+    if e["kind"] in ("api_endpoint", "external_system"):
+        return True
+    return e["kind"] == "data_store" and (e.get("attrs") or {}).get("store_type", "file") == "file"
+
+
+def _entity_label(e) -> str:
+    at = e.get("attrs") or {}
+    if at.get("ims_segment"):
+        return f"{e['name']} (IMS segment in {at.get('dbd') or 'the database'})"
+    if e["kind"] == "data_store":
+        st = at.get("store_type") or "data store"
+        return f"{e['name']} ({'IMS database' if 'IMS' in st else 'database file' if st == 'database file' else st})"
+    return e["name"] + (" (not provided)" if e.get("origin") == "placeholder" else "")
+
+
+def _sor(store, e) -> str:
+    kinds_ = {r["kind"] for r in store.relations(to_id=e["id"])}
+    at = e.get("attrs") or {}
+    if "writes" in kinds_ or at.get("ims_segment") or at.get("dbd") or "IMS" in (at.get("store_type") or ""):
+        return "Y (the application writes or defines it; to confirm)"
+    if "reads" in kinds_:
+        return "N (read only here; owned elsewhere, to confirm)"
+    users = sorted(_sources_of(store, e["id"]))
+    return f"To confirm (used by {', '.join(users[:2])})" if users else UNKNOWN
+
+
+def _volume(e) -> str:
+    b = (e.get("attrs") or {}).get("bytes")
+    return f"Record size {b} bytes; record count unknown" if b else UNKNOWN
+
+
+def _exposure(loc: str) -> str:
+    l = loc.lower()
+    if l.split(":")[0].endswith((".cs", ".aspx", ".asp", ".jsp", ".java", ".php", ".js", ".html", ".htm")):
+        return "Network (web or API; to confirm)"
+    if l.split(":")[0].endswith((".frm", ".bas", ".vb", ".cls")):
+        return "Internal desktop (to confirm)"
+    return "Internal (to confirm)"
+
+
+def _risk_owner(s, cat) -> str:
+    if cat == "Security":
+        return "Information security (to confirm)"
+    return (s.get("it_reviewer") or "IT application owner") + " (to confirm)"
+
+
+def _col_widths(t, inches):
+    from docx.shared import Inches
+    from docx.oxml.ns import qn
+    if len(t.columns) != len(inches):
+        return
+    tbl = t._tbl
+    grid = tbl.tblGrid
+    for gc, w in zip(grid.findall(qn("w:gridCol")), inches):
+        gc.set(qn("w:w"), str(int(w * 1440)))
+    for row in t.rows:
+        for cell, w in zip(row.cells, inches):
+            cell.width = Inches(w)
+
 
 def _cap(t):
     return t[:1].upper() + t[1:] if t else t
