@@ -54,8 +54,10 @@ unknowns: things this file depends on but does not show (programs it calls, tabl
 not here, values set elsewhere), each with the line where it is referenced. Put anything you are unsure of here
 instead of in facts.
 
-capture_concerns: lines that look mis-read or incomplete (a statement cut off, characters that cannot be right,
-a structure that does not close), with the line and the reason.
+capture_concerns: ONLY lines whose text itself looks mis-read or cut off (characters that cannot be right, a
+statement visibly truncated mid-token, an unclosed quote or bracket on that line), with the line and the reason.
+Code that is valid but wrong, unusual or incomplete in its logic (a missing parameter list, a call that can never
+work, dead code) is NOT a capture concern: record it as a defect fact.
 
 Rules:
 - Record ONLY what this code shows. Never invent names, values, systems, owners, volumes, frequencies or behaviour.
@@ -288,6 +290,29 @@ def _occurrences(q, lines):
     return out
 
 
+COMMENT = re.compile(r"^\s*(#|//|\*|--|'|/\*|REM\b)|^\s*\d{6}\*|^\s*$|^\s*[{}()\[\];,]*\s*$", re.I)
+
+
+def uncovered(text, facts, bad=(), min_run=3):
+    """Runs of code lines no finding cites (comments, blanks and bare brackets aside): where a second look is due."""
+    covered = set(bad)
+    for f in facts:
+        a, b = f["lines"]
+        covered.update(range(a, b + 1))
+    lines = text.split("\n")
+    runs, cur = [], []
+    for i, l in enumerate(lines, 1):
+        if i in covered or COMMENT.search(l) or (len(l) > 6 and l[:6].isdigit() and l[6:7] == "*"):
+            if len(cur) >= min_run:
+                runs.append(cur)
+            cur = []
+        else:
+            cur.append(i)
+    if len(cur) >= min_run:
+        runs.append(cur)
+    return [f"{r[0]}–{r[-1]}" for r in runs]
+
+
 def check_facts(facts, text, bad=()):
     """Hold each fact to the file: the quote must be in the file. Returns (kept, corrected, rejected, unverifiable)."""
     lines = text.split("\n")
@@ -336,9 +361,27 @@ def analyse_file(store, client, art, model=None, review=True) -> dict:
     msg, ms = _call(client, model, DEEP_SYSTEM, ANALYSIS_TOOL, header + "\n" + listing(text, q0["bad_lines"]))
     _log(store, "deepdive", art["id"], model, msg, ms)
     data = _tool(msg, ANALYSIS_TOOL["name"]) or {}
-    concerns = [c for c in data.get("capture_concerns") or [] if isinstance(c, dict)]
+    lines_ = text.split("\n")
+    concerns = [c for c in data.get("capture_concerns") or [] if isinstance(c, dict) and isinstance(c.get("line"), int)
+                and 0 < c["line"] <= len(lines_) and lines_[c["line"] - 1].strip()]
     q = capture_quality(store, art, concerns)
     kept, corrected, rejected, unverifiable = check_facts(data.get("facts"), text, q["bad_lines"])
+    gaps = uncovered(text, kept + unverifiable, q["bad_lines"])
+    if gaps:
+        more_msg, mms = _call(client, model, DEEP_SYSTEM, ANALYSIS_TOOL,
+                              header + f"\nA first pass recorded findings for the rest of the file. These lines have NO findings "
+                                       f"yet: {', '.join(gaps)}. Review ONLY those lines (the rest is context) and record "
+                                       f"everything they show, including defects.\n\n" + listing(text, q["bad_lines"]))
+        _log(store, "deepdive_gaps", art["id"], model, more_msg, mms)
+        more = _tool(more_msg, ANALYSIS_TOOL["name"]) or {}
+        seen = {(f["category"], _norm(f["quote"])) for f in kept}
+        k2, c2, r2, u2 = check_facts(more.get("facts"), text, q["bad_lines"])
+        kept += [f for f in k2 if (f["category"], _norm(f["quote"])) not in seen]
+        corrected += c2
+        rejected += r2
+        unverifiable += u2
+        data.setdefault("unknowns", [])
+        data["unknowns"] += [u for u in more.get("unknowns") or [] if isinstance(u, dict)]
     reviewed = {"supported": 0, "partly": 0, "unsupported": 0}
     if review and kept:
         for i, f in enumerate(kept, 1):
