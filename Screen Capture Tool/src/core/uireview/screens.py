@@ -66,7 +66,7 @@ def check_screens(store) -> list:
         for issue in attrs.get("issues") or []:
             for rule, cat, sev, refs in classify_observed(issue):
                 add(rule, cat, sev, f"observed on screen: {issue}", issue, **refs)
-                out[-1]["title"] = f"{issue[:90]}"
+                out[-1]["title"] = issue if len(issue) <= 90 else issue[:issue.rfind(" ", 0, 88)].rstrip(",;") + "…"
         for f in children.get(s["id"], []):
             fa = f.get("attrs") or {}
             if fa.get("action"):

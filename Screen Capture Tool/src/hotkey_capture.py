@@ -65,7 +65,7 @@ HK_READY = "<cmd>+<shift>+7"   # owned session: "I scrolled, capture the next pa
 
 CAPTURES_ROOT = Path("captures")  # scratch PNGs (gitignored); deleted on quit
 REPORTS_ROOT = Path("reports")    # persistent .docx reports; survive quit
-BG_WORKERS = 3                    # how many images to read concurrently
+BG_WORKERS = int(os.environ.get("CODESNAP_WORKERS", "3"))   # how many images to read concurrently
 DUP_THRESHOLD = 3                 # perceptual-hash distance treated as a near-duplicate
 MAX_FIX_ITERS = 3                 # max auto-fix passes when a code check fails
 BURST_INTERVAL = 0.8              # seconds between burst captures
@@ -198,7 +198,7 @@ class App:
         self._ensure_client()
         try:
             kind = (CAPTURES_ROOT / ".capture_kind").read_text().strip()
-            if kind in ("code", "screen"):
+            if kind in ("code", "screen", "auto"):
                 self.capture_kind = kind   # switching Code / App screen no longer restarts the worker
         except OSError:
             pass
@@ -287,7 +287,13 @@ class App:
                     if warn:
                         status.publish(warn, "info")
                 print(f"  burst frame {kept}: {out.name}")
-                self._pool.submit(self._safe_extract, out, cache)
+                if kept == 1 and self.capture_kind == "auto":
+                    from core.analysis import detect_kind
+                    self._kind_guess = getattr(self, "_kind_guess", {})
+                    self._kind_guess[str(session_dir)] = self._pool.submit(detect_kind, self.client, out)
+                guess = getattr(self, "_kind_guess", {}).get(str(session_dir))
+                if not (guess is not None and guess.done() and guess.result() == "screen"):
+                    self._pool.submit(self._safe_extract, out, cache)
             if self.idle_stop > 0:
                 idle = time.monotonic() - last_change
                 if kept >= 2 and idle >= self.idle_stop:
@@ -392,9 +398,29 @@ class App:
                 print(f"(pending captures: {exc})", file=sys.stderr)
             time.sleep(every)
 
+    def _resolve_kind(self, kind, imgs, artifact_id=None):
+        """An "auto" capture is read as code or as an app screen depending on what its first frame shows."""
+        if kind != "auto" or not imgs:
+            return kind if kind != "auto" else "code"
+        from core import status
+        from core.analysis import detect_kind
+        fut = getattr(self, "_kind_guess", {}).pop(str(imgs[0].parent), None)
+        kind = fut.result() if fut is not None else detect_kind(self.client, imgs[0])
+        status.publish("Looks like an application screen: reading it as one" if kind == "screen" else
+                       "Looks like code: reading it as code", "info")
+        if self.program and artifact_id:
+            try:
+                from core.model import ProgramStore
+                with ProgramStore.open(self.program) as store:
+                    store.update_pending(artifact_id, kind=kind)
+            except Exception:  # noqa: BLE001
+                pass
+        return kind
+
     def _analyse_burst(self, session_dir, artifact_id=None, kind=None):
         kind = kind or self.capture_kind
         imgs = sorted(session_dir.glob("*.png"))
+        kind = self._resolve_kind(kind, imgs, artifact_id)
         if not imgs:
             print("[burst] no frames captured.")
             try:
@@ -559,7 +585,7 @@ class App:
         try:
             status.publish(f"Reviewing {name} line by line", "tool", stage="save")
             with ProgramStore.open(self.program) as store:
-                res = deepdive.run(store, self.client, artifact_ids=[artifact_id])
+                res = deepdive.run(store, self.client, artifact_ids=[artifact_id], program=False)
                 q = deepdive.rescan_requests(store)
             if res["errors"]:
                 print("Code analysis: " + "; ".join(res["errors"]), file=sys.stderr)
@@ -568,6 +594,21 @@ class App:
                 status.publish(f"{name} needs a rescan: " + "; ".join(i["reason"] for i in bad["issues"][:2]), "error", stage="done")
         except Exception as exc:  # noqa: BLE001
             print(f"Code analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+    def _report_recapture(self, artifact_id):
+        from core import deepdive, status
+        from core.model import ProgramStore
+        try:
+            with ProgramStore.open(self.program) as store:
+                a = store.artifact(artifact_id)
+                o = a and deepdive.recapture_outcome(store, a, deepdive.capture_quality(store, a, deepdive.current_concerns(store, a)))
+            if o and o["result"] == "fixed":
+                status.publish(f"{a['name']} is fixed: the recapture (v{o['version']}) is complete", "info", stage="done")
+            elif o and o["result"] == "still":
+                status.publish(f"{a['name']} v{o['version']} still needs a recapture: " +
+                               "; ".join(i["reason"] for i in o["remaining"][:2]), "error", stage="done")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Recapture check failed: {exc}", file=sys.stderr)
 
     def _ingest_into_program(self, imgs, ctx, records=(), artifact_id=None):
         from core import status
@@ -584,6 +625,7 @@ class App:
                 ok = art["status"] != "failed"
                 if ok:
                     self._analyse_code(final_id, art["name"])
+                    self._report_recapture(final_id)
                 status.publish(f"Added {art['name']} (v{art['version']}) to program {self.program}" if ok else
                                f"Couldn't read {art['name']} — it's saved; Retry or Recapture it", "info" if ok else "error",
                                stage="done")
@@ -910,7 +952,7 @@ def main() -> int:
     ap.add_argument("--display", default=None, help="Display to capture: 1 = primary, 2 = second... (default: the one under the mouse).")
     ap.add_argument("--process-pending", action="store_true", dest="process_pending",
                     help="Analyse the program's saved-but-unanalysed captures, then exit (no hotkeys).")
-    ap.add_argument("--capture-kind", default="code", choices=["code", "screen"], dest="capture_kind",
+    ap.add_argument("--capture-kind", default="code", choices=["code", "screen", "auto"], dest="capture_kind",
                     help="code (default) transcribes source; screen documents a running application screen.")
     args = ap.parse_args()
     load_env()

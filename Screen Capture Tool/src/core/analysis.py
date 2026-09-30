@@ -392,6 +392,28 @@ REREAD_SYSTEM_PROMPT = (
 REREAD_MAX = 24
 
 
+KIND_PROMPT = (
+    "Look at this screenshot and answer with one word.\n"
+    "code: it shows source code, SQL, a config or data file, a log, or other text as it appears in an editor, IDE, "
+    "terminal session or file viewer.\n"
+    "screen: it shows a running application's user interface: a web page, a desktop or mobile form, a dialog, or a "
+    "mainframe/green-screen terminal form with fields and labels.\n"
+    "Answer code or screen.")
+
+
+def detect_kind(client, path: Path) -> str:
+    """Whether a capture shows code or an application screen, from its first frame ("code" when unsure)."""
+    try:
+        b64 = base64.standard_b64encode(_robust.read_bytes(path)).decode()
+        msg = client.messages.create(model=TEXT_MODEL, max_tokens=5, messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": _media_type(path), "data": b64}},
+            {"type": "text", "text": KIND_PROMPT}]}])
+        word = "".join(getattr(b, "text", "") for b in msg.content).strip().lower()
+        return "screen" if word.startswith("screen") else "code"
+    except Exception:  # noqa: BLE001 - a failed guess falls back to reading it as code
+        return "code"
+
+
 def verify_screenshot(client, path: Path, raw: str) -> dict:
     """Check every transcribed line against the pixels (core.colfix.check). Lines whose pixels show a different
     character count are fixed for free when only the spacing was wrong; otherwise only those lines are cropped, zoomed

@@ -39,7 +39,7 @@ def explain(score, factors, n=3, none_text="No problems were found in the files 
         return "Insufficient evidence: the material reviewed gives no evidence for this."
     if WORDS:
         rs = reasons_words(factors, n)
-        return f"{rating_words(score)}" + (f". Main reasons: {sentence(rs)}." if rs else f". {none_text}")
+        return f"{rating_words(score)}" + (f", mainly because {sentence(rs)}." if rs else f". {none_text}")
     rs = reasons(factors, n)
     head = f"{rating_words(score)}. Scored {score} out of 100"
     return head + (f"; points were taken off because {sentence(rs)}." if rs else f". {none_text}")
@@ -66,11 +66,12 @@ def explain_program(a, dim, n=3) -> str:
         w = s.get("worst") or {}
         worst_c = condition(w.get("score"))[0] if w.get("score") is not None else None
         head = rating_words(w["score"]) if worst_c else rating_words(score)
-        out = f"{head}, rated on the weakest file" + (f" ({w.get('component')})" if w.get("component") else "")
-        if worst_c and condition(score)[0] != worst_c:
-            out += f"; the average across files would be {rating_words(score)}"
+        out = f"{head}, going by the weakest file" + (f" ({w.get('component')})" if w.get("component") else "")
         rs = reasons_words(program_factors(a.get("components") or [], dim, 0), n)
-        return out + (f". Main reasons: {sentence(rs)}." if rs else ". No problems were found.")
+        out += f", mainly because {sentence(rs)}." if rs else ". No problems were found."
+        if worst_c and condition(score)[0] != worst_c:
+            out += f" Averaged across all files it would be {rating_words(score)}."
+        return out
     out = f"{rating_words(score)}. {name[:1].upper() + name[1:]} scored {score} out of 100"
     w = s.get("worst") or {}
     if w and w.get("score") is not None and w["score"] < score:

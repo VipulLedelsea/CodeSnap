@@ -289,7 +289,8 @@ def sentence(items) -> str:
         return ""
     if len(items) == 1:
         return items[0]
-    return "; ".join(items[:-1]) + "; and " + items[-1]
+    sep = "; " if any("," in i for i in items) else ", "
+    return sep.join(items[:-1]) + ("; and " if sep == "; " else " and ") + items[-1]
 
 
 def glossary(text: str) -> list:

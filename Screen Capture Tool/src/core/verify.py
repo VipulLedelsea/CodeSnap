@@ -17,13 +17,15 @@ import difflib
 
 # which copy of a line to keep when several screenshots show it
 RANK = {"verified": 5, "reread": 5, "confirmed": 4, "joined": 3, "unchecked": 2, "edited": 2, "mismatch": 1,
-        "wrapped": 1, "cut": 0, "": 0}
+        "rows": 1, "wrapped": 1, "cut": 0, "": 0}
 
 REASONS = {
     "mismatch": "the screenshot shows a different number of characters than was read (a character may be missing or "
                 "extra); a zoomed re-read didn't settle it",
     "cut": "cut off at the edge of the screen and never seen whole: turn on word wrap or scroll sideways, then use "
            "Add screenshots",
+    "rows": "the screenshot has a different number of lines here than was read (a line may have been skipped or "
+            "added): compare this part with the screen",
     "wrapped": "joined from a word-wrapped line; check the join",
     "break": "no overlap between two screens here, so lines between them may never have been on screen: scroll back "
              "over this part more slowly and use Add screenshots",

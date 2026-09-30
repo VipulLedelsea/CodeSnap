@@ -110,8 +110,8 @@ def api_session_start(single: bool = False, idle_stop: float | None = None, regi
                       display: str | None = None):
     if program and not _program_exists(program):
         return JSONResponse({"error": f"Unknown program: {program}"}, status_code=404)
-    if capture_kind not in ("code", "screen"):
-        return JSONResponse({"error": "capture_kind must be code or screen"}, status_code=400)
+    if capture_kind not in ("code", "screen", "auto"):
+        return JSONResponse({"error": "capture_kind must be auto, code or screen"}, status_code=400)
     if program:
         from core.usage import program_budget
         with _open_program(program) as store:
@@ -165,14 +165,36 @@ def _artifact_summary(store, artifact: dict) -> dict:
     v = store.verification(artifact["id"])
     if v and artifact["status"] != "captured":
         out["check"] = {k: v.get(k) for k in ("lines", "verified", "reread", "confirmed", "flagged", "unchecked", "gaps")}
+    from core import deepdive
+    q = None
     if artifact["status"] != "captured" and (artifact.get("transcription") or "").strip():
-        from core import deepdive
         dd = (store.get_meta("deepdive") or {}).get(str(artifact["id"])) or {}
-        q = deepdive.capture_quality(store, artifact, dd.get("capture_concerns"))
+        q = deepdive.capture_quality(store, artifact, deepdive.current_concerns(store, artifact))
         out["quality"] = {"status": q["status"], "issues": q["issues"]}
         if dd:
             out["deep"] = {"facts": len(dd.get("facts") or []), "current": dd.get("hash") == deepdive._hash(artifact.get("transcription"))}
+        out["recapture"] = deepdive.recapture_outcome(store, artifact, q)
+    out["state"] = deepdive.file_state(store, artifact, q)
     return out
+
+
+def _progress(arts: list) -> dict:
+    """Files, not captures: a recapture in progress counts against the file it replaces."""
+    names = {a["name"] for a in arts if not (a.get("pending") or {}).get("recapture_of")}
+    by_file = {}
+    for a in arts:
+        key = (a.get("pending") or {}).get("recapture_of") or a["name"]
+        if key not in names:
+            names.add(key)
+        cur = by_file.get(key)
+        busy = a["state"] in ("waiting", "reading", "reviewing")
+        if cur is None or busy:
+            by_file[key] = a["state"]
+    c = {k: sum(1 for v in by_file.values() if v == k) for k in ("done", "needs_recapture", "failed", "waiting", "reading", "reviewing")}
+    total = len(by_file)
+    finished = c["done"] + c["needs_recapture"] + c["failed"]
+    return {"total": total, "finished": finished, "to_go": total - finished, **c,
+            "pct": round(100 * finished / total) if total else 0}
 
 
 _DEEP = {}
@@ -187,7 +209,7 @@ def _deep_start(slug: str, artifact_ids=None) -> dict:
         return job
     client = _client()
     with _open_program(slug) as store:
-        total = len(artifact_ids) if artifact_ids else len(deepdive.pending(store))
+        total = len(artifact_ids) if artifact_ids else len(deepdive.pending(store)) or int(deepdive.program_stale(store))
     job = {"running": True, "done": 0, "total": total, "errors": [], "started": time.time()}
     _DEEP[slug] = job
 
@@ -249,7 +271,8 @@ def api_program(slug: str):
             "coverage": store.coverage(),
             "usage": store.usage(),
             "usage_by_step": store.usage_by_step()["steps"],
-            "artifacts": [_artifact_summary(store, a) for a in store.artifacts()],
+            "artifacts": (arts := [_artifact_summary(store, a) for a in store.artifacts()]),
+            "progress": _progress(arts),
             "recapture_target": store.get_meta("recapture_target"),
             "report": {"built_at": store.get_meta("report_built_at"),
                        "current": store.get_meta("report_stamp") == store.model_stamp()},
@@ -584,11 +607,12 @@ def api_program_report(slug: str, fmt: str, rescan: bool = True, client: str | N
             from core import deepdive
             todo = deepdive.pending(store)
             job = _DEEP.get(slug) or {}
-            if (todo or job.get("running")) and api_key_status()["has_key"]:
+            if (todo or deepdive.program_stale(store) or job.get("running")) and api_key_status()["has_key"]:
                 if not job.get("running"):
                     job = _deep_start(slug)
-                msg = (f"Deep code analysis is running ({job.get('done', 0)} of {job.get('total', len(todo))} files). "
-                       f"The report is built from it; refresh in a minute.")
+                msg = (f"Deep code analysis is running ({job.get('done', 0)} of {job.get('total', len(todo))} files). " if todo else
+                       "Drawing the cross-file observations from the reviewed files. ") + (
+                       "The report is built from it; refresh in a minute.")
                 if fmt == "html":
                     return HTMLResponse(f"<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=20>"
                                         f"<body style='font:16px system-ui;padding:40px'><h2>Analysing the code</h2>"
@@ -962,8 +986,8 @@ def api_screen(delay: float = 0.0, notify: bool = False, display: str | None = N
 
 @app.post("/api/session/kind")
 def api_session_kind(kind: str = "code"):
-    if kind not in ("code", "screen"):
-        return JSONResponse({"error": "kind must be code or screen"}, status_code=400)
+    if kind not in ("code", "screen", "auto"):
+        return JSONResponse({"error": "kind must be auto, code or screen"}, status_code=400)
     d = PROJECT / "captures"
     d.mkdir(exist_ok=True)
     (d / ".capture_kind").write_text(kind)

@@ -218,8 +218,8 @@ def ingest_capture(store, client, images, report: dict, *, session_id: int | Non
 
 
 def _finish(store, client, artifact_id, report, is_code):
-    if (report or {}).get("verification"):
-        store.set_verification(artifact_id, report["verification"])
+    if (report or {}).get("verification") or store.verification(artifact_id):
+        store.set_verification(artifact_id, (report or {}).get("verification"))
     if is_code:
         ok, errors = validation_from_errors(report.get("errors", ""))
         store.set_validation(artifact_id, report.get("validation_tool", "compiler"), ok, errors)
@@ -262,6 +262,11 @@ def complete_capture(store, client, artifact_id: int, report: dict | None) -> in
         return artifact_id
     target = info.get("recapture_of")
     if target and (store.current_artifact(target) or {}).get("id") not in (None, artifact_id):
+        try:
+            from core.deepdive import note_recapture
+            note_recapture(store, target)
+        except Exception:  # noqa: BLE001
+            pass
         return new_version_from(store, client, artifact_id, target, report)
     if art["name"] == info.get("provisional_name"):
         store.rename_artifact(artifact_id, store.unique_name(artifact_name(report), exclude_id=artifact_id))

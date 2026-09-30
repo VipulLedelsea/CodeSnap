@@ -34,7 +34,7 @@
 
       <section class="view" id="viewReview" style="display:none">
       <h1>Platform Holistic Review</h1>
-      <p class="sub">Assess one legacy program end to end: capture its code, screens, schemas and config, and get the verdict, risk, security, end-of-life, diagrams and a Ledelsea report — every fact traced to its screenshot.</p>
+      <p class="sub">Capture a program's code and screens, then download the assessment report.</p>
       <div class="card program-card">
         <div class="project-head">
           <div>
@@ -51,15 +51,18 @@
           <button class="btn-primary" id="progCreate" type="button">Create</button>
           <button class="btn-link" id="progNewCancel" type="button">Cancel</button>
         </div>
+        <div id="startSlotReview"></div>
         <div class="prog-body" id="progBody" style="display:none">
-          <div class="prog-stats" id="progStats"></div>
-          <div class="prog-cost" id="progCost"></div>
-          <div class="prog-health" id="progHealth"></div>
-          <div class="prog-section-label">Files</div>
+          <div class="prog-progress" id="progProgress"></div>
           <div class="prog-capbar" id="progCapBar"></div>
           <div class="prog-files" id="progFiles"></div>
-          <div class="prog-section-label" id="progMissingLabel">Referenced but not captured</div>
-          <div class="prog-missing" id="progMissing"></div>
+          <details class="prog-map" id="progMissingBox"><summary id="progMissingLabel">Referenced but not captured</summary>
+            <div class="prog-missing" id="progMissing"></div></details>
+          <div class="project-actions">
+            <a class="btn-primary" id="progReportHtml" href="#" target="_blank" rel="noopener">View report</a>
+            <span class="dl-links">Download <a class="btn-link" id="progReportDocx" href="#">Word</a> · <a class="btn-link" id="progReportPdf" href="#">PDF</a> · <a class="btn-link" id="progReportZip" href="#">Everything (zip)</a></span>
+          </div>
+          <div class="prog-section-label">Analysis</div>
           <details class="prog-map" id="progDiagBox"><summary id="progDiagSummary">Diagrams</summary>
             <div class="sec-bar">
               <select id="progDiagSelect"></select>
@@ -76,6 +79,15 @@
             </div>
             <div id="progAssess"></div>
           </details>
+          <details class="prog-map" id="progSecBox"><summary id="progSecSummary">Security &amp; end-of-life</summary>
+            <div class="sec-bar">
+              <button class="btn-secondary" id="progSecScan" type="button">Run scan</button>
+              <label class="sec-online"><input type="checkbox" id="progSecOnline"> Look up CVEs online (OSV)</label>
+              <select id="progSecFilter"><option value="">All</option><option value="security">Code &amp; config</option><option value="eol">End-of-life</option><option value="vulnerability">CVEs</option><option value="privacy">Student data</option></select>
+            </div>
+            <div id="progSec"></div>
+          </details>
+          <details class="prog-map prog-more" id="progMoreBox"><summary>More tools</summary>
           <details class="prog-map" id="progReportBox"><summary>Report details (client, IDs, reviewers)</summary>
             <div id="progReportForm"></div></details>
           <details class="prog-map" id="progFixBox"><summary id="progFixSummary">Corrections &amp; feedback</summary>
@@ -106,32 +118,16 @@
             </div>
             <div id="progUi"></div>
           </details>
-          <details class="prog-map" id="progSecBox"><summary id="progSecSummary">Security &amp; end-of-life</summary>
-            <div class="sec-bar">
-              <button class="btn-secondary" id="progSecScan" type="button">Run scan</button>
-              <label class="sec-online"><input type="checkbox" id="progSecOnline"> Look up CVEs online (OSV)</label>
-              <select id="progSecFilter"><option value="">All</option><option value="security">Code &amp; config</option><option value="eol">End-of-life</option><option value="vulnerability">CVEs</option><option value="privacy">Student data</option></select>
-            </div>
-            <div id="progSec"></div>
-          </details>
           <details class="prog-map" id="progFlowsBox"><summary>Flows (entry point → data)</summary><div id="progFlows"></div></details>
           <details class="prog-map" id="progMapBox"><summary>Dependency map</summary><div id="progMap"></div></details>
-          <div class="project-actions">
-            <span class="project-hint">Each capture is added to this program.</span>
-            <span style="display:flex;gap:8px">
-              <a class="btn-primary" id="progReportHtml" href="#" target="_blank" rel="noopener">View report</a>
-              <a class="btn-secondary" id="progReportDocx" href="#">Word report</a>
-              <a class="btn-secondary" id="progReportPdf" href="#">PDF report</a>
-              <a class="btn-link" id="progReportZip" href="#">Full package (zip)</a>
-              <button class="btn-link" id="progRelink" type="button">Re-link</button>
+            <div class="sec-bar more-acts">
+              <button class="btn-link" id="progRelink" type="button">Re-link files</button>
               <button class="btn-link" id="progImport" type="button">Import past reports</button>
-              <button class="btn-secondary" id="progExport" type="button">Export model</button>
-            </span>
-          </div>
+              <button class="btn-link" id="progExport" type="button">Export model</button>
+            </div>
+          </details>
         </div>
       </div>
-
-      <div id="startSlotReview"></div>
       </section>
 
       <section class="view" id="viewCodesnap">
@@ -151,12 +147,13 @@
           </div>
         </div>
         <div class="kind-row">
-          <span class="kind-label">What are you capturing?</span>
+          <span class="kind-label">Capturing</span>
           <div class="seg-toggle" id="kindSeg">
-            <button class="seg-opt active" data-kind="code" type="button">Code / files</button>
+            <button class="seg-opt active" data-kind="auto" type="button">Detect</button>
+            <button class="seg-opt" data-kind="code" type="button">Code</button>
             <button class="seg-opt" data-kind="screen" type="button">App screen</button>
           </div>
-          <span class="tolerance-hint" id="kindHint">Source code, SQL, config, web pages</span>
+          <span class="tolerance-hint" id="kindHint">Works out whether it's code or an app screen</span>
         </div>
         <div class="tolerance-row">
           <label for="toleranceSlider" title="How long the screen can sit still — e.g. a presenter talking over the code — before the capture wraps up. Slide to the end for Manual, then end it yourself with Cmd+Shift+1.">Pause tolerance: <strong id="toleranceLabel">3s</strong></label>
@@ -196,11 +193,6 @@
       <div class="status-feed" id="statusFeed" style="display:none"></div>
       <div class="analyzing" id="analyzing" style="display:none"><span class="analyzing-spin"></span><span id="analyzingMsg">Analyzing your capture…</span></div>
 
-      <div class="steps">
-        <span class="step">1 · Capture</span>
-        <span class="step">2 · Read &amp; check</span>
-        <span class="step">3 · Report</span>
-      </div>
 
       </div>
       <div class="card project-card" style="display:none">

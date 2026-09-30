@@ -12,8 +12,11 @@ The program-level synthesis may only combine facts that survived; each observati
 """
 import hashlib
 import json
+import os
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 PROMPT_VERSION = "deepdive-v1"
@@ -128,6 +131,8 @@ PROGRAM_TOOL = {
 ADVICE = {
     "cut": "the line runs past the edge of the screen: widen the window or scroll right and capture the rest",
     "break": "the screens did not overlap here, so lines may be missing: scroll back and capture this part again",
+    "rows": "the screen shows a different number of lines than was read, so a line may be skipped or added: capture "
+            "this part again",
     "mismatch": "the text did not match the pixels on screen: zoom in or enlarge the font and capture again",
     "partial": "the file looks incomplete: capture the missing start or end",
     "compile": "the code does not compile as captured, which often means a mis-read: check and recapture these lines",
@@ -136,6 +141,7 @@ ADVICE = {
 
 
 REPORT_REASON = {"cut": "lines cut short in the copy provided", "break": "lines may be missing from the copy provided",
+                 "rows": "a line may be missing or extra in the copy provided",
                  "mismatch": "characters that may be wrong in the copy provided", "compile": "does not compile as provided",
                  "model": "text that cannot be right as provided"}
 
@@ -178,6 +184,7 @@ def capture_quality(store, art, concerns=None) -> dict:
         bad.update(ls)
         issues.append({"kind": k, "lines": _ranges(ls), "reason": {"cut": "text cut off at the screen edge",
                                                                    "break": "possible gap between screens",
+                                                                   "rows": "line count differs from the screen",
                                                                    "mismatch": "text may be mis-read"}[k],
                        "advice": ADVICE[k]})
     if art.get("artifact_type") in (None, "code"):
@@ -197,11 +204,78 @@ def capture_quality(store, art, concerns=None) -> dict:
     if concerns:
         issues.append({"kind": "model", "lines": _ranges([c.get("line") for c in concerns if isinstance(c.get("line"), int)]),
                        "reason": "; ".join(c.get("reason", "") for c in concerns[:3])[:240], "advice": ADVICE["model"]})
-    status = "rescan" if any(i["kind"] in ("cut", "break", "mismatch", "partial", "model") for i in issues) else \
+    status = "rescan" if any(i["kind"] in ("cut", "break", "rows", "mismatch", "partial", "model") for i in issues) else \
         "unchecked" if not ver and art.get("artifact_type") in (None, "code") else "good"
     if status == "good" and any(i["kind"] == "compile" for i in issues):
         status = "rescan"
     return {"status": status, "issues": issues, "bad_lines": sorted(bad), "verified": bool(ver)}
+
+
+def current_concerns(store, art, dd=None):
+    """The reviewer's capture concerns, only while they still describe the file's current text."""
+    d = ((dd if dd is not None else store.get_meta("deepdive")) or {}).get(str(art["id"])) or {}
+    return d.get("capture_concerns") if d.get("hash") == _hash(art.get("transcription")) else None
+
+
+def quality_summary(q) -> dict:
+    return {"status": q["status"], "issues": [{"kind": i["kind"], "reason": i["reason"], "lines": i["lines"]}
+                                              for i in q["issues"]]}
+
+
+def note_recapture(store, name):
+    """Remember how the file looked before a recapture, so the new version can say whether it fixed it."""
+    old = store.current_artifact(name)
+    if not old or not (old.get("transcription") or "").strip():
+        return
+    q = capture_quality(store, old, current_concerns(store, old))
+    rec = store.get_meta("recaptures") or {}
+    rec[name] = {"from_version": old.get("version"), "before": quality_summary(q),
+                 "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    store.set_meta("recaptures", rec)
+
+
+_META_LOCK = threading.RLock()
+
+
+def _active(store):
+    now = time.time()
+    return {k: v for k, v in (store.get_meta("deepdive_active") or {}).items() if now - v < 1800}
+
+
+def _set_active(store, art_id, on):
+    act = _active(store)
+    if on:
+        act[str(art_id)] = time.time()
+    else:
+        act.pop(str(art_id), None)
+    store.set_meta("deepdive_active", act)
+
+
+def recapture_outcome(store, art, q) -> dict | None:
+    rec = (store.get_meta("recaptures") or {}).get(art["name"])
+    if not rec or (art.get("version") or 1) <= (rec.get("from_version") or 0):
+        return None
+    before = rec["before"]
+    kinds_after = {i["kind"] for i in q["issues"] if i["kind"] != "compile" or q["status"] == "rescan"}
+    fixed = [i for i in before["issues"] if i["kind"] not in kinds_after]
+    return {"from_version": rec["from_version"], "version": art.get("version"), "was": before["status"],
+            "now": q["status"], "fixed": fixed, "remaining": quality_summary(q)["issues"] if q["status"] == "rescan" else [],
+            "result": "fixed" if before["status"] == "rescan" and q["status"] != "rescan" else
+                      "still" if q["status"] == "rescan" else "ok"}
+
+
+def file_state(store, art, q=None, dd=None, active=None) -> str:
+    """One word for where a file is: waiting, reading, reviewing, needs_recapture, failed or done."""
+    if art["status"] == "captured":
+        return "reading" if store.capture_progress(art["id"]).get("analysing") else "waiting"
+    if art["status"] == "failed":
+        return "failed"
+    active = _active(store) if active is None else active
+    if str(art["id"]) in active:
+        return "reviewing"
+    if q is not None and q["status"] == "rescan":
+        return "needs_recapture"
+    return "done"
 
 
 def rescan_requests(store) -> list:
@@ -211,7 +285,7 @@ def rescan_requests(store) -> list:
     for a in store.artifacts():
         if not (a.get("transcription") or "").strip():
             continue
-        q = capture_quality(store, a, (dd.get(str(a["id"])) or {}).get("capture_concerns"))
+        q = capture_quality(store, a, current_concerns(store, a, dd))
         if q["status"] == "rescan":
             out.append({"artifact_id": a["id"], "name": a["name"], "issues": q["issues"]})
     return out
@@ -463,30 +537,60 @@ def synthesize(store, client, model=None) -> dict:
     return {"observations": obs, "ran_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "model": model}
 
 
-def run(store, client, artifact_ids=None, progress=None, force=False) -> dict:
-    """Analyse every file that has no current deep analysis (or the ones given), then the program."""
+def program_basis(store) -> str:
+    """What the cross-file observations were drawn from: every file's current analysis."""
+    dd = store.get_meta("deepdive") or {}
+    return hashlib.sha1(json.dumps(sorted((k, v.get("ran_at")) for k, v in dd.items())).encode()).hexdigest()[:16]
+
+
+def program_stale(store) -> bool:
+    dd = store.get_meta("deepdive") or {}
+    return len(dd) >= 2 and (store.get_meta("deepdive_program") or {}).get("basis") != program_basis(store)
+
+
+def run(store, client, artifact_ids=None, progress=None, force=False, program=True) -> dict:
+    """Analyse every file that has no current deep analysis (or the ones given), then (with program=True, and only when
+    a file changed since) the cross-file observations. The capture worker passes program=False: the observations are
+    drawn once, when the report needs them, not after every file."""
     todo = [a for a in pending(store) if artifact_ids is None or a["id"] in artifact_ids]
     if artifact_ids and force:
         todo += [store.artifact(i) for i in artifact_ids if store.artifact(i) and store.artifact(i) not in todo]
     done, errors = 0, []
-    for a in todo:
+
+    def one(a):
+        with _META_LOCK:
+            _set_active(store, a["id"], True)
         try:
-            res = analyse_file(store, client, a)
-            dd = store.get_meta("deepdive") or {}
-            dd[str(a["id"])] = res
-            store.set_meta("deepdive", dd)
-            done += 1
+            return a, analyse_file(store, client, a), None
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"{a['name']}: {type(exc).__name__}: {exc}"[:240])
-            store.log_run("deepdive", artifact_id=a["id"], prompt_version=PROMPT_VERSION, ok=False, error=errors[-1])
-        if progress:
-            progress(done + len(errors), len(todo))
+            return a, None, f"{a['name']}: {type(exc).__name__}: {exc}"[:240]
+        finally:
+            with _META_LOCK:
+                _set_active(store, a["id"], False)
+
+    workers = max(1, min(len(todo), int(os.environ.get("CODESNAP_DEEP_WORKERS", "5"))))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for a, res, err in pool.map(one, todo) if workers == 1 else (f.result() for f in as_completed(
+                [pool.submit(one, a) for a in todo])):
+            if err:
+                errors.append(err)
+                store.log_run("deepdive", artifact_id=a["id"], prompt_version=PROMPT_VERSION, ok=False, error=err)
+            else:
+                with _META_LOCK:
+                    dd = store.get_meta("deepdive") or {}
+                    dd[str(a["id"])] = res
+                    store.set_meta("deepdive", dd)
+                done += 1
+            if progress:
+                progress(done + len(errors), len(todo))
     live = {str(a["id"]) for a in store.artifacts()}
     dd = {k: v for k, v in (store.get_meta("deepdive") or {}).items() if k in live}
     store.set_meta("deepdive", dd)
-    if todo or not store.get_meta("deepdive_program"):
+    if program and (program_stale(store) or not store.get_meta("deepdive_program")):
         try:
-            store.set_meta("deepdive_program", synthesize(store, client))
+            store.set_meta("deepdive_program", {**synthesize(store, client), "basis": program_basis(store)})
         except Exception as exc:  # noqa: BLE001
             errors.append(f"program synthesis: {type(exc).__name__}: {exc}"[:240])
+            store.set_meta("deepdive_program", {"observations": [], "ran_at": None, "basis": program_basis(store),
+                                                "error": errors[-1]})
     return {"analysed": done, "errors": errors, "files": len(dd)}

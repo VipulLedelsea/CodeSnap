@@ -267,7 +267,7 @@ def scorecard(comps, AM, sec_rating, sec_text, facts) -> dict:
         avg = condition(_avg(mat, dims))
         txt = (f"Rated on the weakest material component, {c['name']} ({words(rating)})"
                + (f"; the average across {len(mat)} components would be {avg}" if avg and avg != rating else "")
-               + (f". Main reasons: {P.sentence(rs)}." if rs else ". No deductions."))
+               + (f", mainly because {P.sentence(rs)}." if rs else ". No deductions."))
         for bump, why in (extra or []):
             if bump and rating:
                 new = min(5, rating + bump)

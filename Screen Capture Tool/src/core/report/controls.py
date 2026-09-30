@@ -144,7 +144,7 @@ def register(ctx) -> list:
     """Business risks from the evidence, each with the reason for its likelihood and impact."""
     fin, tier1 = ctx["fin"], ctx["tier1"]
     imp_pay = 5 if fin and tier1 else 4
-    basis_imp = ("5: the application pays public money and is Tier 1 (tier provisional until the business owner confirms it)"
+    basis_imp = ("5: the application pays public money and is Tier 1"
                  if imp_pay == 5 else "4: the application writes business data; to be confirmed by the business owner")
     out = []
 

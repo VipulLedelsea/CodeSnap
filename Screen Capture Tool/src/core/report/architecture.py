@@ -46,7 +46,7 @@ def _layer_role(art: dict, comp: dict, displays: list) -> tuple:
     if "jcl" in lang.lower() or name.endswith(".jcl"):
         return "Integration", "Batch job control (scheduling)"
     if displays:
-        return "Application", "Interactive program (drives screens)"
+        return "Application", "Interactive program"
     if "cobol" in lang.lower():
         return "Application", "Batch program"
     return "Application", "Program"
@@ -214,6 +214,15 @@ def target_outline(model: dict, disposition_code: str) -> list:
     return out
 
 
+def _names(items, n):
+    """A list of names with "(not provided)" said once when it applies to all of them."""
+    items = list(dict.fromkeys(items))[:n]
+    gone = [i for i in items if i.endswith(" (not provided)")]
+    if len(gone) == len(items) and len(items) > 1:
+        return ", ".join(i[:-len(" (not provided)")] for i in items) + " (none provided)"
+    return ", ".join(items)
+
+
 def flows(model: dict) -> list:
     """One plain sentence per component that moves data."""
     out = []
@@ -224,13 +233,9 @@ def flows(model: dict) -> list:
         if c["role"] == "Database definition":
             out.append(f"{c['name']} (database definition): defines {', '.join(c['reads'][:5]) or 'the database structure'}.")
             continue
-        if c["reads"]:
-            bits.append(f"reads {', '.join(c['reads'][:5])}")
-        if c["writes"]:
-            bits.append(f"writes {', '.join(c['writes'][:5])}")
-        if c["displays"]:
-            bits.append(f"shows screens {', '.join(c['displays'][:4])}")
-        if c["calls"]:
-            bits.append(f"calls {', '.join(c['calls'][:4])}")
+        for key, verb, n in (("reads", "reads", 5), ("writes", "writes", 5), ("displays", "shows screens", 4),
+                             ("calls", "calls", 4)):
+            if c[key]:
+                bits.append(f"{verb} {_names(c[key][:n + 4], n)}")
         out.append(f"{c['name']} ({c['role'].lower()}): " + "; ".join(bits) + ".")
     return out

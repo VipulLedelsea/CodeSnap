@@ -44,10 +44,14 @@ def data_ownership(doc, T, DM, fin, name):
         a = _p(doc, "Microsoft SQL Server is in use although no SQL Server component was listed: the connection strings "
                     f"point at {', '.join(DM['sql_server'])}, and the dbo schema prefix is SQL Server's default.", a, bullet=True)
     a = _p(doc, "Lineage from input to output", a, bold=True)
+    none_known = not any(any(l["in_from"].values()) or any(l["out_to"].values()) for l in DM["lineage"])
     for l in DM["lineage"][:8]:
-        ins = ", ".join(s_ + ("" if l["in_from"].get(s_) else " (source not identified)") for s_ in l["in"]) or "no input"
-        outs = ", ".join(s_ + ("" if l["out_to"].get(s_) else " (consumer not identified)") for s_ in l["out"]) or "no output"
+        mark = lambda s_, known, tag: s_ + ("" if known or none_known else f" ({tag} not identified)")
+        ins = ", ".join(mark(s_, l["in_from"].get(s_), "source") for s_ in l["in"]) or "no input"
+        outs = ", ".join(mark(s_, l["out_to"].get(s_), "consumer") for s_ in l["out"]) or "no output"
         a = _p(doc, f"{ins} → {l['component']} → {outs}", a, bullet=True)
+    if none_known and DM["lineage"]:
+        a = _p(doc, "None of the systems that supply these inputs or use these outputs could be identified from the code.", a)
     unlinked = not any(any(v for v in l["out_to"].values()) for l in DM["lineage"])
     a = _p(doc, ("No component provided reads what another one writes, so the chain from entitlement through payment to "
                  "the accounting system cannot be completed from the code. The systems that produce the input files and "

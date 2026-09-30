@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 let _program = "";
-let _captureKind = "code";
+let _captureKind = "code", _kindManual = false;
 let _view = "codesnap";
 if (window.mermaid) { try { mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" }); } catch (e) {} }
 
@@ -805,85 +805,105 @@ async function loadPrograms(select) {
   _progStore(_program);
   await loadProgram();
 }
-function _stat(n, label) { return `<div class="prog-stat"><b>${n}</b><span>${label}</span></div>`; }
-async function loadHealth() {
-  const box = $("progHealth");
-  let h;
-  try { h = await _json("/api/programs/" + encodeURIComponent(_program) + "/health"); }
-  catch (e) { box.innerHTML = ""; return; }
-  const b = h.budget || {};
-  const budget = b.limit ? `API budget: <b>$${b.spent.toFixed(2)}</b> of $${b.limit.toFixed(2)}${b.remaining <= 0 ? " — <b>reached</b>" : ""}`
-    : `API spend: <b>$${(b.spent || 0).toFixed(2)}</b> · no budget set`;
-  const rows = [
-    ...(h.waiting || []).map(f => ["waiting", f.name, f.reason]),
-    ...h.failed.map(f => ["failed", f.name, f.reason]),
-    ...h.partial.map(f => ["partial", f.name, f.reasons.join("; ")]),
-    ...h.invalid.map(f => ["invalid", f.name, `${f.tool}: ${f.error}`]),
-  ];
-  const label = { waiting: "waiting", failed: "not analysed", partial: "partial capture", invalid: "syntax check failed" };
-  const api = h.api.failures ? ` · ${h.api.failures} API error(s)${h.api.fallbacks ? `, ${h.api.fallbacks} recovered by local parser` : ""}` : "";
-  box.innerHTML = `<div class="ph-line ${_attr(h.status)}"><b>Pipeline:</b> ${rows.length ? new Set(rows.map(r => r[1])).size + " file(s) need attention" : "all " + h.files + " files analysed"}${api}${b.limit && b.remaining <= 0 ? " · " + budget : ""}</div>` +
-    rows.map(r => `<div class="ph-row"><span class="pm-cat ${_attr(r[0])}">${label[r[0]]}</span> <b>${escapeHtml(r[1])}</b> <small>${escapeHtml(r[2])}</small></div>`).join("");
-  if ($("progBudgetEdit")) $("progBudgetEdit").addEventListener("click", () => {
-    inlineAsk(box, [{ name: "v", label: "API budget for this program, USD (0 = no limit)", value: String(b.limit || "") }]).then(async res => {
-      if (!res) return;
-      const n = parseFloat(res.v || "0");
-      if (isNaN(n) || n < 0) { toast("Enter a number, e.g. 25"); return; }
-      try { await _json("/api/programs/" + encodeURIComponent(_program) + "/budget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ budget_usd: n }) }); }
-      catch (e) { toast(e.message); return; }
-      loadHealth();
-    });
-  });
+const STATE = {
+  waiting: ["Waiting", "wait"], reading: ["Reading", "busy"], reviewing: ["Reviewing", "busy"],
+  needs_recapture: ["Needs recapture", "bad"], failed: ["Couldn't read", "bad"], done: ["Done", "ok"],
+};
+const ISSUE = { cut: "lines cut off at the edge of the screen", break: "a gap between two screens, so lines may be missing",
+  rows: "a line may have been skipped or added", mismatch: "some characters may be misread", partial: "the start or end of the file looks missing",
+  compile: "it doesn't compile as read", model: "the reviewer found text that can't be right" };
+const FIXED = { cut: "cut-off lines", break: "gaps between screens", rows: "skipped or extra lines", mismatch: "misread characters",
+  partial: "missing start or end", compile: "compile errors", model: "unreadable text" };
+function _issues(list) {
+  const kinds = new Set(list.map(i => i.kind));
+  const txt = list.filter(i => !(i.kind === "partial" && kinds.has("cut"))).map(i => (ISSUE[i.kind] || i.reason) + _lines(i.lines)).join("; ");
+  return escapeHtml(txt.charAt(0).toUpperCase() + txt.slice(1));
 }
-
-async function loadProgram() {
-  const body = $("progBody");
-  if (!_program) { body.style.display = "none"; $("progSub").textContent = "Pick a program to build its model across captures, or capture single files."; return; }
-  let d;
-  try { d = await _json("/api/programs/" + encodeURIComponent(_program)); }
-  catch (e) { toast(e.message); return; }
-  body.style.display = "block";
-  $("progSub").textContent = d.program.description || "Every capture is transcribed, checked, and added to this program's model.";
-  const c = d.coverage, u = d.usage;
-  $("progStats").innerHTML = _stat(c.files, "files") + _stat(c.entities, "entities") +
-    _stat(c.missing.length, "missing") + _stat(c.resolved_ratio == null ? "—" : Math.round(c.resolved_ratio * 100) + "%", "resolved");
-  $("progCost").innerHTML = "";
-  const STATUS_LABEL = { captured: "waiting to analyse", failed: "analysis failed" };
-  $("progFiles").innerHTML = d.artifacts.length ? d.artifacts.map(a => `
+function _lines(ls) { return ls && ls.length ? ` (line${ls.length > 1 || String(ls[0]).includes("–") ? "s" : ""} ${ls.slice(0, 6).join(", ")}${ls.length > 6 ? "…" : ""})` : ""; }
+function renderProgress(d) {
+  const p = d.progress || {};
+  const box = $("progProgress");
+  if (!p.total) { box.innerHTML = `<div class="pp-head"><b>No files yet</b><span>Start a capture — each start/stop becomes one file.</span></div>`; return; }
+  const busy = p.reading + p.reviewing + p.waiting;
+  const seg = (n, cls) => n ? `<i class="${cls}" style="flex:${n}"></i>` : "";
+  const bits = [];
+  if (p.reading) bits.push(`${p.reading} reading`);
+  if (p.reviewing) bits.push(`${p.reviewing} being reviewed`);
+  if (p.waiting) bits.push(`${p.waiting} waiting`);
+  const attn = p.needs_recapture + p.failed;
+  box.innerHTML = `<div class="pp-head">
+      <b>${p.finished} of ${p.total} files processed</b>
+      <span>${busy ? bits.join(" · ") + ` — ${p.to_go} to go` : "Nothing left to process"}${attn ? ` · <em>${attn} need${attn > 1 ? "" : "s"} recapture</em>` : ""}</span>
+    </div>
+    <div class="pp-bar">${seg(p.done, "ok")}${seg(p.needs_recapture + p.failed, "bad")}${seg(p.reviewing + p.reading, "busy")}${seg(p.waiting, "wait")}</div>`;
+}
+function _fileRow(a, pendingFor) {
+  const st = pendingFor ? (pendingFor.state === "waiting" ? "waiting" : "reading") : a.state;
+  const [label, cls] = STATE[st] || [a.status, ""];
+  const rc = a.recapture;
+  let note = "";
+  if (pendingFor) note = `<div class="pf-note busy">Recapture in progress${pendingFor.pending && pendingFor.pending.frames ? ` — read ${pendingFor.pending.read || 0} of ${pendingFor.pending.frames} screenshots` : ""}.</div>`;
+  else if (rc && rc.result === "fixed") note = `<div class="pf-note ok">✓ Fixed by the recapture (now v${rc.version})${rc.fixed.length ? " — no more " + [...new Set(rc.fixed.filter(i => !(i.kind === "partial" && rc.fixed.some(j => j.kind === "cut"))).map(i => FIXED[i.kind] || "problems"))].join(" or ") : ""}.</div>`;
+  else if (rc && rc.result === "still") note = `<div class="pf-note bad">Recaptured as v${rc.version}, but it still needs work: ${_issues(rc.remaining).toLowerCase()}. <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
+  else if (st === "needs_recapture") note = `<div class="pf-note bad">${_issues(a.quality.issues)}. <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
+  else if (st === "failed" && a.pending && a.pending.error) note = `<div class="pf-note bad">${escapeHtml(a.pending.error)} <button class="btn-link" data-act="retry" type="button">Retry</button></div>`;
+  const reading = st === "reading" && a.pending && a.pending.frames ? ` · ${a.pending.read || 0}/${a.pending.frames}` : "";
+  return `
     <details class="prog-file" data-id="${a.id}" data-name="${_attr(a.name)}">
       <summary>
         <span class="pf-name">${escapeHtml(a.name)}</span>
-        <span class="pf-meta">${escapeHtml(a.language || a.artifact_type)} · v${a.version} · ${a.entities} entities · ${a.frames} frames${a.pending && a.pending.recapture_of ? " · recapture of " + escapeHtml(a.pending.recapture_of) : ""}</span>
-        <span class="pf-status ${_attr(a.status)}${a.pending && a.pending.analysing ? " busy" : ""}">${escapeHtml(_statusText(a))}</span>
-        ${_checkBadge(a.check)}
-        ${_qualityBadge(a)}
-        <span class="pf-acts">
+        <span class="pf-meta">${escapeHtml(a.language || a.artifact_type || "")}${a.version > 1 ? " · v" + a.version : ""}</span>
+        <span class="pf-state ${cls}">${label}${reading}</span>
+        <span class="pf-menu" tabindex="0">⋯<span class="pf-acts">
           <button class="btn-link" data-act="rename" type="button">Rename</button>
           ${a.status === "captured" ? "" : `<button class="btn-link" data-act="recapture" type="button">Recapture</button>
           <button class="btn-link" data-act="add" type="button">Add screenshots</button>`}
-          ${a.status === "failed" && a.pending ? `<button class="btn-link" data-act="retry" type="button">Retry</button>` : ""}
-        </span>
-        ${a.status === "failed" && a.pending && a.pending.error ? `<span class="pf-err">${escapeHtml(a.pending.error)}</span>` : ""}
+        </span></span>
+        ${note}
       </summary>
       <div class="pf-detail"></div>
-    </details>`).join("") : `<p class="project-hint" style="margin:0">No files yet — start a capture. Each start/stop becomes one file.</p>`;
+    </details>`;
+}
+let _progSig = "";
+async function loadProgram(poll) {
+  const body = $("progBody");
+  if (!_program) { body.style.display = "none"; $("progSub").textContent = "Pick a program, or create one."; return; }
+  let d;
+  try { d = await _json("/api/programs/" + encodeURIComponent(_program)); }
+  catch (e) { if (!poll) toast(e.message); return; }
+  body.style.display = "block";
+  $("progSub").textContent = d.program.description || `${d.progress.total} file${d.progress.total === 1 ? "" : "s"} in this program.`;
+  renderProgress(d);
+  const recaps = {};
+  d.artifacts.forEach(a => { const t = a.pending && a.pending.recapture_of; if (t && d.artifacts.some(x => x.name === t && x.id !== a.id)) recaps[t] = a; });
+  const rows = d.artifacts.filter(a => !(a.pending && recaps[a.pending.recapture_of] === a));
+  const sig = JSON.stringify([rows.map(a => [a.id, a.version, a.state, a.recapture && a.recapture.result, (a.pending || {}).read]), Object.keys(recaps), d.recapture_target]);
+  scheduleProgramPoll(d);
+  if (poll && sig === _progSig) return;
+  _progSig = sig;
+  const open = new Set([...document.querySelectorAll("#progFiles .prog-file[open]")].map(x => x.dataset.id));
+  $("progFiles").innerHTML = rows.length ? rows.map(a => _fileRow(a, recaps[a.name])).join("")
+    : `<p class="project-hint" style="margin:0">No files yet — start a capture. Each start/stop becomes one file.</p>`;
   renderCaptureBar(d);
-  renderDeepBar(d);
-  document.querySelectorAll("#progFiles .pf-acts [data-act]").forEach(b => b.addEventListener("click", ev => {
+  document.querySelectorAll("#progFiles [data-act]").forEach(b => b.addEventListener("click", ev => {
     ev.preventDefault(); ev.stopPropagation(); fileAction(b.closest(".prog-file"), b.dataset.act);
   }));
-  loadHealth();
-  document.querySelectorAll("#progFiles .prog-file").forEach(el =>
-    el.addEventListener("toggle", () => { if (el.open) loadArtifact(el); }));
+  document.querySelectorAll("#progFiles .prog-file").forEach(el => {
+    el.addEventListener("toggle", () => { if (el.open) loadArtifact(el); });
+    if (open.has(el.dataset.id)) el.open = true;
+  });
+  const c = d.coverage;
   const mc = c.missing_counts || {};
-  $("progMissingLabel").textContent = `Referenced but not captured — ${mc.missing_code || 0} code · ${mc.external || 0} external · ${mc.library || 0} library`;
+  const nMiss = (mc.missing_code || 0) + (mc.external || 0);
+  $("progMissingLabel").textContent = nMiss ? `${nMiss} things referenced but not captured (${mc.missing_code || 0} code, ${mc.external || 0} external)` : "Nothing referenced is missing";
   const order = { missing_code: 0, external: 1, library: 2 };
   const catLabel = { missing_code: "code", external: "external", library: "library" };
   const shown = c.missing.filter(m => m.category !== "library").sort((a, b) => order[a.category] - order[b.category]);
   $("progMissing").innerHTML = shown.length ? shown.slice(0, 80).map(m => {
-    const by = (m.referenced_by || []).slice(0, 4).map(r => `${r.name} (${r.relation}${r.artifact ? ", " + r.artifact : ""})`).join("; ");
-    return `<div class="pm"><span class="pm-cat ${_attr(m.category)}">${catLabel[m.category] || m.category}</span> <b>${escapeHtml(m.name)}</b> <small>${escapeHtml(m.kind)} — used by ${escapeHtml(by || "unknown")}</small></div>`;
-  }).join("") : `<p class="project-hint" style="margin:0">${c.entities ? "Nothing missing so far." : "No structure extracted yet — use Re-extract on a file."}</p>`;
+    const by = (m.referenced_by || []).slice(0, 2).map(r => r.artifact || r.name).join(", ");
+    return `<div class="pm"><span class="pm-cat ${_attr(m.category)}">${catLabel[m.category] || m.category}</span> <b>${escapeHtml(m.name)}</b> <small>${escapeHtml(m.kind)}${by ? " · used in " + escapeHtml(by) : ""}</small></div>`;
+  }).join("") : "";
+  if (poll) return;
   if ($("progFlowsBox").open) loadProgramFlows();
   if ($("progMapBox").open) loadProgramMap();
   if ($("progSecBox").open) loadProgramFindings();
@@ -896,6 +916,12 @@ async function loadProgram() {
   $("progReportDocx").href = `${rb}.docx`;
   $("progReportPdf").href = `${rb}.pdf`;
   $("progReportZip").href = `${rb}.zip`;
+}
+let _progPoll = null;
+function scheduleProgramPoll(d) {
+  if (_progPoll) clearTimeout(_progPoll);
+  const busy = d.progress && (d.progress.to_go > 0) || d.session_running || d.recapture_target;
+  _progPoll = setTimeout(() => { _progPoll = null; if (_view === "review" && _program && !document.hidden) loadProgram(true); else scheduleProgramPoll(d); }, busy ? 3000 : 10000);
 }
 let _display = "", _shotDisplay = "";
 async function loadDisplays() {
@@ -910,61 +936,6 @@ async function loadDisplays() {
   sel.onchange = () => { _display = sel.value; if (pickedRegion) $("clearAreaBtn").click(); toast(_display ? `Capturing screen ${_display}. Pick the code area again if you had one.` : "Capturing the screen under the mouse."); };
 }
 loadDisplays();
-function _checkBadge(v) {
-  if (!v || !v.lines) return "";
-  const ok = (v.verified || 0) + (v.reread || 0), gaps = (v.gaps || []).length;
-  const warn = v.flagged || gaps;
-  const txt = `${ok}/${v.lines} lines verified` + (v.flagged ? ` · ${v.flagged} to check` : "") + (gaps ? ` · ${gaps} gap${gaps > 1 ? "s" : ""}` : "");
-  const tip = "Verified = every word has the length and column the screenshot's pixels show." +
-    (v.unchecked ? ` ${v.unchecked} line(s) couldn't be checked (no fixed-width text grid).` : "");
-  return `<span class="pf-check ${warn ? "warn" : ok === v.lines ? "ok" : ""}" title="${_attr(tip)}">${escapeHtml(txt)}</span>`;
-}
-function _qualityBadge(a) {
-  const q = a.quality, dp = a.deep;
-  let out = "";
-  if (q && q.status === "rescan") {
-    const tip = q.issues.map(i => `${i.reason}${i.lines && i.lines.length ? " (lines " + i.lines.join(", ") + ")" : ""}: ${i.advice}`).join("\n");
-    out += `<span class="pf-check bad" title="${_attr(tip)}">Rescan needed</span>`;
-  }
-  if (dp) out += `<span class="pf-check ${dp.current ? "ok" : ""}" title="Statements from the line-by-line review that passed both checks against the code">${dp.facts} reviewed facts${dp.current ? "" : " · out of date"}</span>`;
-  return out;
-}
-let _deepPoll = null;
-function renderDeepBar(d) {
-  const bar = $("progCapBar");
-  const rescan = d.artifacts.filter(a => a.quality && a.quality.status === "rescan");
-  const notDone = d.artifacts.filter(a => a.status !== "captured" && a.quality && !(a.deep && a.deep.current));
-  const div = document.createElement("div");
-  div.className = "deepbar";
-  div.innerHTML = (rescan.length ? `<div class="cb rescan"><b>Rescan needed before the analysis can be relied on:</b>${rescan.map(a =>
-      `<div class="rs-item"><b>${escapeHtml(a.name)}</b> — ${a.quality.issues.map(i => escapeHtml(i.reason + (i.lines && i.lines.length ? " (lines " + i.lines.slice(0, 8).join(", ") + ")" : "") + ": " + i.advice)).join("; ")}
-        <button class="btn-link" data-rescan="${a.id}" type="button">Add screenshots by capturing</button></div>`).join("")}</div>` : "")
-    + `<div class="cb deep"><span id="deepStatus">${notDone.length ? `${notDone.length} file(s) not yet analysed line by line (this runs automatically after each capture).` : "Every file has been reviewed line by line."}</span>
-       <button class="btn-link" data-deep="run" type="button">${notDone.length ? "Analyse now" : "Re-run the analysis"}</button></div>`;
-  bar.appendChild(div);
-  div.querySelectorAll("[data-rescan]").forEach(b => b.addEventListener("click", async () => {
-    try {
-      await _json(`${_pbase()}/recapture`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_id: Number(b.dataset.rescan), mode: "append" }) });
-      toast("Next capture adds to this file: capture the lines listed."); loadProgram();
-    } catch (e) { toast(e.message); }
-  }));
-  div.querySelector("[data-deep]").addEventListener("click", async () => {
-    try { const r = await _json(`${_pbase()}/deepdive`, { method: "POST" }); toast(`Deep analysis started: ${r.total} file(s).`); pollDeep(); }
-    catch (e) { toast(e.message); }
-  });
-  pollDeep(true);
-}
-async function pollDeep(once) {
-  if (_deepPoll) return;
-  let r;
-  try { r = await _json(`${_pbase()}/deepdive`); } catch (e) { return; }
-  const el = $("deepStatus");
-  if (r.job && r.job.running) {
-    if (el) el.textContent = `Reviewing the code line by line: ${r.job.done} of ${r.job.total} file(s) done…`;
-    _deepPoll = setTimeout(() => { _deepPoll = null; pollDeep(); }, 6000);
-  } else if (!once) { _deepPoll = null; loadProgram(); }
-  if (r.job && r.job.errors && r.job.errors.length && el) el.textContent += " Errors: " + r.job.errors.slice(0, 2).join("; ");
-}
 const DEEP_GROUPS = [["What it does", ["purpose", "control_flow"]], ["Business rules and calculations", ["business_rule", "calculation", "configuration"]],
   ["Data read and written", ["data_read", "data_write"]], ["Interfaces and dependencies", ["interface", "dependency"]], ["Screens", ["ui"]],
   ["Error handling", ["error_handling"]], ["Risks and defects", ["security", "data_integrity", "defect"]]];
@@ -990,24 +961,15 @@ function _checkHtml(v) {
   const flags = (v.flags || []).map(f => `<div class="pf-flag"><b>L${f.line}</b> <code>${escapeHtml(f.text)}</code><small>${escapeHtml(f.reason)}</small></div>`).join("");
   return `<div class="pf-verify"><div class="pf-vhead">Transcription check</div><div>${escapeHtml(v.headline || "")}</div>${gaps}${flags}</div>`;
 }
-function _statusText(a) {
-  const p = a.pending || {};
-  if (a.status === "captured" && p.analysing)
-    return p.stage === "adding to the program" ? "analysing · checking" : `analysing · read ${p.read || 0}/${p.frames || a.frames} screenshots`;
-  if (a.status === "captured") return "waiting to analyse";
-  if (a.status === "failed") return "analysis failed";
-  return a.status;
-}
 function _pbase() { return `/api/programs/${encodeURIComponent(_program)}`; }
 function renderCaptureBar(d) {
   const bar = $("progCapBar");
   const t = d.recapture_target;
+  const stuck = !d.session_running && d.artifacts.some(a => a.status === "captured" && !(a.pending && a.pending.analysing));
   bar.innerHTML = (t ? `<div class="cb recap">${t.mode === "append"
-      ? `Next capture adds to <b>${escapeHtml(t.name)}</b>: its screenshots are read together with the new ones as v${(t.version || 1) + 1}.`
-      : `Next capture replaces <b>${escapeHtml(t.name)}</b> as v${(t.version || 1) + 1} (v${t.version || 1} is kept as history).`} <button class="btn-link" data-cb="cancel" type="button">Cancel</button></div>` : "")
-    + (d.waiting ? `<div class="cb wait">${(() => { const busy = d.artifacts.filter(a => a.status === "captured" && a.pending && a.pending.analysing).length;
-        return `${busy ? busy + " analysing now, " : ""}${d.waiting - busy} waiting`; })()} · the report is built once all are done.
-        ${d.artifacts.some(a => a.status === "captured" && a.pending && a.pending.analysing) ? "" : `<button class="btn-link" data-cb="process" type="button">Analyse now</button>`}</div>` : "");
+      ? `Your next capture adds to <b>${escapeHtml(t.name)}</b> — just capture the lines that were missing.`
+      : `Your next capture replaces <b>${escapeHtml(t.name)}</b> (the current version is kept).`} <button class="btn-link" data-cb="cancel" type="button">Cancel</button></div>` : "")
+    + (stuck ? `<div class="cb wait">Some captures are saved but not being read. <button class="btn-link" data-cb="process" type="button">Read them now</button></div>` : "");
   ["progReportHtml", "progReportDocx", "progReportPdf", "progReportZip"].forEach(id => { const el = $(id); if (el) el.classList.toggle("disabled", !!d.waiting); });
   bar.querySelectorAll("[data-cb]").forEach(b => b.addEventListener("click", async () => {
     try {
@@ -1016,12 +978,7 @@ function renderCaptureBar(d) {
     } catch (e) { toast(e.message); }
     loadProgram();
   }));
-  if (d.waiting && !_capPoll) _capPoll = setTimeout(function tick() {
-    if (document.querySelector("#progFiles .fix-ask, #progFiles details[open]")) { _capPoll = setTimeout(tick, 8000); return; }
-    _capPoll = null; loadProgram();
-  }, 8000);
 }
-let _capPoll = null;
 function pickImages() {
   return new Promise(resolve => {
     const inp = document.createElement("input");
@@ -1509,13 +1466,15 @@ loadPrograms();
 const ARTIFACT_TYPES = ["code", "sql", "db_schema", "config", "web", "api", "ui_screen", "job", "other"];
 const TYPE_LABELS = { code: "Source code", sql: "SQL", db_schema: "DB schema", config: "Config", web: "Web page",
   api: "API definition", ui_screen: "App screen", job: "Batch job / SPSS", other: "Other" };
-document.querySelectorAll("#kindSeg .seg-opt").forEach(b => b.addEventListener("click", async () => {
+const KIND_HINT = { auto: "Works out whether it's code or an app screen", code: "Source code, SQL, config, web pages",
+  screen: "A running app's screen: fields, buttons, messages (no data values)" };
+document.querySelectorAll("#kindSeg .seg-opt").forEach(b => b.addEventListener("click", async (ev) => {
+  if (ev.isTrusted) _kindManual = true;
   _captureKind = b.dataset.kind;
   document.querySelectorAll("#kindSeg .seg-opt").forEach(x => x.classList.toggle("active", x === b));
-  $("kindHint").textContent = _captureKind === "screen"
-    ? "A running app's screen: fields, buttons, messages (no data values)" : "Source code, SQL, config, web pages";
+  $("kindHint").textContent = KIND_HINT[_captureKind];
   try { await fetch("/api/session/kind?kind=" + _captureKind, { method: "POST" }); } catch (e) {}
-  if (sessionRunning) toast(_captureKind === "screen" ? "Next capture reads an app screen." : "Next capture reads code.");
+  if (sessionRunning && ev.isTrusted) toast({ auto: "Next capture works out what it is.", screen: "Next capture reads an app screen.", code: "Next capture reads code." }[_captureKind]);
 }));
 
 $("progFixBox").addEventListener("toggle", () => { if ($("progFixBox").open) loadCorrections(); });
@@ -1567,6 +1526,7 @@ function setView(v) {
   $(_view === "review" ? "startSlotReview" : "startSlotCodesnap").after($("captureBlock"));
   document.querySelector(".kind-row").style.display = _view === "review" ? "" : "none";
   if (_view === "codesnap" && _captureKind !== "code") document.querySelector('#kindSeg .seg-opt[data-kind="code"]').click();
+  if (_view === "review" && !_kindManual && _captureKind !== "auto") document.querySelector('#kindSeg .seg-opt[data-kind="auto"]').click();
   $("startSub").textContent = _view === "review"
     ? (_program ? "Each capture is added to the selected program." : "Pick or create a program above, then capture its files and screens.")
     : "Capture, scroll for more, and it builds the report.";

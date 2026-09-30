@@ -56,10 +56,38 @@ _SKIP_KEYS = {"id", "kind", "type", "from", "to", "source", "target", "slug", "g
 _VERBATIM_COLS = {"Evidence", "Location", "Text", "Files", "File", "Component"}   # quoted code and file names
 
 
+_PLURAL = re.compile(r"\b(\d+|one|no)((?:[ -][A-Za-z][\w/-]*){0,3}?)[ -]([A-Za-z]+)\((e?s)\)")
+_NOUNS = ("component|control|credential|file|finding|interface|issue|job|place|platform|program|routine|screen|set|"
+          "statement|store|table|version|class|item|step|risk|user|system|service|library|record|report|rule|error|line|"
+          "field|entity|skill|dependency|gap|account|node|flag|module|page|form|query|test|copy|batch|source|tool")
+_STRAY_PLURAL = re.compile(rf"\b((?:{_NOUNS}))\((e?s)\)(?![\w(])", re.I)
+_ECHO = re.compile(r"\b([A-Za-z0-9][\w ()/-]{3,40}?) in \1\b")
+
+
+def _plural(word, suffix):
+    if word.endswith(("s", "ss", "x", "ch", "sh")):
+        return word + "es"
+    if word.endswith("y") and word[-2:-1] not in "aeiou":
+        return word[:-1] + "ies"
+    return word + suffix
+
+
+def humanize(text: str) -> str:
+    """Write counts the way a person would ("1 file", "3 classes", never "file(s)") and drop echoed phrases."""
+    def fix(m):
+        n, mid, word, suf = m.groups()
+        one = n in ("1", "one")
+        return f"{n}{mid} {word if one else _plural(word, suf)}"
+    text = _PLURAL.sub(fix, text)
+    text = _STRAY_PLURAL.sub(lambda m: _plural(m.group(1), m.group(2)), text)
+    text = _ECHO.sub(r"\1", text)
+    return re.sub(r"(?<=\S)  +(?=\S)", " ", text)
+
+
 def clean(text: str) -> str:
     for rx, rep in _COMPILED:
         text = rx.sub(rep, text)
-    return text
+    return humanize(text)
 
 
 def scrub(obj, key=None):

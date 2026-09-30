@@ -245,7 +245,7 @@ def respace(image_path, text: str) -> tuple:
 
 # ── verification: does every word have the character count the pixels show? ─────────────────────────────────────
 
-VERIFIED, MISMATCH, UNCHECKED, CUT = "verified", "mismatch", "unchecked", "cut"
+VERIFIED, MISMATCH, UNCHECKED, CUT, ROWS = "verified", "mismatch", "unchecked", "cut", "rows"
 
 
 def _exact(meas, line, base) -> bool:
@@ -304,6 +304,37 @@ def check(image_path, text: str) -> dict:
         else:
             continue
         status[body[li][0]] = st
+    heights = [b[1] - b[0] for b in m["bands"]]
+    med = sorted(heights)[len(heights) // 2] if heights else 0
+    centre = [(b[0] + b[1]) / 2 for b in m["bands"]]
+    gaps = sorted(b - a for a, b in zip(centre, centre[1:]))
+    step = gaps[len(gaps) // 2] if gaps else 1
+    left_max = max((len(l) - len(l.lstrip()) for l in plain), default=0)
+    # between two lines that match their rows exactly, the screen and the text must have the same number of rows. More
+    # rows on screen: a line was skipped. Fewer: a line was added. (Both ends exact rules out a word-wrapped line, whose
+    # first row would not match the whole line.)
+    for (r1, l1), (r2, l2) in zip(pairs, pairs[1:]):
+        if r2 - r1 == l2 - l1 or not (_exact(measured[r1], plain[l1], base) and _exact(measured[r2], plain[l2], base)):
+            continue
+        if any(m["deco"][r] for r in range(r1 + 1, r2)) or any("[CUT OFF]" in lines[k]
+                                                               for k in range(body[l1][0] + 1, body[l2][0])):
+            continue                            # a colour swatch, or a cut-off line (not measured) sits in between
+        if r2 - r1 < l2 - l1:
+            # fewer rows than lines: only trusted when no band between is tall enough to be two rows run together
+            # or an undetected row in between (a highlighted cursor line): the rows' spacing says how many are there
+            # (near the gap too: rows run together just above it shift which row matches which line)
+            if any(heights[r] > 1.6 * med for r in range(max(0, r1 - 2), min(len(heights), r2 + 3))) or \
+                    round((centre[r2] - centre[r1]) / step) > r2 - r1:
+                continue
+            for li in range(l1 + 1, l2):
+                status[body[li][0]] = ROWS
+        else:
+            # more rows than lines: count only rows that look like a line of code (normal height, two or more words,
+            # inside the text's columns); a lone glyph, a cursor, an underline or a pop-up is not a skipped line
+            real = sum(1 for r in range(r1 + 1, r2) if 0.8 * med <= heights[r] <= 1.3 * med
+                       and len(measured[r]) >= 2 and measured[r][0][0] + base <= left_max)
+            if real > l2 - l1 - 1:
+                status[body[l2][0]] = ROWS
     return {"grid": True, "status": status, "rows": rows, "x0": m["x0"], "pitch": m["pitch"]}
 
 

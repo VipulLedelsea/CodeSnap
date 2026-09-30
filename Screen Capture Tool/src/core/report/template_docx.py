@@ -289,6 +289,25 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         R.WORDS = False
 
 
+def _pain_points(issues, n=6):
+    """UI findings as short plain sentences, one per distinct problem, with the screen it was seen on."""
+    out, seen = [], set()
+    for f in sorted(issues, key=lambda f: SEV.index(f["severity"])):
+        head, _, rest = f["title"].partition(" — ")
+        detail, _, where = (rest or head).rpartition(": ") if ": " in (rest or head) else (rest or head, "", "")
+        detail = detail.strip() or head
+        if len(detail) >= 88 and not detail.endswith((".", ")")):
+            detail = detail[:detail.rfind(" ")].rstrip(",;") + "…"
+        key = detail.lower()[:40]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f"{_cap(detail.rstrip('.'))}" + (f" ({where.strip()})" if where.strip() else "") + ".")
+        if len(out) == n:
+            break
+    return out
+
+
 def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
     from core.diagrams.render import png
     from . import ratings as RT
@@ -485,20 +504,21 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
                      if f["severity"] in ("critical", "high")}) or 1
     sec_worst = (a["scores"]["security"].get("worst") or {})
     findings_txt = [
-        f"In short, the most important findings are: "
+        {1: "One problem stands out: ", 2: "Two problems stand out: "}.get(len(BR[:3]), "Three problems stand out: ")
         + P.sentence([f"{r_['title'][:1].lower() + r_['title'][1:]}" for r_ in BR[:3]]) + ". "
         + (DA.fragmentation_sentence(DM) + " " if DA.fragmentation_sentence(DM) else "")
         + f"Overall condition is {RT.words(health_c)} (1 is best, 5 is worst)"
         + (", and the application relies on technology the vendor no longer supports" if eol else "")
-        + f". The recommended direction is to {disposition.lower()}: {_disp_plain(v).rstrip('.').lower()} (Section 12).",
+        + f". {_recommend(disposition, _disp_plain(v))}",
         (f"Financial controls (Section 8.6). " + _cap(P.sentence([f"{r_[0].lower()} is rated {r_[3]} – {P.LEVEL[r_[3]]}"
                                                               for r_ in FCR if r_[3] and r_[3] >= 4]))
          + ". For a payment system these touch segregation of duties, audit integrity and undetected misstatement.")
         if any(r_[3] and r_[3] >= 4 for r_ in FCR) else "",
-        (f"Evidence quality (Section 13.2). The copies of {len(RQ)} of the {len(arts)} source files are incomplete or unclear "
-         f"in places and must be re-obtained before the findings that rest on those lines can be relied on: "
+        ("Evidence quality (Section 13.2). "
+         + (f"One of the {len(arts)} source files, " if len(RQ) == 1 else f"{len(RQ)} of the {len(arts)} source files, ")
          + P.sentence([f"{r_['name']} ({DDV.report_reason(r_['issues'][0])})" for r_ in RQ[:4]])
-         + ". Statements that would rest on those lines are held back.") if RQ else "",
+         + (", is" if len(RQ) == 1 else ", are") + " incomplete or unclear in places. A complete copy is needed before "
+         "the findings that rest on those lines can be relied on, so statements that would rest on them are held back.") if RQ else "",
         ("Code review (Section 3.6). The components have not yet been reviewed line by line; this report rests on the "
          "automated checks only.") if not DD else
         (f"Code review (Section 3.6). Each component was reviewed line by line; "
@@ -507,8 +527,10 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
         (f"Architecture (Sections 4.4 and 5.5). The application runs on {len(HP)} platforms ({', '.join(HP)}), exchanges data "
          f"through files and shared databases, and needs {len(skill_list)} scarce skill sets ({', '.join(skill_list)}).")
         if len(HP) >= 3 else "",
-        f"Security (Section 8). The review found {sec.get('critical', 0)} critical, {sec.get('high', 0)} high and "
-        f"{sec.get('medium', 0)} medium issues. The most serious: {P.sentence([f'{w} ({sv})' for w, sv in worst3])}. "
+        "Security (Section 8). We found " + _and([f"{n} {k}" for k, n in (("critical", sec.get("critical", 0)),
+            ("high", sec.get("high", 0)), ("medium", sec.get("medium", 0))) if n] or ["no significant"]) + " issues"
+        + (", none of them critical" if not sec.get("critical") and (sec.get("high") or sec.get("medium")) else "")
+        + f". The most serious: {P.sentence([f'{w} ({sv})' for w, sv in worst3])}. "
         + ("Because the application handles personal data, a breach would expose personal records, so these issues are "
            "rated one level higher than they otherwise would be. " if pii else "")
         + f"Security posture is rated {RT.words(sec_c)}, derived from the control ratings in 8.1.",
@@ -542,7 +564,7 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
                else "Within 60 days" if worst_sev == "high" else "Within 90 days")
         cond = f"{_cap(P.what(rule, fs[0]['title']))} ({', '.join(files[:3])})"
         if P.why(rule):
-            cond += f". Why it matters: {P.why(rule)}."
+            cond += f". {_cap(P.why(rule))}."
         act = _cap(P.fix(rule) or (fs[0].get("detail") or "Fix the finding")) + "."
         if rule == "SEC-CRED":
             act = "Rotate the exposed passwords now, then move them to a secrets store and remove them from the code."
@@ -594,8 +616,7 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
     ux_issues = [f for f in findings if f["category"] in ("usability", "accessibility")]
     doc.replace("Record pain points in the words", [
         "Stakeholder interviews were not part of this review, so pain points are not recorded in stakeholders' words "
-        "(open item). Issues observable in the application itself:"] +
-        [f"{f['title']}" for f in sorted(ux_issues, key=lambda f: SEV.index(f['severity']))[:6]])
+        "(open item). What the screens themselves show:"] + _pain_points(ux_issues))
     if not ux_issues:
         pass
     doc.unknown("Business pain points in stakeholders' words (interviews)", "2.5")
@@ -666,10 +687,15 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
             cs = [c for c in AM["components"] if c["layer"] == layer]
             if cs:
                 anchor = doc.new_para(f"{layer} layer: " + "; ".join(
-                    f"{c['name']}, {c['role'].lower()}" + (f" in {c['language']}" if c["language"] else "")
+                    f"{c['name']}, {c['role'].lower()}" + (f" in {c['language']}" if c["language"] and
+                                                            c["language"].lower() not in c["role"].lower() else "")
                     + (f" using {', '.join(c['tech'])}" if c["tech"] else "") for c in cs) + ".", anchor, bullet=True)._p
         if AM["stores"]:
-            anchor = doc.new_para("Data it holds: " + ", ".join(sorted(AM["stores"])[:12]) + ".", anchor, bullet=True)._p
+            held = sorted(AM["stores"])[:12]
+            have = [x for x in held if not x.endswith(" (not provided)")]
+            gone = [x[:-len(" (not provided)")] for x in held if x.endswith(" (not provided)")]
+            anchor = doc.new_para("Data it holds: " + ", ".join(have or ["none provided"]) + "."
+                                  + (f" Referenced but not provided: {', '.join(gone)}." if gone else ""), anchor, bullet=True)._p
         anchor = doc.new_para(f"Platforms hosting code or data: {', '.join(HP)}.", anchor, bullet=True)._p
         anchor = doc.new_para("Component inventory", anchor, bold=True)._p
         ct = _table_after(doc, T[20], anchor, ["Component", "Layer", "Role", "Technology", "Reads / uses", "Writes"],
@@ -747,9 +773,10 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
     in_files = sorted(s_ for s_ in rd_ if s_.endswith("-FILE") and not wr_.get(s_))
     out_files = sorted(s_ for s_ in wr_ if s_.endswith("-FILE"))
     shared_ro = sorted({o["store"] for o in DM["occurrences"] if o["placeholder"] and o["business"] and "W" not in o["access"]})
-    ups = [f"the system that produces {f_} (not identified)" for f_ in in_files] + (
-        [f"the systems that own the shared tables {', '.join(shared_ro)} (not identified)"] if shared_ro else []) + \
+    ups = ([f"whatever produces {_and(in_files)}"] if in_files else []) + (
+        [f"the owners of the shared tables {_and(shared_ro)}"] if shared_ro else []) + \
         [m["name"] for m in extern if m.get("kind") in ("external_system", "system")]
+    ups_unnamed = bool(in_files or shared_ro)
     downs = [f"the system that receives {f_}" + (" (in practice the accounting system, a bank or EFT process, or district "
                                                   "notification; to be named by APP ID)" if "PAY" in f_ else " (to be named)")
              for f_ in out_files]
@@ -758,7 +785,8 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
         doc.unknown("Name the downstream systems (by APP ID) that receive " + ", ".join(out_files), "4.3", "IT")
     if ups:
         doc.unknown("Name the upstream systems (by APP ID) that produce " + (", ".join(in_files) or "the shared data"), "4.3", "IT")
-    for starts, text in (("Systems this application depends on", "Systems this application depends on: " + (P.sentence(ups) or "none identified in the source") + "."),
+    for starts, text in (("Systems this application depends on", "Systems this application depends on: " + (P.sentence(ups) or "none identified in the source") + "."
+                          + (" None of these has been named yet." if ups_unnamed else "")),
                          ("Systems that depend on this application", "Systems that depend on this application: " + (
                              P.sentence(downs) if downs else doc.unknown("Downstream systems", "4.3", "IT")) + "."),
                          ("Shared components", "Shared components: " + (
@@ -779,12 +807,10 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
                            "modernization must first decide which copy is authoritative and how the rest are reconciled."))
     obs_src = [(t, (f"The application runs on {len(HP)} platforms: {', '.join(HP)}." if t.startswith("The application spans")
                     else w), m) for t, w, m in obs_src]
-    obs = [f"{t}. What we see: {w} Why it matters: {m}" for t, w, m in obs_src]
+    obs = [f"{t}. {w} {m}" for t, w, m in obs_src]
     if (a["scores"].get("coupling") or {}).get("score") is not None:
-        obs.append(f"Code-level coupling (calls between files) is rated {R.rating_words(a['scores']['coupling']['score'])}: "
-                   + R.explain_program(a, "coupling").split(". ", 1)[-1]
-                   + " This score counts program-to-program calls only; the data-level coupling described above is not "
-                     "included in it.")
+        obs.append(f"Code-level coupling (calls between files) is {R.explain_program(a, 'coupling')} This only counts "
+                   "calls from one program to another, not the shared data described above.")
     doc.replace("Record structural concerns", obs)
 
     # 5 data
@@ -952,9 +978,11 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
     stab = [i["title"] for i in (phases.get("stabilize") or {}).get("items", [])]
     mod = [i["title"] for i in (phases.get("modernize") or {}).get("items", [])]
     doc.replace("Separate remediation that can be addressed independently", [
-        "Quick wins to reduce risk now, independent of modernization: " + ("; ".join(stab[:6]) or "none") + ".",
-        (f"Debt best retired through the recommended disposition ({disposition}, Section 12) rather than fixed now: "
-         + "; ".join(mod[:6]) + ".") if mod else
+        ("Quick wins that reduce risk now, whatever is decided about modernization: "
+         + _and([x[:1].lower() + x[1:] for x in stab[:6]]) + ".") if stab else
+        "There are no quick wins separate from the modernization work.",
+        (f"Debt that is better retired through the recommended {_noun(disposition)} (Section 12) than fixed now: "
+         + _and([x[:1].lower() + x[1:] for x in mod[:6]]) + ".") if mod else
         f"Because the recommended disposition ({disposition}) keeps the current code, every item in 7.3 can be fixed directly."])
 
     # 8 security
@@ -1013,16 +1041,16 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
                    if not restricted else "Change the password and move it to a secrets store",
                    owner_it, (today + timedelta(days=days)).isoformat(), "Open", "Appendix D" if restricted else ""])
     rows(T[26], vr)
-    anchor = doc.new_para("What these findings mean, in plain terms:", T[26]._tbl)._p
+    anchor = doc.new_para("What these findings mean:", T[26]._tbl)._p
     for g in vgroups.values():
         f, ids = g["f"], g["ids"]
         rule = f.get("rule") or ""
         idtxt = ids[0] if len(ids) == 1 else f"{ids[0]} to {ids[-1]}" if len(ids) > 2 else " and ".join(ids)
         txt = f"{idtxt}: {P.what(rule, f['title'])}."
         if P.why(rule):
-            txt += f" Why it matters: {P.why(rule)}."
+            txt += f" {_cap(P.why(rule))}."
         if P.fix(rule):
-            txt += f" Fix: {P.fix(rule)}."
+            txt += f" To fix it, {P.fix(rule)}."
         anchor = doc.new_para(txt, anchor, bullet=True)._p
     unsup = [t for t in techs if t.get("status") in ("eol", "legacy")]
     doc.replace("List components that can no longer receive security patches", [
@@ -1053,11 +1081,13 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
                   str(r_["L"]), str(r_["I"]), str(r_["score"]), r_["rating"], r_["existing"],
                   f"{r_['mit']}. Owner: {r_['owner']}"] for r_ in risks])
     _col_widths(T[28], [0.65, 1.9, 0.85, 0.6, 0.55, 0.5, 0.6, 1.1, 1.5])
-    anchor = doc.new_para("Why each risk is rated as it is (likelihood reflects end-of-life status, skills, the code "
-                          "findings and incident history where known; impact reflects what the component does to money "
-                          "and data):", T[28]._tbl)._p
+    anchor = doc.new_para("How each rating was reached. Likelihood comes from end-of-life status, skills, what the code "
+                          "shows and incident history where it is known; impact comes from what the component does to "
+                          "money and data" + ("" if yes(s["criticality_confirmed"]) or "Tier 1" not in (tier or "") else ", and uses a Tier 1 rating the "
+                          "business owner has not yet confirmed") + ".", T[28]._tbl)._p
     for r_ in risks:
-        anchor = doc.new_para(f"{r_['id']}: likelihood {r_['why_L']}; impact {r_['why_I']}.", anchor, bullet=True)._p
+        anchor = doc.new_para(f"{r_['id']}: {_because('likelihood', r_['why_L'])}; {_because('impact', r_['why_I'])}.",
+                              anchor, bullet=True)._p
     t29 = T[29]
     for row in t29.rows[1:]:
         lab = row.cells[0].text
@@ -1128,7 +1158,7 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
     })
     acc = [f for f in uxf if (f["rule"] or "").startswith("ACC")]
     doc.replace("Record redesign opportunities in order of user benefit", [
-        f"User experience and accessibility are rated {R.explain_program(a, 'ux')}"] + ([f"Accessibility (measured against WCAG 2.1 AA, the usual legal standard): "
+        f"User experience and accessibility are {R.explain_program(a, 'ux')}"] + ([f"Accessibility (measured against WCAG 2.1 AA, the usual legal standard): "
                                    f"{P.sentence(P.reasons_words(acc, 4))}."] if acc else []))
 
     # 12 options
@@ -1255,8 +1285,8 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
                    f"Program source set: {x['name']}; {qtxt}"])
     rows(T[40], ev)
     assumptions = ["Findings reflect the source files listed in 13.2; components not provided are listed in 4.3 and are not scored.",
-                   ("Business criticality is provisional (" + (tier or "not entered") + "); impact ratings in Section 9 use it "
-                    "and change if the business owner rates it differently.") if not yes(s["criticality_confirmed"]) else
+                   ("Business criticality is provisional (" + ((tier or "").split(" (")[0] or "not entered") + ", not yet confirmed "
+                    "by the business owner). The impact ratings in Section 9 use it and would change with a different tier.") if not yes(s["criticality_confirmed"]) else
                    "Business criticality was confirmed by the business owner.",
                    "Support dates are from published vendor lifecycle information current at the report date."]
     if a["confidence"]["level"] != "high":
@@ -1551,6 +1581,37 @@ def _health_line(a):
         return "Not rated"
     return (f"{c} – {LEVEL_WORD[c].title()} (1 is best, 5 is worst). This is the weighted average of the health scorecard "
             f"in Section 6.1, where {rated} of the 7 areas could be rated from the evidence.")
+
+
+_NOUNS = {"re-architect": "re-architecture", "replace": "replacement", "refactor": "refactoring",
+          "re-platform": "re-platforming", "retain": "retention", "retire": "retirement", "rehost": "rehosting"}
+
+
+def _noun(disposition):
+    verb = disposition.split(" (")[0].lower()
+    return _NOUNS.get(verb, verb)
+
+
+def _because(what, basis):
+    n, sep, why = str(basis).partition(": ")
+    return f"{what} {n} because {why}" if sep and n.strip().isdigit() else f"{what} {basis}"
+
+
+def _and(items):
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+_HOW = {"phased, by component": "in phases, component by component", "phased": "in phases"}
+
+
+def _recommend(disposition, plain):
+    verb, _, how = disposition.partition(" (")
+    how = _HOW.get(how.rstrip(")"), how.rstrip(")"))
+    plain = plain.rstrip(".").replace(": ", ", ")
+    if "component by component" in plain:
+        how = how.replace(", component by component", "")
+    return (f"Our recommendation is to {verb.lower()}" + (f" {how}" if how else "") + f" (Section 12): "
+            f"{plain[:1].lower() + plain[1:]}.")
 
 
 def _disp_plain(v):
