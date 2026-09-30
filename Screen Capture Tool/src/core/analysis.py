@@ -248,6 +248,9 @@ EXTRACT_JSON_SYSTEM_PROMPT = (
 )
 
 
+_numbers_note = {}
+
+
 def _normalize_extract(text: str) -> dict:
     """Turn the model's reply into {'raw': <verbatim text>, 'corrections': [ ... ]}.
 
@@ -272,10 +275,15 @@ def _normalize_extract(text: str) -> dict:
             lines.pop()
             nums = nums[:-1]
         from core.verify import valid_numbers
+        raw_n = len([n for n in nums if n is not None])
         nums = valid_numbers(nums, lines)
+        if raw_n and not nums:
+            _numbers_note["rejected"] = raw_n
     else:
         nums = []
-    return {"raw": raw.strip("\n"), "corrections": corr, "numbers": nums}
+    out = {"raw": raw.strip("\n"), "corrections": corr, "numbers": nums,
+           "numbers_seen": "line_numbers" in data, "numbers_rejected": _numbers_note.pop("rejected", 0)}
+    return out
 
 
 EXTRACT_INDENT_SYSTEM_PROMPT = (
@@ -370,6 +378,8 @@ def extract_structured(client, path: Path) -> dict:
     out["verify"] = verify_screenshot(client, path, out["raw"])
     out["raw"] = out["verify"].pop("text")
     out["verify"]["numbers"] = out.get("numbers") or []
+    out["verify"]["numbers_seen"] = out.get("numbers_seen", False)          # did the model return the key at all?
+    out["verify"]["numbers_rejected"] = out.get("numbers_rejected", 0)      # numbers returned but not consistent
     return out
 
 
@@ -817,13 +827,17 @@ def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8
 
 
 def _prepend(merged: list, b: list, min_overlap: int = 2) -> "list | None":
-    """b is an earlier part of the file when its last lines are exactly where merged begins."""
-    for k in range(min(len(b), len(merged), 60), min_overlap - 1, -1):
-        head, tail = merged[:k], b[-k:]
-        if k < 4 and sum(len(_re.sub(r"\W", "", x)) for x in head) < 12:
-            continue
-        if min(_sim(x, y) for x, y in zip(tail, head)) >= 0.85:
-            return b[:-k] + merged
+    """b is an earlier part of the file when its last lines are where merged begins. Editors with sticky scroll pin the
+    enclosing lines (<html>, a class or function header) at the top of every screen, so the match may start a few rows
+    into merged; those pinned rows are dropped."""
+    for skip in range(0, 7):
+        head_all = merged[skip:]
+        for k in range(min(len(b), len(head_all), 60), max(min_overlap, 3 if skip else min_overlap) - 1, -1):
+            head, tail = head_all[:k], b[-k:]
+            if k < 4 and sum(len(_re.sub(r"\W", "", x)) for x in head) < 12:
+                continue
+            if min(_sim(x, y) for x, y in zip(tail, head)) >= 0.85:
+                return b[:-k] + head_all
     return None
 
 
@@ -847,18 +861,36 @@ def stitch_parts(parts: list) -> str:
 
 
 def _stitch(parts: list, prefer, notes: dict) -> str:
-    from core.verify import sideways_merge
-    merged: list = []
+    from core.verify import sideways_merge, sideways_views
+    frames = []
     for part in parts:
         lines = part.split("\n")
         while lines and not lines[0].strip():
             lines.pop(0)
         while lines and not lines[-1].strip():
             lines.pop()
-        if not lines:
-            continue
+        if lines:
+            frames.append(lines)
+    # screens taken after scrolling right show pieces of lines: stitch the whole-line screens first, then join the
+    # pieces onto them, so a capture that starts (or wanders) sideways never becomes the base of the file
+    sidx = sideways_views(frames)
+    if len(sidx) == len(frames):
+        sidx = set()
+    order = [f for i, f in enumerate(frames) if i not in sidx] + [f for i, f in enumerate(frames) if i in sidx]
+    side_ids = {id(frames[i]) for i in sidx}
+    merged: list = []
+    for fi, lines in enumerate(order):
         if not merged:
             merged = lines
+            continue
+        if id(lines) in side_ids:
+            got = sideways_merge(merged, lines, force=True)
+            if got is not None:
+                merged = got[0]
+                notes["sideways"] = notes.get("sideways", 0) + got[1]
+                notes.setdefault("joined", []).extend(getattr(sideways_merge, "joined", []))
+            else:
+                notes["sideways_unmatched"] = notes.get("sideways_unmatched", 0) + 1
             continue
         if _mostly_contained(lines, merged):
             merged = _upgrade_cut(merged, lines)  # a re-capture adds nothing new, but may show cut lines whole
@@ -872,6 +904,11 @@ def _stitch(parts: list, prefer, notes: dict) -> str:
         stitched = _stitch_two(merged, lines, prefer=prefer)
         if stitched is None:
             stitched = _prepend(merged, lines)   # a screenshot added later can show an earlier part of the file
+        if stitched is None:
+            # no overlap with anything read so far: lines between these two screens may never have been on screen
+            prev = next((l for l in reversed(merged) if l.strip()), "")
+            nxt = next((l for l in lines if l.strip()), "")
+            notes.setdefault("breaks", []).append((prev.rstrip(), nxt.rstrip()))
         merged = _upgrade_cut(stitched if stitched is not None else merged + [""] + lines, lines)
     return "\n".join(merged)
 

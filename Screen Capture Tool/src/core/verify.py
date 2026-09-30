@@ -25,6 +25,8 @@ REASONS = {
     "cut": "cut off at the edge of the screen and never seen whole: turn on word wrap or scroll sideways, then use "
            "Add screenshots",
     "wrapped": "joined from a word-wrapped line; check the join",
+    "break": "no overlap between two screens here, so lines between them may never have been on screen: scroll back "
+             "over this part more slowly and use Add screenshots",
     "edited": "changed by the compile-fix step after reading; compare it with the screenshot",
 }
 
@@ -74,14 +76,44 @@ def join_sideways(a: str, b: str, min_k: int = 8):
         return None
     if b0 in a0:
         return a
-    b_lead = b.lstrip()
+    b_lead = re.sub(r"^\s*(\[CUT OFF\]\s*)?", "", b)      # a piece cut at its left edge starts with the marker
     for p in range(max(0, len(a0) - len(b0)), len(a0) - min_k + 1):
         if b0.startswith(a0[p:]):
             return a0 + b_lead[len(a0) - p:]
     return None
 
 
-def sideways_merge(merged: list, lines: list):
+def _piece_of(l: str, g: str) -> bool:
+    """l is part of line g seen after scrolling right: it starts part-way into g, or runs on past g's cut end."""
+    l0, g0 = " ".join(_stem(l).split()), " ".join(_stem(g).split())
+    if len(l0) < 8 or not g0:
+        return False
+    if l0 in g0:
+        return not g0.startswith(l0)
+    j = join_sideways(g, l)
+    return j is not None and j != g
+
+
+def sideways_views(frames: list) -> set:
+    """Indexes of the screens that were taken scrolled right: most of their lines are cut at the left edge, or are
+    pieces of lines another screen shows from their start."""
+    out = set()
+    for i, f in enumerate(frames):
+        long_ = [l for l in f if len(_stem(l).strip()) >= 8]
+        if not long_:
+            continue
+        leadcut = sum(1 for l in long_ if l.lstrip().startswith("[CUT OFF]"))
+        if leadcut >= 0.5 * len(long_):
+            out.add(i)
+            continue
+        others = [g for j, fr in enumerate(frames) if j != i for g in fr]
+        pieces = sum(1 for l in long_ if any(_piece_of(l, g) for g in others))
+        if pieces >= 0.5 * len(long_):
+            out.add(i)
+    return out
+
+
+def sideways_merge(merged: list, lines: list, force: bool = False):
     """If `lines` is a sideways-scrolled view of text already in `merged` (pieces that start part-way into known lines),
     return (merged with the rest of cut lines joined on, number of lines extended); otherwise None. A sideways view is
     never appended as new lines, even when it adds nothing."""
@@ -109,7 +141,7 @@ def sideways_merge(merged: list, lines: list):
         elif not _stem(out[i]).strip().startswith(b0):
             piece += 1             # starts part-way into a known line: the view is scrolled right
         pos = i + 1
-    if ext + piece >= max(3, 0.4 * len(cand)) and miss <= 0.25 * len(cand):
+    if force or (ext + piece >= max(3, 0.4 * len(cand)) and miss <= 0.25 * len(cand)):
         sideways_merge.joined = joined
         return out, ext
     return None
@@ -234,11 +266,21 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
             flags.append({"line": i, "text": l.strip()[:160], "reason": REASONS[s]})
         else:
             counts["unchecked"] += 1
+    lines_ = (code or "").split("\n")
+    for b in notes.get("breaks") or []:
+        prev, nxt = b if isinstance(b, (list, tuple)) else ("", b)
+        nb = [k for k, l in enumerate(lines_) if l.strip()]
+        i = next((nb[j + 1] for j in range(len(nb) - 1)
+                  if lines_[nb[j]].rstrip() == prev and lines_[nb[j + 1]].rstrip() == nxt), None)
+        if i is not None:
+            flags.append({"line": i + 1, "text": nxt.strip()[:160], "reason": REASONS["break"]})
+    flags.sort(key=lambda f: f["line"])
     total = sum(counts.values())
     gaps = notes.get("gaps") or []
     out = {"lines": total, **counts, "numbers": bool(notes.get("numbers")), "gaps": gaps,
            "first_line": notes.get("first_line"), "last_line": notes.get("last_line"),
-           "sideways": notes.get("sideways", 0), "wrapped": notes.get("wrapped", 0), "flags": flags[:50]}
+           "sideways": notes.get("sideways", 0), "wrapped": notes.get("wrapped", 0), "flags": flags[:50],
+           "breaks": len(notes.get("breaks") or [])}
     out["headline"] = headline(out)
     return out
 
@@ -265,4 +307,6 @@ def headline(v: dict) -> str:
     s = ", ".join(bits) + "."
     if v.get("gaps"):
         s += " Never on screen: " + ", ".join(_span(g) for g in v["gaps"][:6]) + "."
+    if v.get("breaks"):
+        s += f" {v['breaks']} place(s) where two screens don't overlap, so lines may be missing there."
     return s

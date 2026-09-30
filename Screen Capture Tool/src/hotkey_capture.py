@@ -236,9 +236,22 @@ class App:
         try:
             from AppKit import NSWorkspace
             app = NSWorkspace.sharedWorkspace().frontmostApplication()
-            return app.processIdentifier() in (os.getpid(), os.getppid()) or app.localizedName() == "CodeSnap"
+            if app.processIdentifier() in (os.getpid(), os.getppid()) or app.localizedName() == "CodeSnap":
+                return True
         except Exception:  # noqa: BLE001 - not macOS / no AppKit: capture as before
             return False
+        # CodeSnap opened in a browser tab: the front window's title is the page title ("Ledelsea — CodeSnap")
+        try:
+            import Quartz
+            pid = app.processIdentifier()
+            wins = Quartz.CGWindowListCopyWindowInfo(
+                Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements, Quartz.kCGNullWindowID)
+            for w in wins or []:
+                if w.get("kCGWindowOwnerPID") == pid and w.get("kCGWindowLayer", 0) == 0:
+                    return "CodeSnap" in str(w.get("kCGWindowName") or "")
+        except Exception:  # noqa: BLE001
+            pass
+        return False
 
     def _burst_loop(self, session_dir):
         from core.capture import capture_full_png, capture_region_fixed, next_png_path
