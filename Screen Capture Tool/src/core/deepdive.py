@@ -274,6 +274,20 @@ def _log(store, step, artifact_id, model, msg, ms):
                   error="output truncated (max_tokens)" if getattr(msg, "stop_reason", None) == "max_tokens" else None)
 
 
+def _occurrences(q, lines):
+    """Every place the (whitespace-normalised) quote occurs, as (first line, last line); quotes may span up to 4 lines."""
+    n, out = len(lines), []
+    for i in range(1, n + 1):
+        if q not in _norm(" ".join(lines[i - 1:i + 3])):
+            continue
+        if i < n and q in _norm(" ".join(lines[i:i + 3])) and q not in _norm(lines[i - 1]):
+            continue
+        j = next(j for j in range(i, min(n, i + 3) + 1) if q in _norm(" ".join(lines[i - 1:j])))
+        if not out or out[-1] != (i, j):
+            out.append((i, j))
+    return out
+
+
 def check_facts(facts, text, bad=()):
     """Hold each fact to the file: the quote must be in the file. Returns (kept, corrected, rejected, unverifiable)."""
     lines = text.split("\n")
@@ -294,20 +308,13 @@ def check_facts(facts, text, bad=()):
             continue
         a, b = (ls + ls)[:2] if ls else (0, 0)
         a, b = min(a, b), max(a, b)
-        window = _norm(" ".join(lines[max(0, a - 2):min(n, b + 1)])) if a else ""
-        if not (a and q in window):
-            hits = [i for i, l in enumerate(lines, 1) if q in _norm(l)]
-            if not hits:
-                joined = _norm(" ".join(lines))
-                if q not in joined:
-                    rejected.append({**f, "why": "quote not found in the file"})
-                    continue
-                hits = [i for i in range(1, n + 1) if q[:20] in _norm(" ".join(lines[i - 1:i + 3]))][:1]
-                if not hits:
-                    rejected.append({**f, "why": "quote not found in the file"})
-                    continue
-            span = max(0, b - a)
-            a, b = hits[0], min(n, hits[0] + span)
+        cited = _norm(" ".join(lines[max(0, a - 1):min(n, b)])) if a else ""
+        if not (a and q in cited):
+            spans = _occurrences(q, lines)
+            if not spans:
+                rejected.append({**f, "why": "quote not found in the file"})
+                continue
+            a, b = min(spans, key=lambda sp: abs(sp[0] - a) if a else sp[0])
             corrected += 1
         f = {**f, "lines": [a, b], "quote": f.get("quote").strip()}
         if all(i in bad for i in range(a, b + 1)):
