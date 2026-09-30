@@ -63,12 +63,12 @@ class Doc:
         self.open_items.append((what, section, owner))
         return UNKNOWN
 
-    def new_para(self, text, after_el, bullet=False, italic=False):
+    def new_para(self, text, after_el, bullet=False, italic=False, bold=None):
         el = deepcopy(self.bullet_proto if bullet and self.bullet_proto is not None else self.proto)
         after_el.addnext(el)
         from docx.text.paragraph import Paragraph
         p = Paragraph(el, self.d)
-        _set_para(p, text, italic=italic)
+        _set_para(p, text, italic=italic, bold=bold)
         return p
 
     def replace(self, starts, texts, bullet=False):
@@ -278,6 +278,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
     app_id = s["app_id"] or f"APP-{num}"
     name = report["program"]
     doc = Doc()
+    T = list(doc.d.tables)      # the template's tables, fixed before any new table is inserted
     comps = a["components"]
     findings = [f for f in store.findings() if f.get("status") not in ("dismissed", "fixed")]
     sec_f = [f for f in findings if f["category"] in ("security", "vulnerability", "ui_security", "website", "privacy")]
@@ -292,6 +293,8 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
     sessions = store._all("SELECT MIN(started) AS a FROM capture_session") if _has_col(store, "capture_session", "started") else []
     start = (sessions[0]["a"] if sessions and sessions[0]["a"] else store.info.get("created") or "")[:10]
     period = f"{start or UNKNOWN} to {today.isoformat()}"
+    from . import architecture as A_
+    AM = A_.build(store, a, techs)
     risks = _risk_rows(a, num)
     pii = any(f["category"] == "privacy" or f.get("rule") == "SEC-PII" for f in findings) or any(c.get("student_data") for c in comps)
     top = max(risks, key=lambda r: r["score"]) if risks else None
@@ -312,7 +315,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
     total = a["roadmap"]["total"]
 
     # cover, contents, rating scales
-    kv(doc.d.tables[0], {"Application": f"{name} ({app_id})", "Client": s["client"] or doc.unknown("Client organization", "Cover"),
+    kv(T[0], {"Application": f"{name} ({app_id})", "Client": s["client"] or doc.unknown("Client organization", "Cover"),
                          "Engagement": s["engagement"] or doc.unknown("Engagement name", "Cover"), "Version": s["version"],
                          "Date": today.strftime("%B %d, %Y"), "Classification": s["classification"]}, start=0)
     _fill_toc(doc)
@@ -330,13 +333,13 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
                      scales._p.getprevious())
 
     # document control
-    kv(doc.d.tables[3], {"Client": s["client"] or UNKNOWN, "Engagement": s["engagement"] or UNKNOWN, "Application name": name,
+    kv(T[3], {"Client": s["client"] or UNKNOWN, "Engagement": s["engagement"] or UNKNOWN, "Application name": name,
                          "Application ID": app_id, "Report version": s["version"], "Assessment period": period,
                          "Prepared by": s["prepared_by"], "Technical reviewer": s["technical_reviewer"] or doc.unknown("Technical reviewer", "Document control", "Assessment lead"),
                          "Business owner reviewer": s["business_owner"] or doc.unknown("Business owner reviewer", "Document control"),
                          "IT reviewer": s["it_reviewer"] or doc.unknown("IT reviewer", "Document control", "IT"),
                          "Classification": s["classification"], "Related applications": s["related_apps"] or "None identified"})
-    rows(doc.d.tables[4], [[s["version"].split()[0].lstrip("v"), today.isoformat(), s["prepared_by"], "Assessment report issued"]])
+    rows(T[4], [[s["version"].split()[0].lstrip("v"), today.isoformat(), s["prepared_by"], "Assessment report issued"]])
 
     # 1 summary
     snap = {"Purpose in one sentence": s["purpose"] or doc.unknown("Purpose of the application in one sentence", "1.1"),
@@ -354,7 +357,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
                                               for t in eol[:5]) or "None identified",
             "Recommended disposition": f"{disposition}: {_disp_plain(v)}",
             "Recommended timing": horizon}
-    kv(doc.d.tables[5], snap)
+    kv(T[5], snap)
     sec = a["security"]["by_severity"]
     from . import plain as P
     top_sec = sorted(sec_f, key=lambda f: SEV.index(f["severity"]))
@@ -401,17 +404,17 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         if rule and P.why(rule):
             cond += f". Why it matters: {P.why(rule)}."
         imm.append([str(len(imm) + 1), cond, it["action"], "IT", urg])
-    rows(doc.d.tables[6], imm, empty="None")
+    rows(T[6], imm, empty="None")
 
     # 2 business context
-    kv(doc.d.tables[7], {"Business capability": s["purpose"] or doc.unknown("Business capability supported", "2.1"),
+    kv(T[7], {"Business capability": s["purpose"] or doc.unknown("Business capability supported", "2.1"),
                          "Regulatory": s["regulatory_basis"] or doc.unknown("Regulatory, contractual or policy basis", "2.1"),
                          "Business owner": s["business_owner"] or UNKNOWN,
                          "Subject matter experts": doc.unknown("Subject matter experts", "2.1"),
                          "Year introduced": doc.unknown("Year introduced and major rewrites", "2.1"),
                          "Known drivers of change": doc.unknown("Known drivers of change", "2.1")})
     screens = [e for e in store.entities("screen")]
-    rows(doc.d.tables[8], [["Business users of the application screens", UNKNOWN, doc.unknown("Number of users by group", "2.2"),
+    rows(T[8], [["Business users of the application screens", UNKNOWN, doc.unknown("Number of users by group", "2.2"),
                             f"{len(screens)} screen(s): " + ", ".join(e['name'][:40] for e in screens[:4]) if screens else UNKNOWN,
                             UNKNOWN]] + ([["Batch schedule (no interactive users)", "Internal", "Not applicable",
                                            "Scheduled batch jobs", UNKNOWN]] if store.entities("job") else []))
@@ -436,8 +439,8 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
     jobs = store.entities("job")
     for jb in jobs[:6]:
         steps.append([str(len(steps) + 1), "Scheduler", f"Runs batch job {jb['name']}", "Automated", UNKNOWN, UNKNOWN, ""])
-    rows(doc.d.tables[9], steps, empty="No process steps could be derived from the source; to be mapped with stakeholders.")
-    rows(doc.d.tables[10], [[f"Batch job {jb['name']}", doc.unknown(f"Schedule of batch job {jb['name']}", "2.4", "IT"),
+    rows(T[9], steps, empty="No process steps could be derived from the source; to be mapped with stakeholders.")
+    rows(T[10], [[f"Batch job {jb['name']}", doc.unknown(f"Schedule of batch job {jb['name']}", "2.4", "IT"),
                              "High", UNKNOWN] for jb in jobs[:6]],
          empty="No scheduled cycles were identified in the source; business calendar to be confirmed with the business owner.")
     ux_issues = [f for f in findings if f["category"] in ("usability", "accessibility")]
@@ -461,7 +464,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
     if any("screen" in t or "ui" in t for t in types) or kinds.get("screen"):
         app_type = ", ".join(sorted(set(app_type.split(", ")) - {UNKNOWN} | {"Online screens"}))
     cobolish = [x for x in arts if re.search(r"cobol|rpg|pl/i|assembler|jcl|ims", (x.get("language") or "").lower())]
-    kv(doc.d.tables[11], {
+    kv(T[11], {
         "Application type": app_type,
         "Build origin": "Custom built (application source code is maintained by the client)",
         "Legacy lineage": (f"{len(cobolish)} of {len(arts)} files are mainframe or midrange languages "
@@ -481,7 +484,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
                         "; ".join(sorted({str(t.get("eol") or t.get("support") or "") for t in ts} - {""})) or UNKNOWN,
                         "; ".join(sorted({str(t.get("extended") or "") for t in ts} - {""})) or UNKNOWN,
                         "; ".join(sorted({_status_word(t) for t in ts}))]
-    t12 = doc.d.tables[12]
+    t12 = T[12]
     for row in t12.rows[1:]:
         label = row.cells[0].text.strip()
         vals = stack.get(label) or ["None identified in the source", "", "", "", ""]
@@ -489,7 +492,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
             vals = [doc.unknown(f"{label} and version", "3.2", "IT"), "", "", "", ""]
         for j, val in enumerate(vals, 1):
             set_cell(row.cells[j], val)
-    rows(doc.d.tables[13], [[doc.unknown("Licensing and contracts for commercial products", "3.3", "IT"), "", "", "", "", ""]])
+    rows(T[13], [[doc.unknown("Licensing and contracts for commercial products", "3.3", "IT"), "", "", "", "", ""]])
     hard = [f for f in findings if f.get("rule") in ("SEC-CRED",)] + [
         {"title": fct["text"]} for c in comps for fct in c["scores"]["coupling"]["factors"] if "hard" in fct["text"].lower()]
     doc.replace("Describe hard-coded business rules", [
@@ -507,10 +510,25 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
             img.getparent().remove(img)
         _set_para(ref, f"Figure 1. Logical architecture of {name}: layers, components and the systems and data it touches.",
                   italic=True)
+        anchor = doc.new_para("Architecture at a glance", ref._p, bold=True)._p
+        for layer in ("Presentation", "Application", "Data", "Integration"):
+            cs = [c for c in AM["components"] if c["layer"] == layer]
+            if cs:
+                anchor = doc.new_para(f"{layer} layer: " + "; ".join(
+                    f"{c['name']}, {c['role'].lower()}" + (f" in {c['language']}" if c["language"] else "")
+                    + (f" using {', '.join(c['tech'])}" if c["tech"] else "") for c in cs) + ".", anchor, bullet=True)._p
+        if AM["stores"]:
+            anchor = doc.new_para("Data it holds: " + ", ".join(sorted(AM["stores"])[:12]) + ".", anchor, bullet=True)._p
+        anchor = doc.new_para(f"Platforms: {', '.join(AM['platforms'])}.", anchor, bullet=True)._p
+        anchor = doc.new_para("Component inventory", anchor, bold=True)._p
+        ct = _table_after(doc, T[20], anchor, ["Component", "Layer", "Role", "Technology", "Reads / uses", "Writes"],
+                     [[c["name"], c["layer"], c["role"], ", ".join([c["language"]] + c["tech"]).strip(", ") or UNKNOWN,
+                       ", ".join(c["reads"][:6]) or "–", ", ".join(c["writes"][:6]) or "–"] for c in AM["components"]])
+        doc.new_para("", ct._tbl)
     doc.replace("The reference layout below shows", "The architecture below is drawn from the confirmed components in "
                 "Section 3, in the standard layer order so it can be read alongside other application reports.")
     doc.remove("Each application report should include the following views")
-    fill_col(doc.d.tables[14], 2, {"A.": "Complete (Figure 1)", "B.": "Pending: hosting and network detail not available",
+    fill_col(T[14], 2, {"A.": "Complete (Figure 1)", "B.": "Pending: hosting and network detail not available",
                                    "C.": "Complete (Figure 3)" if diagrams.get("context") else "Pending",
                                    "D.": "Complete (Figure 4)" if diagrams.get("data") else "Pending",
                                    "E.": "Pending: requires the portfolio inventory"})
@@ -537,7 +555,10 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         method = {"data_store": "File or dataset", "api_endpoint": "API", "external_system": "System call"}[e["kind"]]
         ints.append([f"INT-{num}-{i:02d}", direction, e["name"], (e.get("attrs") or {}).get("record") or UNKNOWN, method,
                      "Fixed width" if e["kind"] == "data_store" and cobolish else UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN, "No"])
-    rows(doc.d.tables[15], ints)
+    rows(T[15], ints)
+    anchor = doc.new_para("How data moves between the components", T[15]._tbl, bold=True)._p
+    for fl in A_.flows(AM) or ["No data movement could be traced in the source."]:
+        anchor = doc.new_para(fl, anchor, bullet=True)._p
     if ints:
         doc.unknown("Frequency, owner and failure handling of each interface in 4.2", "4.2", "IT")
     missing = [m for m in cov.get("missing") or [] if m["category"] == "missing_code"
@@ -552,20 +573,24 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         if p is not None:
             _set_para(p, text)
     cpl = R.program_factors(comps, "coupling", 6)
-    doc.replace("Record structural concerns", [f"Coupling is rated {R.condition(a['scores']['coupling']['score'])[0]} "
-                                                f"({R.condition(a['scores']['coupling']['score'])[1]}): {R.explain_program(a, 'coupling')}"]
-                + [f"{_cap(P.what(f['rule'], f['text']))} ({f.get('component', '')}): {f['text']}." for f in cpl[:4]])
+    obs = [f"{t}. What we see: {w} Why it matters: {m}" for t, w, m in AM["observations"]]
+    if (a["scores"].get("coupling") or {}).get("score") is not None:
+        obs.append(f"Code-level coupling (calls between files) is rated {R.rating_words(a['scores']['coupling']['score'])}: "
+                   + R.explain_program(a, "coupling").split(". ", 1)[-1]
+                   + " This score counts program-to-program calls only; the data-level coupling described above is not "
+                     "included in it.")
+    doc.replace("Record structural concerns", obs)
 
     # 5 data
     tables = store.entities("table")
-    rows(doc.d.tables[16], [[t_["name"], UNKNOWN, UNKNOWN, UNKNOWN, "Restricted" if pii else "Internal",
+    rows(T[16], [[t_["name"], UNKNOWN, UNKNOWN, UNKNOWN, "Restricted" if pii else "Internal",
                               "Personal data" if pii else "None identified"] for t_ in tables[:30]] +
          [[d_["name"] + " (file)", UNKNOWN, UNKNOWN, UNKNOWN, "Internal", UNKNOWN] for d_ in store.entities("data_store")[:10]])
     doc.unknown("Data volumes, retention requirements and system-of-record status (5.1)", "5.1")
-    fill_col(doc.d.tables[17], 1, {"": ["Not rated", "Requires access to production data; not part of this review."]})
+    fill_col(T[17], 1, {"": ["Not rated", "Requires access to production data; not part of this review."]})
     doc.unknown("Data quality ratings (requires production data)", "5.2")
     rpts = [x for x in arts if re.search(r"report|rpt", (x["name"] + " " + (x.get("language") or "")).lower())]
-    rows(doc.d.tables[18], [[f"RPT-{num}-{i:02d}", x["name"], UNKNOWN, x.get("language") or UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN,
+    rows(T[18], [[f"RPT-{num}-{i:02d}", x["name"], UNKNOWN, x.get("language") or UNKNOWN, UNKNOWN, UNKNOWN, UNKNOWN,
                               "Retain" ] for i, x in enumerate(rpts[:15], 1)])
     stats = [x for x in arts if re.search(r"spss|sas|excel|access|vba", (x.get("language") or "").lower())]
     doc.replace("Describe analytical and statistical tools", (
@@ -574,7 +599,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
 
     # 6 health
     hs, total_txt = _health_total(a)
-    t19 = doc.d.tables[19]
+    t19 = T[19]
     for row in t19.rows[1:]:
         label = row.cells[0].text.strip()
         if label.startswith("Overall"):
@@ -598,7 +623,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         eol_rows.append([t.get("name"), t.get("version") or t.get("cycle") or "Not confirmed", str(t.get("eol") or "") or "Not published",
                          str(t.get("extended") or "") or "Not published", _months_left(t.get("eol"), today) or "",
                          path, (t.get("note") or t.get("basis") or "")[:90]])
-    rows(doc.d.tables[20], eol_rows)
+    rows(T[20], eol_rows)
 
     # 7 technical debt
     debt_f = R.program_factors(comps, "tech_debt", 40)
@@ -606,7 +631,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
             "DEBT-TRANSLATED": "Code"}
     dom = sorted({cats.get(f["rule"], "Code") for f in debt_f}) or ["None"]
     refactor = [i for p in a["roadmap"]["phases"] for i in p["items"] if i.get("kind") in ("debt", "refactor") or "refactor" in i["title"].lower()]
-    kv(doc.d.tables[21], {"Overall technical debt level": f"{debt_level}. {R.explain_program(a, 'tech_debt')}",
+    kv(T[21], {"Overall technical debt level": f"{debt_level}. {R.explain_program(a, 'tech_debt')}",
                           "Dominant debt categories": ", ".join(dom),
                           "Estimated total remediation effort": (f"{sum(i['low'] for i in refactor):g}–{sum(i['high'] for i in refactor):g} person-weeks"
                                                                  if refactor else f"Included in the roadmap total of {total['low']}–{total['high']} person-weeks"),
@@ -619,7 +644,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
     doc.replace("A single interview will often cover several applications", "No stakeholder interviews were held as part "
                 "of this review; findings rest on the source code, screens and configuration listed in 13.2.")
     metrics = _metrics(arts)
-    fill_col(doc.d.tables[22], 1, {
+    fill_col(T[22], 1, {
         "Lines of code": [", ".join(f"{k}: {v:,}" for k, v in sorted(langs.items(), key=lambda kv_: -kv_[1])), "Not applicable", "Source code review", ""],
         "Average and maximum cyclomatic complexity": [f"average {metrics['avg']}, maximum {metrics['max']} ({metrics['max_file']})",
                                                       "Under 15 per routine", "Decision-point count per file", _cmp(metrics["max"], 15)],
@@ -644,7 +669,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
                                                                                    "DEBT-TRANSLATED": "Refactor", "DEBT-SIZE": "Refactor"}.get(f["rule"], "Refactor"),
                     "S" if abs(f["points"]) < 5 else "M" if abs(f["points"]) < 12 else "L",
                     "High" if abs(f["points"]) >= 12 else "Medium" if abs(f["points"]) >= 5 else "Low"])
-    rows(doc.d.tables[23], reg)
+    rows(T[23], reg)
     skills = [fct["text"] for c in comps for fct in c["scores"]["supportability"]["factors"] if fct["rule"] == "SUP-SKILLS"]
     doc.replace("Describe debt that sits outside the code itself", [
         (f"Skills: few people still have {P.sentence(sorted({x.split(' skills are scarce')[0] for x in skills}))} skills, so "
@@ -662,7 +687,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         f"Because the recommended disposition ({disposition}) keeps the current code, every item in 7.3 can be fixed directly."])
 
     # 8 security
-    t24 = doc.d.tables[24]
+    t24 = T[24]
     for row in t24.rows[1:]:
         label = row.cells[0].text.strip()
         area = next((ar for ar in CONTROL_AREAS if label.startswith(ar[0])), None)
@@ -698,7 +723,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
     web = [f for f in sec_f if f["category"] == "website"]
     cnt = lambda fs: [str(sum(1 for f in fs if f["severity"] == k)) for k in ("critical", "high", "medium", "low")]
     site = store.get_meta("site_scan") or {}
-    fill_col(doc.d.tables[25], 1, {
+    fill_col(T[25], 1, {
         "Infrastructure and OS": ["Not performed", "", "Not in scope", "", "", "", ""],
         "Web application": (["Public website review", (site.get("scanned") or "")[:10], site.get("final_url") or site.get("start") or ""] + cnt(web))
         if site else ["Not performed", "", "Not in scope", "", "", "", ""],
@@ -723,8 +748,8 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
                    _cap(P.fix(f.get("rule") or "") or (f.get("detail") or "").split(". ")[-1][:140])
                    if not restricted else "Change the password and move it to a secrets store",
                    "IT", (today + timedelta(days=days)).isoformat(), "Open", "Appendix D" if restricted else ""])
-    rows(doc.d.tables[26], vr)
-    anchor = doc.new_para("What these findings mean, in plain terms:", doc.d.tables[26]._tbl)._p
+    rows(T[26], vr)
+    anchor = doc.new_para("What these findings mean, in plain terms:", T[26]._tbl)._p
     for g in vgroups.values():
         f, ids = g["f"], g["ids"]
         rule = f.get("rule") or ""
@@ -742,7 +767,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         or ["No unsupported components were identified."])
     if unsup:
         doc.unknown("Compensating controls for unsupported components", "8.4", "Information security")
-    fill_col(doc.d.tables[27], 1, {
+    fill_col(T[27], 1, {
         "Client information security policy": ["Y", "Not assessed", doc.unknown("Client security policy and standards", "8.5", "Information security")],
         "Security framework": ["Y", "Partial" if code_f else "Not assessed",
                                f"{s['security_framework'] or 'NIST SP 800-53'} controls referenced by the findings in 8.3"],
@@ -754,12 +779,12 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
     })
 
     # 9 risk
-    rows(doc.d.tables[28], [[r_["id"], r_["short"], r_["cat"], str(r_["L"]), str(r_["I"]), str(r_["score"]),
+    rows(T[28], [[r_["id"], r_["short"], r_["cat"], str(r_["L"]), str(r_["I"]), str(r_["score"]),
                              R.template_rating(r_["score"]), UNKNOWN, r_["mit"]] for r_ in risks])
-    anchor = doc.new_para("Why each risk is rated as it is:", doc.d.tables[28]._tbl)._p
+    anchor = doc.new_para("Why each risk is rated as it is:", T[28]._tbl)._p
     for r_ in risks:
         anchor = doc.new_para(f"{r_['id']} ({r_['c']['name']}): {R.risk_reason(r_['c'])}", anchor, bullet=True)._p
-    t29 = doc.d.tables[29]
+    t29 = T[29]
     for row in t29.rows[1:]:
         lab = row.cells[0].text
         vals = {"Complete outage": [s["business_value"] or UNKNOWN, UNKNOWN, UNKNOWN, "Delayed service; see the business calendar (2.4)"],
@@ -774,7 +799,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
             for j, val in enumerate(hit, 1):
                 set_cell(row.cells[j], val)
     doc.unknown("Maximum tolerable outage and current workarounds (9.2)", "9.2")
-    t30 = doc.d.tables[30]
+    t30 = T[30]
     for ri, row in enumerate(t30.rows[:5]):
         imp = 5 - ri
         for li in range(1, 6):
@@ -786,12 +811,12 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
                         + (f"The application's heat-map position is set by its highest risk, {top['id']} at {top['score']}." if top else ""))
 
     # 10 operational support
-    kv(doc.d.tables[31], {k: doc.unknown(k, "10.1", "IT") for k in (
+    kv(T[31], {k: doc.unknown(k, "10.1", "IT") for k in (
         "Support team and named contacts", "Number of staff able to support", "Vendor support arrangement",
         "Service level or availability target", "Change and release process", "Monitoring and alerting")})
-    fill_col(doc.d.tables[32], 1, {"": [UNKNOWN, "Service management records not provided"]})
+    fill_col(T[32], 1, {"": [UNKNOWN, "Service management records not provided"]})
     doc.unknown("Support demand for the trailing 24 months (10.2)", "10.2", "IT")
-    rows(doc.d.tables[33], [[f"Change to hard-coded value: {h_['title'][:60]}", UNKNOWN, "Value held in source code",
+    rows(T[33], [[f"Change to hard-coded value: {h_['title'][:60]}", UNKNOWN, "Value held in source code",
                              "Move to a business-maintained table", "Configuration screen and change controls"] for h_ in hard[:4]],
          empty="No recurring IT activity could be identified from the source; to be confirmed with the support team.")
     doc.replace("Identify any individual whose departure", (
@@ -811,7 +836,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         c_ = R.condition(max(0, 100 + pts))
         from .plain import reasons, sentence
         return [str(c_[0]), _cap(f"{c_[1]}: {sentence(reasons(fs, 2))}.")]
-    fill_col(doc.d.tables[34], 1, {
+    fill_col(T[34], 1, {
         "Ease of navigation": ux_row(("UIB-", "UIF-", "USE-"), "navigation"),
         "Clarity of error messages": ux_row(("UIB-CRASH", "UIB-ERR", "USE-ERR"), "error handling"),
         "Efficiency for high-volume": ["Not rated", "Requires observation of users at work"],
@@ -835,9 +860,9 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
                   "Replace": "Yes: recommended" if rec_code == "replace" else "Not assessed: requires a market review",
                   "Consolidate": s["related_apps"] and f"Candidates: {s['related_apps']}" or "Not assessed: requires the portfolio inventory",
                   "Retire": "Yes: recommended" if rec_code == "retire" else "No: the function is still in use"}
-    fill_col(doc.d.tables[35], 2, applicable)
+    fill_col(T[35], 2, applicable)
     options = _options(rec_code)
-    t36 = doc.d.tables[36]
+    t36 = T[36]
     set_cell(t36.rows[0].cells[2], f"Option A: {options[0][0]}")
     set_cell(t36.rows[0].cells[3], f"Option B: {options[1][0]}")
     set_cell(t36.rows[0].cells[4], f"Option C: {options[2][0]}")
@@ -864,14 +889,20 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         last = score_note._p
         for o in options:
             last = doc.new_para(f"{o[0]}: {o[2]}", last, bullet=True)._p
-    kv(doc.d.tables[37], {"Recommended disposition": disposition,
+    kv(T[37], {"Recommended disposition": disposition,
                           "Rationale": " ".join((v.get("reasons") or [])[:3]) or v.get("meaning", ""),
                           "Consolidation grouping": s["related_apps"] or "None identified",
                           "Prerequisites": "; ".join(i["title"] for i in (phases.get("assess") or {}).get("items", [])) or "None",
                           "Key risks of the recommended option": "Regression in business calculations during change; mitigated by "
                                                                  "parallel runs against current outputs",
                           "Interim risk mitigation": "; ".join(stab[:4]) or "None required"})
-    kv(doc.d.tables[38], {"Recommended horizon": horizon,
+    anchor = doc.new_para("Target architecture (outline)", T[37]._tbl, bold=True)._p
+    anchor = doc.new_para("A planning-level view of where each layer should end up under the "
+                          "recommended option; it is product-neutral and needs validating with the enterprise architecture team:",
+                          anchor)._p
+    for t_ in A_.target_outline(AM, v.get("code")):
+        anchor = doc.new_para(t_, anchor, bullet=True)._p
+    kv(T[38], {"Recommended horizon": horizon,
                           "Proposed start window": doc.unknown("Proposed start window (fiscal year and quarter)", "12.4"),
                           "Estimated duration": f"{total['months_one_dev'][0]}–{total['months_one_dev'][1]} months for one developer "
                                                 f"({total['low']}–{total['high']} person-weeks)",
@@ -880,7 +911,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
                           "Business blackout periods": doc.unknown("Business blackout periods", "12.4")})
 
     # 13 evidence
-    rows(doc.d.tables[39], [["None", "", "", "", "Stakeholder interviews were not part of this review", ""]])
+    rows(T[39], [["None", "", "", "", "Stakeholder interviews were not part of this review", ""]])
     doc.unknown("Stakeholder interviews", "13.1", "Assessment lead")
     ev = []
     for i, x in enumerate(arts, 1):
@@ -888,7 +919,7 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
                "document": "Document"}.get(x.get("artifact_type"), "Source code")
         ev.append([f"EV-{num}-{i:02d}", x["name"], typ, f"v{x.get('version', 1)}, {(x.get('updated') or x.get('created') or '')[:10]}",
                    f"Program source set: {x['name']}"])
-    rows(doc.d.tables[40], ev)
+    rows(T[40], ev)
     assumptions = ["Findings reflect the source files listed in 13.2; components not provided are listed in 4.3 and are not scored.",
                    "Business impact defaults to a moderate rating where the business owner has not rated criticality (Section 9).",
                    "Support dates are from published vendor lifecycle information current at the report date."]
@@ -907,9 +938,9 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
     for m in missing[:15]:
         doc.open_items.append((f"Provide the source of {m['kind']} {m['name']} (referenced but not provided)", "4.3", "IT"))
     due = (today + timedelta(days=30)).isoformat()
-    rows(doc.d.tables[41], [[f"OI-{num}-{i:02d}", f"{what} (Section {sec_})", owner, due, "Open"]
+    rows(T[41], [[f"OI-{num}-{i:02d}", f"{what} (Section {sec_})", owner, due, "Open"]
                             for i, (what, sec_, owner) in enumerate(_dedup(doc.open_items), 1)])
-    t42 = doc.d.tables[42]
+    t42 = T[42]
     for row in t42.rows[1:]:
         lab = row.cells[0].text
         if lab.startswith("Assessment lead"):
@@ -1088,6 +1119,34 @@ def _options(code):
            "rehost": "replatform", "retain": "refactor", "retire": "retain"}[first]
     third = "retain" if "retain" not in (first, alt) else "rehost"
     return [lib[first], lib[alt], lib[third]]
+
+
+def _table_after(doc, src, anchor_el, head, data):
+    """A new table in the template's style (copied from `src`, trimmed to len(head) columns) placed after anchor_el."""
+    from docx.table import Table
+    tbl = deepcopy(src._tbl)
+    n = len(head)
+    grid = tbl.find(qn("w:tblGrid"))
+    cols = grid.findall(qn("w:gridCol"))
+    total = sum(int(c.get(qn("w:w")) or 0) for c in cols) or 10800
+    for c in cols[n:]:
+        grid.remove(c)
+    for c in grid.findall(qn("w:gridCol")):
+        c.set(qn("w:w"), str(total // n))
+    for tr in tbl.findall(qn("w:tr")):
+        tcs = tr.findall(qn("w:tc"))
+        for tc in tcs[n:]:
+            tr.remove(tc)
+        for tc in tr.findall(qn("w:tc")):
+            w = tc.find(qn("w:tcPr") + "/" + qn("w:tcW"))
+            if w is not None:
+                w.set(qn("w:w"), str(total // n))
+    anchor_el.addnext(tbl)
+    t = Table(tbl, doc.d)
+    for i, h in enumerate(head):
+        set_cell(t.rows[0].cells[i], h)
+    rows(t, data)
+    return t
 
 
 def _glossary(doc):
