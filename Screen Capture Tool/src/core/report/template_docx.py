@@ -370,10 +370,17 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
             break
     sec_score = a["scores"]["security"]["score"]
     health_c = _health_total(a)[0]["overall"][0]
+    sec_n = sec.get("critical", 0) + sec.get("high", 0) or sum(sec.values())
+    sec_files = len({(f.get("target_type"), f.get("target_id")) for f in sec_f
+                     if f["severity"] in ("critical", "high")}) or 1
+    sec_worst = (a["scores"]["security"].get("worst") or {})
     findings_txt = [
         f"In short: {name} is in {LEVEL_WORD.get(health_c, 'unrated')} overall condition "
         f"({health_c or '–'} on a scale where 1 is best and 5 is worst), but "
-        + ("it has serious security problems" if sec.get("critical") or sec.get("high") else "it has some security issues to fix")
+        + (("it has serious security problems" if sec.get("critical") or (R.condition(sec_score)[0] or 0) >= 4
+            else f"it has {sec_n} high-severity security issue{'s' if sec_n != 1 else ''} across {sec_files} "
+                 f"file{'s' if sec_files != 1 else ''} that need fixing" if sec.get("high")
+            else "it has some security issues to fix" if sec_n else "it has no significant security issues"))
         + (" and relies on technology the vendor no longer supports." if eol else ".")
         + f" The recommended direction is to {disposition.lower()}: {P.DISPOSITIONS.get(v.get('code'), v.get('meaning', '')).rstrip('.').lower()} "
           f"(Section 12).",
@@ -381,7 +388,11 @@ def render(store, report: dict, diagrams: dict, today=None) -> bytes:
         f"{sec.get('medium', 0)} medium issues. The most serious: {P.sentence([f'{w} ({sv})' for w, sv in worst3])}. "
         + ("Because the application handles personal data, a breach would expose personal records, so these issues are "
            "rated one level higher than they otherwise would be. " if pii else "")
-        + f"Security is rated {R.rating_words(sec_score)} (it scored {sec_score} out of 100).",
+        + f"Security is rated {R.rating_words(sec_score)} (it scored {sec_score} out of 100"
+        + (f"; this is the average across all files, and the weakest file, {sec_worst['component']}, scored "
+           f"{sec_worst['score']}, which is {R.rating_words(sec_worst['score'])}"
+           if sec_worst.get("score") is not None and sec_score is not None and sec_worst["score"] < sec_score else "")
+        + ").",
         (f"Supportability (Section 6.2). {P.sentence([_eol_plain(t) for t in eol[:3]])}. Unsupported software no longer "
          f"receives security fixes, so its known weaknesses stay open until it is upgraded or replaced.")
         if eol else "Supportability (Section 6.2). Every technology identified is still supported by its vendor.",

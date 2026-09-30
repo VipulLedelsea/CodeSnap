@@ -3,7 +3,7 @@ any change, and an outline target architecture. Written for architects: technica
 says in plain English why it matters."""
 
 PLATFORMS = [
-    ("IBM mainframe (z/OS)", ("cobol", "jcl", "cics", "ims", "pl/i", "assembler", "bms", "mfs", "rexx", "idms", "3270")),
+    ("IBM mainframe (z/OS)", ("cobol", "jcl", "cics", "ims", "pl/i", "assembler", "assembly", "hlasm", "bms", "mfs", "rexx", "idms", "3270")),
     ("IBM i (AS/400)", ("rpg", "cl", "ibm i", "dds")),
     ("Microsoft .NET / Windows", ("c#", ".net", "asp", "vb", "visual basic", "aspx", "vb6")),
     ("Java", ("java", "jsp", "struts")),
@@ -13,7 +13,11 @@ PLATFORMS = [
 ]
 
 
-def _platform(lang: str, name: str) -> str:
+def _platform(lang: str, name: str, role: str = "") -> str:
+    if role == "3270 terminal screen":
+        return "IBM mainframe (z/OS)"
+    if role in ("Web page", "Application screen") and name.lower().endswith((".screen", ".html", ".htm")):
+        return "Web browser"
     key = f"{lang} {name}".lower()
     for p, keys in PLATFORMS:
         if any(k in key for k in keys):
@@ -78,7 +82,7 @@ def build(store, a: dict, techs: list) -> dict:
         if lang.lower() in ("ui screen", "screen"):
             lang = ""
         comps.append({"name": c["name"], "layer": layer, "role": role, "language": lang,
-                      "platform": _platform(art.get("language") or "", c["name"]), "tech": ts, "reads": reads,
+                      "platform": _platform(art.get("language") or "", c["name"], role), "tech": ts, "reads": reads,
                       "writes": writes, "calls": [x for x in calls if x not in routines], "displays": displays,
                       "lines": c.get("lines", 0), "routines": routines})
     stores = {}
