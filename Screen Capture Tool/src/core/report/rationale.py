@@ -29,11 +29,17 @@ def rating_words(score) -> str:
     return f"{c} – {label}" if c else "Not rated"
 
 
+WORDS = False     # True for the Word report: ratings in words (1-5, 1 best), no 0-100 figures
+
+
 def explain(score, factors, n=3, none_text="No problems were found in the files reviewed.") -> str:
     """'Condition 3 – Fair. Scored 62 out of 100; points were taken off because …'."""
-    from .plain import reasons, sentence
+    from .plain import reasons, reasons_words, sentence
     if score is None:
-        return "Not rated: the material reviewed gives no evidence for this."
+        return "Insufficient evidence: the material reviewed gives no evidence for this."
+    if WORDS:
+        rs = reasons_words(factors, n)
+        return f"{rating_words(score)}" + (f". Main reasons: {sentence(rs)}." if rs else f". {none_text}")
     rs = reasons(factors, n)
     head = f"{rating_words(score)}. Scored {score} out of 100"
     return head + (f"; points were taken off because {sentence(rs)}." if rs else f". {none_text}")
@@ -50,12 +56,21 @@ def program_factors(components, dim, n=6) -> list:
 
 def explain_program(a, dim, n=3) -> str:
     """The program-level score for one dimension, with the reasons in plain English."""
-    from .plain import reasons, sentence
+    from .plain import reasons, reasons_words, sentence
     s = (a.get("scores") or {}).get(dim) or {}
     score = s.get("score")
     if score is None:
         return explain(None, [])
     name = DIM_NAMES.get(dim, dim)
+    if WORDS:
+        w = s.get("worst") or {}
+        worst_c = condition(w.get("score"))[0] if w.get("score") is not None else None
+        head = rating_words(w["score"]) if worst_c else rating_words(score)
+        out = f"{head}, rated on the weakest file" + (f" ({w.get('component')})" if w.get("component") else "")
+        if worst_c and condition(score)[0] != worst_c:
+            out += f"; the average across files would be {rating_words(score)}"
+        rs = reasons_words(program_factors(a.get("components") or [], dim, 0), n)
+        return out + (f". Main reasons: {sentence(rs)}." if rs else ". No problems were found.")
     out = f"{rating_words(score)}. {name[:1].upper() + name[1:]} scored {score} out of 100"
     w = s.get("worst") or {}
     if w and w.get("score") is not None and w["score"] < score:

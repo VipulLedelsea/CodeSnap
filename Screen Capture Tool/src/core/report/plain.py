@@ -7,8 +7,17 @@ RULES = {
     "SEC-CRED": ("a password or key is written directly into the code (hard-coded credential)",
                  "anyone who can read the code can use it, and it can't be changed without a code release",
                  "move it to a secure secrets store and change the password"),
-    "SEC-TLS": ("data is sent without encryption (plain HTTP instead of HTTPS/TLS)",
-                "it can be read or changed on the network", "switch the connection to HTTPS (TLS 1.2 or later)"),
+    "SEC-TLS": ("data is sent without encryption (plain HTTP or an unencrypted database connection)",
+                "it can be read or changed on the network", "require TLS 1.2 or later on the connection (HTTPS, Encrypt=True)"),
+    "SEC-ERR": ("errors are silently ignored, so a failed step looks like success",
+                "failures such as a payment that did not post go unnoticed and are not logged",
+                "log and raise every error; stop the run and alert support when a step fails"),
+    "SEC-AUTHZ": ("an action that changes data has no authorization check",
+                  "any signed-in or anonymous caller could run it, for example to approve a payment",
+                  "require a named role for the action and record who performed it"),
+    "SEC-CSRF": ("a form post is not protected against cross-site request forgery (CSRF)",
+                 "another web page could make a signed-in user's browser submit it without their knowledge",
+                 "add an anti-forgery token and validate it on every post"),
     "SEC-XSS": ("user input is written into the web page without being made safe (cross-site scripting, XSS)",
                 "an attacker could run their own script in a user's browser",
                 "encode everything written to the page; avoid innerHTML and document.write"),
@@ -248,6 +257,29 @@ def reasons(factors, n=3) -> list:
     rest = sorted(groups.values(), key=lambda g: g["pts"])[n:]
     if rest:
         out.append(f"{len(rest)} smaller issue(s) (−{abs(sum(g['pts'] for g in rest)):g} points)")
+    return out
+
+
+def weight_word(pts) -> str:
+    pts = abs(pts)
+    return "major" if pts >= 30 else "significant" if pts >= 12 else "moderate" if pts >= 5 else "minor"
+
+
+def reasons_words(factors, n=3) -> list:
+    """Like reasons(), with the size of each deduction in words (major, significant, moderate, minor)."""
+    groups = {}
+    for f in factors or []:
+        key = f["rule"] if f["rule"] not in ("UIB-OBSERVED",) else f["text"]
+        g = groups.setdefault(key, {"rule": f["rule"], "text": f["text"], "pts": 0.0, "n": 0})
+        g["pts"] += f["points"]
+        g["n"] += 1
+    out = []
+    for g in sorted(groups.values(), key=lambda g: g["pts"])[:n]:
+        where = f"{g['n']} places, " if g["n"] > 1 else ""
+        out.append(f"{what(g['rule'], g['text'])} ({where}{weight_word(g['pts'])})")
+    rest = sorted(groups.values(), key=lambda g: g["pts"])[n:]
+    if rest:
+        out.append(f"{len(rest)} smaller issue(s)")
     return out
 
 

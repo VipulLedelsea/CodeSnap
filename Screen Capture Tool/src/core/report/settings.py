@@ -21,8 +21,12 @@ FIELDS = [
     ("security_framework", "Security framework in use"),
     ("deployment", "Deployment model"),
     ("related_apps", "Related applications (by ID)"),
+    ("criticality_confirmed", "Criticality confirmed by the business owner (yes/no)"),
+    ("signed_off", "Report signed off by the reviewers in 13.5 (yes/no)"),
+    ("client_short", "Name used in place of hidden names (e.g. CLIENT)"),
+    ("redact_terms", "Names to hide in the report, comma separated (real client names, schema or host prefixes)"),
 ]
-DEFAULTS = {"version": "v1.0 Final", "classification": "Confidential", "firm": "Ledelsea", "prepared_by": "Ledelsea"}
+DEFAULTS = {"version": "v1.0", "classification": "Confidential", "firm": "Ledelsea", "prepared_by": "Ledelsea"}
 
 
 def get(store) -> dict:

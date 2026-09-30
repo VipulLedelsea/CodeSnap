@@ -7,10 +7,12 @@ import re
 PLATFORMS = [
     ("IBM mainframe (z/OS)", ("cobol", "jcl", "cics", "ims", "pl/i", "assembler", "assembly", "hlasm", "bms", "mfs", "rexx", "idms", "3270")),
     ("IBM i (AS/400)", ("rpg", "cl", "ibm i", "dds")),
-    ("Microsoft .NET / Windows", ("c#", ".net", "asp", "vb", "visual basic", "aspx", "vb6")),
+    ("Windows desktop (VB6)", ("visual basic 6", "vb6", "visual basic", "vba")),
+    ("Microsoft .NET (Windows server)", ("c#", ".net", "asp", "aspx", "vb.net")),
     ("Java", ("java", "jsp", "struts")),
     ("Web browser", ("html", "javascript", "jquery", "css")),
-    ("Database server", ("pl/sql", "sql", "oracle", "db2", "t-sql")),
+    ("Oracle Database", ("pl/sql", "oracle")),
+    ("Database server", ("sql", "db2", "t-sql")),
     ("Desktop", ("delphi", "pascal", "c++", "foxpro", "access")),
 ]
 
@@ -34,7 +36,8 @@ def _layer_role(art: dict, comp: dict, displays: list) -> tuple:
         return "Presentation", kind
     if comp.get("type") == "web" or name.endswith((".html", ".htm", ".asp", ".aspx", ".jsp")):
         return "Presentation", "Web page"
-    if name.endswith((".dbd", ".psb", ".ddl", ".sql")) and "pl/sql" not in lang.lower():
+    if name.endswith((".dbd", ".psb", ".ddl", ".sql")) and "pl/sql" not in lang.lower() or re.search(
+            r"\bDBD\s+NAME=|\bCREATE\s+TABLE\b", (art.get("transcription") or "")[:3000], re.I) and "pl/sql" not in lang.lower():
         return "Data", "Database definition"
     if lang.lower().startswith("pl/sql") or name.endswith((".pkb", ".pks")):
         return "Data", "Database procedures (business logic in the database)"
@@ -72,6 +75,9 @@ def build(store, a: dict, techs: list) -> dict:
         reads = [x for x in reads if x not in writes]
         calls = names(("calls",), ("program", "paragraph", "procedure", "transaction"))
         calls = [x for x in calls if "(not provided)" in x or x.upper() == x]
+        own = art.get("transcription") or ""
+        calls = [x for x in calls if not re.search(rf"\b{re.escape(x.split(' (')[0])}\s+BEGSR\b|\bBEGSR\s+{re.escape(x.split(' (')[0])}\b"
+                                                   rf"|^\s*\d*\s+{re.escape(x.split(' (')[0])}\.\s*$", own, re.M | re.I)]
         displays = names(("displays",), ("screen",))
         layer, role = _layer_role(art, c, displays)
         ts = sorted({f"{t.get('name')} {t.get('version') or t.get('cycle') or ''}".strip() for t in techs
@@ -156,12 +162,20 @@ def observations(store, a, comps, stores) -> list:
                     f"{len(missing)} referenced component(s) are missing: " + ", ".join(f"{m['name']} ({m['kind']})" for m in missing[:8]) + ".",
                     "The architecture and the risk ratings cover only what was provided; these parts could change the "
                     "picture, especially if they hold business rules or integrations."))
-    sec = [f for f in store.findings() if f.get("rule") in ("SEC-CRED", "SEC-TLS", "UIS-MIXED", "SEC-AUTH")
+    from . import plain as P
+    sec = [f for f in store.findings() if f.get("rule") in ("SEC-CRED", "SEC-TLS", "UIS-MIXED", "SEC-AUTH", "SEC-AUTHZ")
            and f.get("status") not in ("dismissed", "fixed")]
     if sec:
+        kinds = []
+        for f in sec:
+            w = P.what(f["rule"], f["title"])
+            n = sum(1 for g in sec if g["rule"] == f["rule"])
+            w = f"{w} ({n} place{'s' if n > 1 else ''})"
+            if w not in kinds:
+                kinds.append(w)
         out.append(("Security is built into each program rather than provided centrally",
-                    f"{len(sec)} finding(s) show credentials held in code and connections without encryption, "
-                    "rather than a shared identity service and encrypted transport.",
+                    f"{len(sec)} finding(s) show this: {P.sentence(kinds)}. No shared identity service or secrets "
+                    f"store is used.",
                     "Each component must be fixed separately. The target should use the organisation's identity service, "
                     "a secrets store and TLS everywhere, so security is handled once."))
     return out

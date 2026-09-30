@@ -25,6 +25,13 @@ CODE |= PACK_IDS - {"plsql", "tsql"}
 
 def family(filename: str, language: str = "", text: str = "") -> str:
     ext = PurePath(filename or "").suffix.lower().lstrip(".")
+    if ext in ("sql", "pks", "pkb", "prc", "fnc") or (language or "").lower() in ("pl/sql", "plsql", "t-sql", "tsql"):
+        lang = (language or "").lower()
+        if "pl/sql" in lang or "plsql" in lang or re.search(
+                r"\bCREATE\s+OR\s+REPLACE\s+(PACKAGE|PROCEDURE|FUNCTION|TRIGGER)\b|\bEXCEPTION\s+WHEN\b|\bDBMS_\w+", text or "", re.I):
+            return "plsql"
+        if "t-sql" in lang or "tsql" in lang or re.search(r"\bCREATE\s+PROC(EDURE)?\b|\bsp_\w+|@@\w+", text or "", re.I):
+            return "tsql"
     if ext in _EXT_FAMILY:
         return _EXT_FAMILY[ext]
     if text:
@@ -226,6 +233,13 @@ LINE_RULES = [
     ("SEC-CMD", {"powershell"}, "medium", r"\b(Invoke-Expression|iex)\b", "Invoke-Expression of a constructed string"),
     ("SEC-CRED", {"powershell"}, "high", r'''ConvertTo-SecureString\s+["'][^"']+["']\s+-AsPlainText|-Password\s+["'][^"']{3,}["']''',
      "plain-text password in script"),
+    ("SEC-ERR", {"plsql"}, "medium", r"\bWHEN\s+OTHERS\s+THEN\s+NULL\b", "every error is swallowed (WHEN OTHERS THEN NULL)"),
+    ("SEC-ERR", {"tsql"}, "medium", r"\bBEGIN\s+CATCH\s+END\s+CATCH\b", "empty CATCH block swallows every error"),
+    ("SEC-ERR", VB_LIKE, "medium", r"\bOn\s+Error\s+Resume\s+Next\b|^\s*Resume\s+Next\b", "errors are ignored and processing carries on (Resume Next)"),
+    ("SEC-TLS", CODE | {"config", "props", "json"}, "medium",
+     r"^(?!.*\b(Encrypt\s*=\s*(True|yes|strict|mandatory)|Use\s+Encryption\s+for\s+Data\s*=\s*True))"
+     r".*\b(Data\s+Source|Server)\s*=\s*[^;\"']+;.*\b(Initial\s+Catalog|Database)\s*=",
+     "database connection string does not ask for encryption"),
     ("SEC-CMD", {"rpg", "cl"}, "medium", r"\bQCMDEXC\b[^;\n]*(\+|%trim|\*CAT|\*TCAT|\*BCAT)", "system command string built at run time (QCMDEXC)"),
     ("SEC-SQLDYN", {"rpg", "pli", "informix4gl", "powerbuilder", "natural"}, "medium",
      r"\b(PREPARE\s+\S+\s+FROM|EXECUTE\s+IMMEDIATE)\b", "dynamic SQL — confirm the statement text is not built from user input"),
@@ -339,6 +353,42 @@ def scan_text(text: str, filename: str, language: str = "") -> list:
                 add(rid, sev, n, desc)
     for n, reason in _sql_concat([l if len(l) <= MAX_LINE else l[:MAX_LINE] for l in lines], fam):
         add("SEC-SQLI", "high", n, reason)
+    for rule, sev, n, desc in _whole_file(lines, fam):
+        add(rule, sev, n, desc)
+    return out
+
+
+_STATE_CHANGE = re.compile(r"\b(Approve|Reject|Delete|Remove|Update|Save|Post|Pay|Submit|Release|Transfer|Create)\w*\s*\(", re.I)
+
+
+def _whole_file(lines: list, fam: str) -> list:
+    """Checks that need the whole file: MVC actions without authorization or anti-forgery, and command strings built
+    on one line and run through QCMDEXC on another."""
+    out = []
+    text = "\n".join(lines)
+    if fam == "cs" and re.search(r"\b(Controller|ApiController|ControllerBase)\b", text):
+        authz = re.search(r"\[\s*Authorize\b", text)
+        for i, line in enumerate(lines):
+            if not re.search(r"\[\s*Http(Post|Put|Delete|Patch)\b", line):
+                continue
+            j = next((k for k in range(i + 1, min(i + 6, len(lines))) if re.search(r"\b(public|protected)\b[^;]*\(", lines[k])), None)
+            if j is None:
+                continue
+            head = "\n".join(lines[max(0, i - 3):j + 1])
+            sig = lines[j]
+            name = (re.search(r"(\w+)\s*\(", sig) or re.search(r"(\w+)", sig)).group(1)
+            if not authz and "AllowAnonymous" not in head:
+                sev = "high" if _STATE_CHANGE.search(sig) else "medium"
+                out.append(("SEC-AUTHZ", sev, j + 1, f"state-changing action {name} has no [Authorize] check "
+                                                    f"(confirm whether a global authorization filter applies)"))
+            if "ValidateAntiForgeryToken" not in head and "ApiController" not in text:
+                out.append(("SEC-CSRF", "medium", j + 1, f"form post {name} is not protected by an anti-forgery token"))
+    if fam in ("rpg", "cl") and re.search(r"QCMDEXC", text, re.I):
+        for i, line in enumerate(lines):
+            if re.search(r"\bEVAL\b[^\n]*=\s*'[^']*\b(CALL|SBMJOB|CHG|DLT|CRT|RMV|CPY)\w*[^']*'\s*\+", line, re.I) or \
+                    re.search(r"\b(CHGVAR|CAT|TCAT|BCAT)\b[^\n]*\*(CAT|TCAT|BCAT)", line, re.I):
+                out.append(("SEC-CMD", "medium", i + 1, "system command string is built from a variable and run "
+                                                         "through QCMDEXC"))
     return out
 
 
