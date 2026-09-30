@@ -6,6 +6,7 @@ Screen capture stays local; this is the control panel / viewer.
 Run:  python -m webapp        (or: python webapp/server.py)
 """
 
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, Body, HTTPException
@@ -164,7 +165,64 @@ def _artifact_summary(store, artifact: dict) -> dict:
     v = store.verification(artifact["id"])
     if v and artifact["status"] != "captured":
         out["check"] = {k: v.get(k) for k in ("lines", "verified", "reread", "confirmed", "flagged", "unchecked", "gaps")}
+    if artifact["status"] != "captured" and (artifact.get("transcription") or "").strip():
+        from core import deepdive
+        dd = (store.get_meta("deepdive") or {}).get(str(artifact["id"])) or {}
+        q = deepdive.capture_quality(store, artifact, dd.get("capture_concerns"))
+        out["quality"] = {"status": q["status"], "issues": q["issues"]}
+        if dd:
+            out["deep"] = {"facts": len(dd.get("facts") or []), "current": dd.get("hash") == deepdive._hash(artifact.get("transcription"))}
     return out
+
+
+_DEEP = {}
+
+
+def _deep_start(slug: str, artifact_ids=None) -> dict:
+    """Run the deep code analysis for every file that needs it, in the background (one job per program)."""
+    import threading
+    from core import deepdive
+    job = _DEEP.get(slug)
+    if job and job.get("running"):
+        return job
+    client = _client()
+    with _open_program(slug) as store:
+        total = len(artifact_ids) if artifact_ids else len(deepdive.pending(store))
+    job = {"running": True, "done": 0, "total": total, "errors": [], "started": time.time()}
+    _DEEP[slug] = job
+
+    def work():
+        from core.model import ProgramStore
+        try:
+            with ProgramStore.open(slug) as st:
+                res = deepdive.run(st, client, artifact_ids=artifact_ids, force=bool(artifact_ids),
+                                   progress=lambda d, t: job.update(done=d, total=t))
+                job["errors"] = res["errors"]
+        except Exception as exc:  # noqa: BLE001
+            job["errors"].append(f"{type(exc).__name__}: {exc}")
+        finally:
+            job["running"] = False
+            job["finished"] = time.time()
+    threading.Thread(target=work, daemon=True).start()
+    return job
+
+
+@app.post("/api/programs/{slug}/deepdive")
+def api_program_deepdive(slug: str, artifact_id: int | None = None):
+    """Start (or restart for one file) the deep, evidence-checked code analysis."""
+    job = _deep_start(slug, [artifact_id] if artifact_id is not None else None)
+    return {"ok": True, **{k: v for k, v in job.items() if k != "started"}}
+
+
+@app.get("/api/programs/{slug}/deepdive")
+def api_program_deepdive_status(slug: str):
+    from core import deepdive
+    with _open_program(slug) as store:
+        job = _DEEP.get(slug) or {"running": False}
+        return {"job": {k: v for k, v in job.items() if k != "started"},
+                "pending": [a["name"] for a in deepdive.pending(store)],
+                "files": store.get_meta("deepdive") or {}, "program": store.get_meta("deepdive_program") or {},
+                "rescan": deepdive.rescan_requests(store)}
 
 
 @app.get("/api/programs")
@@ -303,8 +361,13 @@ def api_program_artifact(slug: str, artifact_id: int):
         evidence = [{"id": e["id"], "ord": e["ord"]} for e in store.artifact_evidence(artifact_id)]
         file_entity = store.entity_by_key(f"file:{artifact['name']}")
         profile = (file_entity or {}).get("attrs", {}).get("profile")
+        from core import deepdive
+        dd = (store.get_meta("deepdive") or {}).get(str(artifact_id))
+        q = deepdive.capture_quality(store, artifact, (dd or {}).get("capture_concerns"))
         return {"artifact": artifact, "entities": entities, "evidence": evidence, "profile": profile,
-                "verification": store.verification(artifact_id)}
+                "verification": store.verification(artifact_id), "deep": dd,
+                "deep_current": bool(dd) and dd.get("hash") == deepdive._hash(artifact.get("transcription")),
+                "quality": {"status": q["status"], "issues": q["issues"]}}
 
 
 @app.post("/api/programs/{slug}/artifacts/{artifact_id}/rename")
@@ -517,6 +580,20 @@ def api_program_report(slug: str, fmt: str, rescan: bool = True, client: str | N
             name = f"{slug}_assessment_report.{fmt}" if fmt != "zip" else f"{slug}_assessment_report_package.zip"
             return Response(body, media_type=mt, headers={"Content-Disposition": f'attachment; filename="{name}"'})
         n = rep.waiting(store)
+        if not n:
+            from core import deepdive
+            todo = deepdive.pending(store)
+            job = _DEEP.get(slug) or {}
+            if (todo or job.get("running")) and api_key_status()["has_key"]:
+                if not job.get("running"):
+                    job = _deep_start(slug)
+                msg = (f"Deep code analysis is running ({job.get('done', 0)} of {job.get('total', len(todo))} files). "
+                       f"The report is built from it; refresh in a minute.")
+                if fmt == "html":
+                    return HTMLResponse(f"<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=20>"
+                                        f"<body style='font:16px system-ui;padding:40px'><h2>Analysing the code</h2>"
+                                        f"<p>{msg}</p>", status_code=409)
+                return JSONResponse({"error": msg}, status_code=409)
         if n:
             msg = f"The report is built once every file is analysed — {n} still waiting."
             if fmt == "html":

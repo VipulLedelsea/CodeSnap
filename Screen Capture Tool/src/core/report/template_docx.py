@@ -359,6 +359,10 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
            "file_only": bool(file_ifaces or AM["stores"]), "apis": len(apis), "files": len(file_ifaces),
            "confidence": a["confidence"]["level"]}
     from . import dataarch as DA
+    from core import deepdive as DDV
+    DD = store.get_meta("deepdive") or {}
+    DPROG = store.get_meta("deepdive_program") or {}
+    RQ = DDV.rescan_requests(store)
     DM = DA.model(store, AM)
     HP = DA.hosting_platforms(AM, DM)
     SCF["platforms"] = len(HP)
@@ -491,6 +495,15 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
                                                               for r_ in FCR if r_[3] and r_[3] >= 4]))
          + ". For a payment system these touch segregation of duties, audit integrity and undetected misstatement.")
         if any(r_[3] and r_[3] >= 4 for r_ in FCR) else "",
+        (f"Evidence quality (Section 13.2). The copies of {len(RQ)} of the {len(arts)} source files are incomplete or unclear "
+         f"in places and must be re-obtained before the findings that rest on those lines can be relied on: "
+         + P.sentence([f"{r_['name']} ({DDV.report_reason(r_['issues'][0])})" for r_ in RQ[:4]])
+         + ". Statements that would rest on those lines are held back.") if RQ else "",
+        ("Code review (Section 3.6). The components have not yet been reviewed line by line; this report rests on the "
+         "automated checks only.") if not DD else
+        (f"Code review (Section 3.6). Each component was reviewed line by line; "
+         f"{sum(len(v.get('facts') or []) for v in DD.values())} statements passed two checks against the code and are "
+         f"cited by line."),
         (f"Architecture (Sections 4.4 and 5.5). The application runs on {len(HP)} platforms ({', '.join(HP)}), exchanges data "
          f"through files and shared databases, and needs {len(skill_list)} scarce skill sets ({', '.join(skill_list)}).")
         if len(HP) >= 3 else "",
@@ -1234,8 +1247,12 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
     for i, x in enumerate(arts, 1):
         typ = {"code": "Source code", "ui_screen": "Application screen", "schema": "Database schema", "config": "Configuration",
                "document": "Document"}.get(x.get("artifact_type"), "Source code")
+        qx = DDV.capture_quality(store, x, (DD.get(str(x["id"])) or {}).get("capture_concerns"))
+        qtxt = {"good": "copy checked line by line: complete",
+                "rescan": "copy incomplete (" + "; ".join(DDV.report_reason(i) for i in qx["issues"][:2]) + ")",
+                "unchecked": "copy not checked line by line"}[qx["status"]]
         ev.append([f"EV-{num}-{i:02d}", x["name"], typ, f"v{x.get('version', 1)}, {(x.get('updated') or x.get('created') or '')[:10]}",
-                   f"Program source set: {x['name']}"])
+                   f"Program source set: {x['name']}; {qtxt}"])
     rows(T[40], ev)
     assumptions = ["Findings reflect the source files listed in 13.2; components not provided are listed in 4.3 and are not scored.",
                    ("Business criticality is provisional (" + (tier or "not entered") + "); impact ratings in Section 9 use it "
@@ -1245,6 +1262,8 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
     if a["confidence"]["level"] != "high":
         assumptions.append(f"Assessment confidence is {a['confidence']['level']}: " + "; ".join(a["confidence"]["notes"][:3]) + ".")
     constraints = ["No access to production systems, data, service management records or stakeholders was part of this review."]
+    assumptions.append("Every statement about the code rests on lines of the copy provided that could be read reliably; "
+                       "statements that would rest on unclear lines are held back until a complete copy is provided (13.2).")
     p1 = doc.para("[Assumption made in the absence")
     if p1 is not None:
         _set_para(p1, assumptions[0])
@@ -1281,6 +1300,11 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
     from . import sections as SX
     SX.capability(doc, T, AM, s, fin)
     SX.boundary(doc, T, AM, arts, HP, missing_all)
+    SX.code_analysis(doc, T, arts, DD, DPROG, RQ)
+    for r_ in RQ:
+        doc.open_items.insert(0, (f"Re-obtain a complete copy of {r_['name']}: " + "; ".join(
+            DDV.report_reason(i) + (f" (lines {', '.join(i['lines'][:6])})" if i["lines"] else "") for i in r_["issues"][:3]),
+            "13.2", "IT"))
     SX.deployment(doc, T, AM, DM, HP, fin)
     SX.nfr(doc, T, fin, [c["name"] for c in AM["components"] if "Batch" in c["role"] or "procedures" in c["role"]])
     stack_names = []
@@ -1301,7 +1325,7 @@ def _render(store, report: dict, diagrams: dict, today=None) -> bytes:
     for t in techs:
         if not (t.get("version") or t.get("confidence") == "confirmed"):
             doc.open_items.append((f"Confirm the version of {t.get('name')} in use", "3.2", "IT"))
-    BLOCK = re.compile(r"reviewer|Business owner|criticality|boundary|missing|Provide the source|system of record", re.I)
+    BLOCK = re.compile(r"reviewer|Business owner|criticality|boundary|missing|Provide the source|system of record|^Re-obtain|line by line", re.I)
     items = _dedup(doc.open_items)
     blocking = [it for it in items if BLOCK.search(it[0])]
     other = [it for it in items if not BLOCK.search(it[0])]

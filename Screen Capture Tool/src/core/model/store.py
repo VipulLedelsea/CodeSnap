@@ -336,7 +336,9 @@ class ProgramStore:
                  self._all("SELECT title, status FROM finding WHERE status != 'open' OR origin != 'auto' ORDER BY title"),
                  self.get_meta("assessment_inputs", {}),
                  self.get_meta("verification", {}),
-                 self.get_meta("report_settings", {})]
+                 self.get_meta("report_settings", {}),
+                 {k: (v or {}).get("ran_at") for k, v in (self.get_meta("deepdive", {}) or {}).items()},
+                 (self.get_meta("deepdive_program", {}) or {}).get("ran_at")]
         return _h.sha1(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
     def capture_progress(self, artifact_id: int) -> dict:

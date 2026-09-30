@@ -1,3 +1,4 @@
+import re
 import time
 
 from .kinds import ENTITY_KINDS, RELATION_KINDS
@@ -151,4 +152,19 @@ def extract_structure(client, code: str, *, filename: str = "", language: str = 
         })
         entities += [e for e in data.get("entities") or [] if isinstance(e, dict)]
         relations += [r for r in data.get("relations") or [] if isinstance(r, dict)]
-    return {"entities": entities, "relations": relations, "calls": calls, "prompt_version": PROMPT_VERSION}
+    entities, relations, dropped = grounded(code, entities, relations)
+    return {"entities": entities, "relations": relations, "calls": calls, "prompt_version": PROMPT_VERSION,
+            "dropped": dropped}
+
+
+def _in_code(name, low):
+    parts = [p for p in re.split(r"[.\s/:]+", str(name or "").strip().strip("'\"()")) if p]
+    return bool(parts) and parts[-1].lower() in low
+
+
+def grounded(code, entities, relations):
+    """Keep only entities and relations whose names actually appear in the code: nothing the model invented."""
+    low = (code or "").lower()
+    ents = [e for e in entities if _in_code(e.get("name"), low)]
+    rels = [r for r in relations if _in_code(r.get("target"), low)]
+    return ents, rels, (len(entities) - len(ents)) + (len(relations) - len(rels))

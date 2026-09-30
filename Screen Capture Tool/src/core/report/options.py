@@ -16,12 +16,12 @@ def _posting(c):
         (c["writes"] or "Batch" in c["role"] or "procedures" in c["role"])
 
 
-def components(AM, techs, sec_f, texts=None):
+def components(AM, techs, sec_f, texts=None, fin=False, legacy_ui=(), copies=False):
     """One disposition per component, with the reason and the skill set the work needs."""
     no_path = {t.get("file") for t in techs if t.get("status") in ("eol", "legacy")
                and any(k.lower() in (t.get("name") or "").lower() for k in NO_PATH)}
     eol = {t.get("file") for t in techs if t.get("status") in ("eol", "extended", "ending")}
-    posting = [c for c in AM["components"] if _posting(c)]
+    posting = [c for c in AM["components"] if _posting(c)] if fin else []
     out = []
     for c in AM["components"]:
         n, role, plat, lang = c["name"], c["role"], c["platform"], (c["language"] or "")
@@ -34,14 +34,15 @@ def components(AM, techs, sec_f, texts=None):
             d, why = "replace", "online inquiry on a terminal screen; replaced by the web front end over the new API, " \
                                 "retiring the CICS transaction"
             skill = "COBOL/CICS" if role != "3270 terminal screen" else "Web front end"
-        elif c["layer"] == "Presentation":
-            d, why = "rebuild", "legacy web page (old browser, accessibility and security issues); rebuilt in the new " \
-                                "front end, with the password-field issue fixed now"
+        elif c["layer"] == "Presentation" and (n in legacy_ui or n in eol or fs):
+            d, why = "rebuild", "screen or web page rebuilt in the new front end" + (
+                f"; its {len(fs)} security finding(s) are fixed now" if fs else "")
             skill = "Web front end"
         elif role == "Database definition":
-            d, why = "retain", "keep until the system-of-record decision (5.5); then migrate the data to the chosen store " \
-                               "and retire the IMS database"
-            skill = "IMS / data migration"
+            ims = "IMS" in lang or "Assembl" in lang or "DBD" in _text(c)
+            d, why = ("retain", "keep until the system-of-record decision (5.5); then migrate the data to the chosen store"
+                      + (" and retire the IMS database" if ims else "")) if copies else ("retain", "keep; the data definition is sound")
+            skill = "IMS / data migration" if ims else "Data migration"
         elif c in posting and len(posting) > 1 and plat not in ("IBM mainframe (z/OS)",):
             others = [p["name"] for p in posting if p is not c]
             d, why = "consolidate", f"one of {len(posting)} components that post or calculate payments (also {', '.join(others[:3])}); " \
@@ -71,13 +72,16 @@ def _text(c):
 def program(cds, platforms) -> dict:
     codes = [c["code"] for c in cds]
     changing = [c for c in cds if c["code"] in ("rearchitect", "replace", "rebuild", "consolidate", "replatform")]
-    if any(c in ("rearchitect", "replace", "rebuild") for c in codes) and (platforms >= 3 or len(changing) >= 3):
+    if any(c in ("rearchitect", "replace") for c in codes) and (platforms >= 3 or len(changing) >= 3):
         code, label = "rearchitect", "Re-architect (phased, by component)"
-        meaning = ("move to a service-based architecture in stages: keep the proven batch logic while the front ends, "
-                   "posting and data are rebuilt or consolidated component by component")
+        meaning = ("move to a service-based architecture in stages: keep what is sound while the front ends, business "
+                   "logic and data are rebuilt or consolidated component by component")
     elif changing:
-        code, label = changing[0]["code"], DISP[changing[0]["code"]]
-        meaning = changing[0]["why"]
+        rank = ["rearchitect", "replace", "replatform", "consolidate", "rebuild"]
+        top = min(changing, key=lambda c: rank.index(c["code"]))
+        code, label = ("refactor", "Retain and modernize selected components") if top["code"] == "rebuild" else (top["code"], DISP[top["code"]])
+        meaning = (f"keep the application and {DISP[top['code']].lower()} {', '.join(c['name'] for c in changing if c['code'] == top['code'])}"
+                   f": {top['why']}")
     else:
         code, label, meaning = "retain", "Retain", "keep the application and fix its findings in place"
     return {"code": code, "label": label, "meaning": meaning,
@@ -94,8 +98,9 @@ def scores(facts) -> list:
     plats = facts["platforms"]
     opts = {
         "Re-architect (phased)": ([5, 4, 5, 2, 4, 5, 4],
-                                  f"removes the end-of-life components, consolidates the {facts['posting']} posting "
-                                  f"implementations and names a system of record; the most change, done in stages."),
+                                  "removes the end-of-life components"
+                                  + (f", consolidates the {facts['posting']} posting implementations" if facts["posting"] > 1 else "")
+                                  + " and names a system of record; the most change, done in stages."),
         "Replace (commercial or shared solution)": ([5, 4, 5, 2, 5, 4, 4],
                                                     "could retire all custom code, but depends on a market fit that has "
                                                     "not been assessed and on migrating every data copy."),
@@ -123,7 +128,7 @@ EFFORT = {"retain": (0.5, 1.5), "replatform": (3, 6), "rearchitect": (6, 12), "r
 
 
 def estimate(cds, facts) -> dict:
-    """Effort by skill set, with the basis for each line, plus the cross-cutting work a payment system needs."""
+    """Effort by skill set, with the basis for each line, plus the cross-cutting work the change needs."""
     lines = {}
 
     def add(skill, work, lo, hi, basis):
@@ -142,10 +147,12 @@ def estimate(cds, facts) -> dict:
         if c["findings"]:
             add("Security remediation", f"fix {c['findings']} finding(s) in {c['name']}", 0.3 * c["findings"],
                 0.8 * c["findings"], "0.3–0.8 person-weeks per finding, including retest")
-    if facts["fin"]:
-        add("Test and QA", "characterization tests from current outputs for every calculation", 4, 8,
-            "a test harness is a prerequisite for any change to payment logic")
-        add("Test and QA", f"parallel runs over at least two payment cycles", 3, 6,
+    changing = [c for c in cds if c["code"] not in ("retain", "retire")]
+    if changing:
+        add("Test and QA", "characterization tests from current outputs for the logic that changes",
+            2 + 0.5 * len(changing), 4 + len(changing), "a test harness is a prerequisite for changing business logic")
+    if facts["fin"] and changing:
+        add("Test and QA", "parallel runs over at least two payment cycles", 3, 6,
             "old and new results compared line by line before cutover")
     if facts["copies"]:
         add("Data migration and reconciliation", f"system-of-record decision, reconciliation and migration of "
@@ -166,21 +173,36 @@ def estimate(cds, facts) -> dict:
 
 
 def sequence(facts) -> list:
-    """Work ordered by dependency: fix exposure, settle the data, build the safety net, then change."""
-    out = [("0. Stabilize (months 0–3)", "Fix the security and control findings in place: rotate the passwords, add "
-            "authorization and maker-checker to approval, stop swallowing errors, move the audit trail to a central log.")]
+    """Work ordered by dependency: fix exposure, settle the data, build the safety net, then change.
+    facts: fin, fixes (list of plain fixes), copies, consolidate, front_end, platforms, phased."""
+    cyc = "payment cycle" if facts["fin"] else "business peak"
+    out, m = [], 0
+    fixes = facts.get("fixes") or []
+    if fixes:
+        out.append(("0. Stabilize (months 0–3)", "Fix the security and control findings in place: " + "; ".join(fixes[:4]) + "."))
     out.append(("1. Settle the boundary and the data (months 1–4)",
-                "Confirm the application boundary and provide the missing code; name the system of record for each "
-                "entity (5.5) and reconcile the copies. Nothing is rebuilt before this decision."))
-    if facts["fin"]:
-        out.append(("2. Build the safety net (months 2–5)", "Characterization tests from current outputs; control totals "
-                    "on every file exchange; the parallel-run approach agreed with finance."))
-    out.append(("3. Services first (months 4–12)", "Expose the business logic through an API; consolidate the posting "
-                "implementations into one service on the chosen data store."))
-    out.append(("4. Front ends (months 8–18)", "Replace the desktop, terminal and legacy web screens with one accessible "
-                "web front end on the API, screen by screen."))
-    out.append(("5. Data consolidation and platform exit (months 12–30)", "Migrate the remaining copies to the system of "
-                "record and retire the platforms no longer needed, one at a time."))
-    out.append(("Constraint", "No cutover during a payment cycle or year-end; each step keeps the old path available until "
-                "parallel runs agree."))
+                "Confirm the application boundary and provide any missing code"
+                + ("; name the system of record for each entity (5.5) and reconcile the copies. Nothing is rebuilt before "
+                   "this decision." if facts.get("copies") else ".")))
+    if facts.get("changing"):
+        out.append(("2. Build the safety net (months 2–5)", "Characterization tests from current outputs"
+                    + ("; control totals on every file exchange; the parallel-run approach agreed with finance." if facts["fin"] else ".")))
+        out.append(("3. Services first (months 4–12)", "Expose the business logic through an API"
+                    + ("; consolidate the posting implementations into one service on the chosen data store." if facts.get("consolidate") else ".")))
+    if facts.get("front_end"):
+        out.append(("4. Front ends (months 8–18)", "Replace the legacy screens with one accessible web front end on the "
+                    "API, screen by screen."))
+    if facts.get("platforms", 1) >= 3 and facts.get("phased"):
+        out.append(("5. Data consolidation and platform exit (months 12–30)", "Migrate the remaining copies to the system "
+                    "of record and retire the platforms no longer needed, one at a time."))
+    out.append(("Constraint", f"No cutover during a {cyc} or year-end; each step keeps the old path available until the "
+                "results agree."))
     return out
+
+
+def elapsed(facts, est) -> str:
+    if facts.get("phased") and facts.get("platforms", 1) >= 3:
+        return "18–30 months elapsed"
+    if facts.get("phased"):
+        return "9–18 months elapsed"
+    return f"{est['months'][0]}–{est['months'][1]} months elapsed"

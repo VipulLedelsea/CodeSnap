@@ -549,6 +549,26 @@ class App:
         except Exception:  # noqa: BLE001
             pass
 
+    def _analyse_code(self, artifact_id, name):
+        """The line-by-line code analysis, run as part of analysing every file (CODESNAP_DEEP=0 turns it off)."""
+        import os
+        if os.environ.get("CODESNAP_DEEP", "1") == "0" or not (self.program and artifact_id and self.client):
+            return
+        from core import deepdive, status
+        from core.model import ProgramStore
+        try:
+            status.publish(f"Reviewing {name} line by line", "tool", stage="save")
+            with ProgramStore.open(self.program) as store:
+                res = deepdive.run(store, self.client, artifact_ids=[artifact_id])
+                q = deepdive.rescan_requests(store)
+            if res["errors"]:
+                print("Code analysis: " + "; ".join(res["errors"]), file=sys.stderr)
+            bad = next((r for r in q if r["artifact_id"] == artifact_id), None)
+            if bad:
+                status.publish(f"{name} needs a rescan: " + "; ".join(i["reason"] for i in bad["issues"][:2]), "error", stage="done")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Code analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+
     def _ingest_into_program(self, imgs, ctx, records=(), artifact_id=None):
         from core import status
         from core.model import ProgramStore, complete_capture, ingest_capture
@@ -562,6 +582,8 @@ class App:
                                       error=r["error"])
                     art = store.artifact(final_id)
                 ok = art["status"] != "failed"
+                if ok:
+                    self._analyse_code(final_id, art["name"])
                 status.publish(f"Added {art['name']} (v{art['version']}) to program {self.program}" if ok else
                                f"Couldn't read {art['name']} — it's saved; Retry or Recapture it", "info" if ok else "error",
                                stage="done")
@@ -581,6 +603,7 @@ class App:
                                   output_tokens=r["output_tokens"], cost=r["cost"], ms=r["ms"], ok=r["ok"],
                                   error=r["error"])
                 name = store.artifact(artifact_id)["name"]
+            self._analyse_code(artifact_id, name)
             status.publish(f"Added {name} to program {self.program}", "info", stage="done")
         except Exception as exc:  # noqa: BLE001
             print(f"Program update failed: {type(exc).__name__}: {exc}", file=sys.stderr)

@@ -118,23 +118,27 @@ def boundary(doc, T, AM, arts, HP, missing):
 def deployment(doc, T, AM, DM, HP, fin):
     a = _h(doc, "5. Data profile and reporting", "4.5 Deployment view (inferred) and interface controls")
     rows = []
-    plats = {c["platform"] for c in AM["components"]}
-    if "IBM mainframe (z/OS)" in plats:
-        rows.append(["z/OS mainframe", "COBOL batch, CICS inquiry, IMS database" + (", Db2" if DM["db2"] else ""),
-                     "COBOL, CICS and IMS code", "LPAR, CICS region, batch scheduler, disaster recovery site"])
-    if "IBM i (AS/400)" in plats:
-        rows.append(["IBM i partition", "RPG posting program and its database files", "RPG F-specs", "Partition, backup and HA"])
-    if "Oracle Database" in plats:
-        rows.append(["Oracle database server", "PL/SQL posting package and tables", "PL/SQL package", "Version, host, HA, backup"])
-    for sq in DM["sql_server"]:
-        rows.append([f"SQL Server ({sq.split(' on ')[-1]})", f"Database {sq.split(' on ')[0]}", "Connection string in the code",
-                     "Version, HA, encryption, backup"])
-    if "Microsoft .NET (Windows server)" in plats:
-        rows.append(["Windows web server (IIS)", "ASP.NET MVC payment controller", "C# controller code",
-                     "Network zone, internet exposure, TLS certificate"])
-    if "Windows desktop (VB6)" in plats:
-        rows.append(["Staff Windows desktops", "VB6 calculation client with a local audit file", "VB6 form and local path",
-                     "Number of desktops, Windows version, VB6 runtime support"])
+    NODE = {"IBM mainframe (z/OS)": ("z/OS mainframe", "LPAR, CICS region, batch scheduler, disaster recovery site"),
+            "IBM i (AS/400)": ("IBM i partition", "Partition, backup and high availability"),
+            "Oracle Database": ("Oracle database server", "Version, host, high availability, backup"),
+            "Microsoft .NET (Windows server)": ("Windows web or application server (IIS)", "Network zone, internet exposure, TLS certificate"),
+            "Windows desktop (VB6)": ("Staff Windows desktops", "Number of desktops, Windows version, runtime support"),
+            "Java": ("Java application server", "Server, version, network zone"),
+            "Database server": ("Database server", "Engine, version, high availability, backup"),
+            "Web browser": ("Web server for the pages", "Host, network zone, TLS certificate")}
+    for p in HP + [x for x in ("Web browser",) if any(c["platform"] == x for c in AM["components"])]:
+        cs = [c for c in AM["components"] if c["platform"] == p]
+        if not cs and p != "Microsoft SQL Server":
+            continue
+        if p == "Microsoft SQL Server":
+            for sq in DM["sql_server"]:
+                rows.append([f"SQL Server ({sq.split(' on ')[-1]})", f"Database {sq.split(' on ')[0]}", "Connection string in the code",
+                             "Version, high availability, encryption, backup"])
+            continue
+        node, conf = NODE.get(p, (p, "Host, version, network zone"))
+        langs = sorted({c["language"] for c in cs if c["language"]})
+        rows.append([node, "; ".join(f"{c['name']} ({c['role'].lower()})" for c in cs[:4]),
+                     f"{', '.join(langs) or 'Component'} code", conf])
     a = _p(doc, "No hosting or network information was provided. The nodes below are inferred from the code and are the "
                 "starting point for the physical view; for a " + ("Tier 1 payment system" if fin else "business system")
                 + " the network zones, availability and disaster recovery of each node are essential and are open items.", a)
@@ -159,9 +163,12 @@ def nfr(doc, T, fin, batch_names):
     a = _h(doc, "7. Technical debt", "6.3 Non-functional requirements")
     a = _p(doc, "Performance and resilience could not be measured from the code. The requirements below are the ones "
                 "that matter for this application; each is an open item for the operations team.", a)
-    rows = [["Availability target", "Unknown", "Unknown", "Staff screens and the web page are used during the payment cycle"],
-            ["Recovery time objective (RTO)", "Unknown", "Unknown", "How long payments can be delayed after a failure"],
-            ["Recovery point objective (RPO)", "Unknown", "Unknown", "How much posted payment data can be lost"],
+    cyc = "payment cycle" if fin else "business cycle"
+    rows = [["Availability target", "Unknown", "Unknown", f"The screens are used during the {cyc}"],
+            ["Recovery time objective (RTO)", "Unknown", "Unknown", "How long payments can be delayed after a failure" if fin
+             else "How long the business can work without the application"],
+            ["Recovery point objective (RPO)", "Unknown", "Unknown", "How much posted payment data can be lost" if fin
+             else "How much recent data can be lost"],
             ["Batch window", "Unknown", "Unknown", f"Batch components: {', '.join(batch_names) or 'none identified'}"],
             ["Peak volumes", "Unknown", "Unknown", "Monthly payment runs" if fin else "Business peaks"],
             ["Online response time", "Unknown", "Unknown", "Inquiry and approval screens"]]
@@ -221,7 +228,7 @@ def identity(doc, T, AM, CT, DM):
                 "Information security")
 
 
-def operations(doc, T, AM, DM, skill_list, audit):
+def operations(doc, T, AM, DM, skill_list, audit, fin=False):
     a = _h(doc, "11. User experience", "10.5 Batch operations")
     rows = []
     for l in DM["lineage"]:
@@ -231,8 +238,11 @@ def operations(doc, T, AM, DM, skill_list, audit):
             continue
         rows.append([l["component"], c["platform"], "Scheduler not provided", ", ".join(l["in"]) or "–",
                      ", ".join(l["out"]) or "–", "No restart or checkpoint logic seen", "Order relative to the other runs unknown"])
-    a = _p(doc, "Several components run as scheduled work on different platforms and must run in the right order within the "
-                "payment cycle. The job chain, scheduler, restart and recovery procedures and run books were not provided.", a)
+    plats = len({r[1] for r in rows})
+    a = _p(doc, (f"{len(rows)} component(s) run as scheduled or unattended work" + (f" on {plats} platforms" if plats > 1 else "")
+                 + f" and must run in the right order within the {'payment cycle' if fin else 'business cycle'}. "
+                 if rows else "No scheduled work was identified in the code. ")
+           + "The job chain, scheduler, restart and recovery procedures and run books were not provided.", a)
     a = _table(doc, T, a, ["Program", "Platform", "Trigger", "Inputs", "Outputs", "Restart and recovery", "Dependencies"],
                rows, widths=[1.4, 1.2, 1.0, 1.3, 1.3, 1.2, 1.0])
     doc.unknown("Job chains, scheduler, restart and recovery procedures and run books (10.5)", "10.5", "IT")
@@ -250,49 +260,152 @@ def operations(doc, T, AM, DM, skill_list, audit):
     doc.unknown("Ticket counts for 24 months and the named people who can maintain each platform (10.2, 10.7)", "10.7", "IT")
 
 
-def strategy(doc, T, SCF, PR, CD, HP, fin, tier, no_path):
+def strategy(doc, T, SCF, PR, CD, HP, fin, tier, no_path, DM=None, CT=None):
     a = _h(doc, "13. Evidence, open items and sign-off", "12.5 Portfolio position")
-    tech = SCF.get("overall")
-    a = _p(doc, f"Business value is taken as high ({tier or 'criticality not entered'}), and technical fit as low "
-                f"(overall condition {tech or 'not rated'}). On a business value against technical fit grid this places the "
-                f"application in Migrate: keep the business function, move it off the current technology. The placement is "
-                f"provisional until business value is confirmed and the other portfolio applications are placed.", a)
+    tech = SCF.get("overall") or "not rated"
+    try:
+        tc = int(str(tech)[0])
+    except ValueError:
+        tc = None
+    high = str(tier or "").startswith("Tier 1")
+    quad = ("Migrate" if high and tc and tc >= 3 else "Invest" if high else "Eliminate" if tc and tc >= 4 else "Tolerate")
+    a = _p(doc, f"Business value is taken as {'high' if high else 'not yet rated'} ({tier or 'criticality not entered'}), and "
+                f"technical fit as {'low' if tc and tc >= 3 else 'adequate'} (overall condition {tech}). On a business value "
+                f"against technical fit grid this places the application in {quad}. The placement is provisional until "
+                f"business value is confirmed and the other portfolio applications are placed.", a)
     a = _h(doc, "13. Evidence, open items and sign-off", "12.6 Transition architecture and decisions")
-    states = [["Now", f"{len(HP)} platforms; data copies without a system of record; approval without authorization",
-               "Stabilize (1.3, 8.6)"],
-              ["Interim 1", "Security and control gaps closed; system of record named; reconciliation running", "Data decision"],
-              ["Interim 2", "Business logic behind an API; one posting service; old screens still in use",
-               "Services first"],
-              ["Interim 3", "New web front end in use; VB6 and terminal screens retired", "Front ends"],
-              ["Target", "Consolidated data on the chosen store; platforms not needed are retired", "Platform exit"]]
+    ents = [g["name"].lower() for g in (DM or {}).get("entities", []) if len(g["copies"]) >= 2]
+    poor = [r["area"].lower() for r in (CT or []) if r.get("rating") and r["rating"] >= 4]
+    cons = any(c["code"] == "consolidate" for c in CD)
+    fe = [c["name"] for c in CD if c["layer"] == "Presentation" or c["code"] == "rearchitect"]
+    states = [["Now", f"{len(HP)} platform(s)" + (f"; {', '.join(ents)} data held in several copies" if ents else "")
+               + (f"; weak controls: {', '.join(poor[:3])}" if poor else ""), "Stabilize (1.3)"]]
+    if poor:
+        states.append(["Interim 1", "Security and control gaps closed" + ("; system of record named; reconciliation running" if ents else ""),
+                       "Stabilize and settle the data"])
+    if any(c["code"] not in ("retain", "retire") for c in CD):
+        states.append(["Interim 2", "Business logic behind an API" + ("; one posting service" if cons else "") + "; old screens still in use",
+                       "Services first"])
+    if fe:
+        states.append(["Interim 3", "New web front end in use; replaced screens retired", "Front ends"])
+    states.append(["Target", "Supported technology throughout" + ("; consolidated data on the chosen store" if ents else "")
+                   + ("; platforms not needed are retired" if len(HP) >= 3 else ""), "Final phase (12.4)"])
     a = _table(doc, T, a, ["State", "What is true", "Reached by (12.4)"], states, widths=[1.1, 5.0, 2.2])
     a = _p(doc, "Key architecture decisions", a, bold=True)
-    decisions = [
-        "AD-1 System of record for district and payment data: choose one store per entity before any rebuild. Reason: "
-        "every later step depends on it.",
-        "AD-2 Integration style: an API layer in front of the business logic, with managed file transfer for the files "
-        "that remain. Reason: one visible, monitored interface instead of file drops and shared tables.",
-        f"AD-3 Front end: one accessible web front end replacing {', '.join(n for n in no_path) or 'the legacy'} "
-        "desktop and terminal screens. Reason: no upgrade path and accessibility.",
-        "AD-4 Posting: consolidate the posting implementations into one service. Reason: several copies of the same "
-        "business rule on different platforms cannot be kept consistent.",
-        "AD-5 Identity: the organisation's identity service and a secrets store for all components. Reason: shared "
-        "accounts and embedded passwords today."]
-    for d in decisions:
-        a = _p(doc, d, a, bullet=True)
-    a = _p(doc, "Principles applied: settle the data before the screens; keep the old path running until parallel runs "
-                "agree; no cutover in a payment cycle; reduce platforms at every step; security and audit built in, not "
-                "added per component.", a)
+    decisions = []
+    if ents:
+        decisions.append(f"System of record for {', '.join(ents)} data: choose one store per entity before any rebuild. "
+                         "Reason: every later step depends on it.")
+    if len(HP) >= 2 or (DM or {}).get("occurrences"):
+        decisions.append("Integration style: an API layer in front of the business logic, with managed file transfer for "
+                         "any files that remain. Reason: one visible, monitored interface.")
+    if fe:
+        decisions.append("Front end: one accessible web front end replacing " + (", ".join(no_path) + " and the other legacy "
+                         "screens" if no_path else "the legacy screens") + ". Reason: supportability and accessibility.")
+    if cons:
+        decisions.append("Posting: consolidate the posting implementations into one service. Reason: several copies of the "
+                         "same business rule on different platforms cannot be kept consistent.")
+    if any(r["area"] in ("Secrets management", "Privileged", "Authentication") and r.get("rating") for r in (CT or [])):
+        decisions.append("Identity: the organisation's identity service and a secrets store for every component. Reason: "
+                         "shared accounts or embedded passwords today.")
+    for i, d in enumerate(decisions or ["No architecture decisions are needed beyond the fixes in 1.3."], 1):
+        a = _p(doc, (f"AD-{i} " if decisions else "") + d, a, bullet=True)
+    a = _p(doc, "Principles applied: " + "; ".join(x for x in (
+        "settle the data before the screens" if ents else "",
+        "keep the old path running until results agree",
+        "no cutover in a payment cycle" if fin else "no cutover at a business peak",
+        "reduce platforms at every step" if len(HP) >= 3 else "",
+        "build security and audit in once, not per component") if x) + ".", a)
     a = _h(doc, "13. Evidence, open items and sign-off", "12.7 Platform run costs and licensing")
-    drivers = {"IBM mainframe (z/OS)": ("MSU / MIPS capacity charges, IMS, CICS and Db2 licences", "Retire when the batch and IMS data move"),
-               "IBM i (AS/400)": ("Per-core IBM i licence and hardware maintenance", "Retire with posting consolidation"),
-               "Oracle Database": ("Per-processor or named-user Oracle licence and support", "Retained or retired by the data decision"),
-               "Microsoft SQL Server": ("Per-core SQL Server licence", "Likely target; consolidate the two databases"),
-               "Microsoft .NET (Windows server)": ("Windows Server licences; .NET itself is free", "Retained (current .NET)"),
-               "Windows desktop (VB6)": ("Desktop estate support; VB6 runtime unsupported", "Removed with the web front end")}
-    rows = [[p, *drivers.get(p, ("To confirm", "To confirm")), "Unknown"] for p in HP]
+    drivers = {"IBM mainframe (z/OS)": "MSU / MIPS capacity charges; CICS, IMS and Db2 licences where used",
+               "IBM i (AS/400)": "Per-core IBM i licence and hardware maintenance",
+               "Oracle Database": "Per-processor or named-user Oracle licence and support",
+               "Microsoft SQL Server": "Per-core SQL Server licence",
+               "Microsoft .NET (Windows server)": "Windows Server licences; .NET itself is free",
+               "Windows desktop (VB6)": "Desktop estate support; the VB6 runtime is unsupported",
+               "Java": "Application server and JDK support subscriptions",
+               "Database server": "Database licence and support"}
+    rows = []
+    for p in HP:
+        cs = [c for c in CD if c["platform"] == p]
+        moving = cs and all(c["code"] in ("rearchitect", "replace", "rebuild", "consolidate", "retire") for c in cs)
+        rows.append([p, drivers.get(p, "To confirm"), "Removed when its components move (12.3)" if moving else
+                     "Retained, or decided with the data consolidation" if cs else "Decided with the data consolidation",
+                     "Unknown"])
     a = _p(doc, "Full cost estimates are out of scope, but platform charges often drive the case to exit a platform. The "
                 "cost drivers per platform and the licences each disposition removes are listed for the finance team to cost.", a)
     a = _table(doc, T, a, ["Platform", "Cost drivers", "Effect of the recommendation", "Current annual cost"], rows,
                widths=[1.9, 2.8, 2.4, 1.2])
     doc.unknown("Current licensing and capacity costs per platform (12.7)", "12.7", "Finance")
+
+
+GROUPS = [("What it does and how it is organised", ("purpose", "control_flow")),
+          ("Business rules and calculations", ("business_rule", "calculation", "configuration")),
+          ("Data it reads and writes", ("data_read", "data_write")),
+          ("Interfaces and dependencies", ("interface", "dependency")),
+          ("Screens", ("ui",)),
+          ("Error handling", ("error_handling",)),
+          ("Risks and defects", ("security", "data_integrity", "defect"))]
+
+
+def _cite(f):
+    a, b = f["lines"]
+    return f"line {a}" if a == b else f"lines {a}–{b}"
+
+
+def code_analysis(doc, T, arts, DD, DPROG, RQ, RD=lambda x: x):
+    """3.6: the line-by-line review of each component, every statement with its line reference."""
+    a = _h(doc, "4. Architecture and integrations", "3.6 Code analysis by component")
+    done = [x for x in arts if str(x["id"]) in DD]
+    total_f = sum(len(DD[str(x["id"])].get("facts") or []) for x in done)
+    rejected = sum(DD[str(x["id"])].get("rejected") or 0 for x in done)
+    unver = sum(len(DD[str(x["id"])].get("unverifiable") or []) for x in done)
+    if not done:
+        a = _p(doc, "The line-by-line review of the components has not been run for this program, so this report rests on "
+                    "the automated checks only. Run the deep code analysis in the application and rebuild the report.", a)
+        doc.unknown("Run the line-by-line code analysis and rebuild the report", "3.6", "Assessment lead")
+        return a
+    a = _p(doc, f"Each of the {len(done)} components below was reviewed line by line. Every statement cites the lines it "
+                f"comes from and was checked twice: the quoted text had to appear on those lines, and an independent "
+                f"second review had to confirm the statement against the code. {total_f} statements passed"
+                + (f"; {rejected} were rejected in these checks and are not shown" if rejected else "")
+                + (f"; {unver} rest only on lines of the copy provided that could not be read reliably and are held back "
+                   f"until a complete copy is provided" if unver else "")
+                + ". Statements marked 'Inferred' are conclusions drawn from the cited lines, not stated in the code.", a)
+    rq = {r["artifact_id"]: r for r in RQ}
+    for x in arts:
+        r = DD.get(str(x["id"]))
+        a = _p(doc, x["name"], a, bold=True)
+        if not r:
+            a = _p(doc, "Not yet reviewed line by line.", a)
+            continue
+        if r.get("purpose"):
+            a = _p(doc, r["purpose"], a)
+        facts = r.get("facts") or []
+        for title, cats in GROUPS:
+            fs = [f for f in facts if f["category"] in cats]
+            if not fs:
+                continue
+            a = _p(doc, title, a, italic=True)
+            for f in fs:
+                sev = f" [{f['severity']}]" if f.get("severity") and f["category"] in ("security", "data_integrity", "defect") else ""
+                inf = "Inferred: " if f.get("basis") == "inferred" else ""
+                a = _p(doc, f"{inf}{f['statement'].rstrip('.')}{sev} ({_cite(f)}).", a, bullet=True)
+        if r.get("unknowns"):
+            a = _p(doc, "Not shown in this file", a, italic=True)
+            for u in r["unknowns"][:15]:
+                a = _p(doc, u["what"].rstrip(".") + (f" (line {u['line']})" if u.get("line") else "") + ".", a, bullet=True)
+        if x["id"] in rq or r.get("unverifiable"):
+            iss = (rq.get(x["id"]) or {}).get("issues") or []
+            from core.deepdive import report_reason
+            a = _p(doc, "Source copy incomplete: " + "; ".join(
+                report_reason(i) + (f" (lines {', '.join(i['lines'][:8])})" if i["lines"] else "") for i in iss)
+                + ". A complete copy is needed before the review of these lines can be relied on."
+                + (f" {len(r.get('unverifiable') or [])} statement(s) are held back until then." if r.get("unverifiable") else ""),
+                a, italic=True)
+    obs = (DPROG or {}).get("observations") or []
+    if obs:
+        a = _p(doc, "Across components", a, bold=True)
+        for o in obs:
+            a = _p(doc, f"{o['title']}: {o['statement'].rstrip('.')} ({'; '.join(o['cites'][:6])}).", a, bullet=True)
+    return a

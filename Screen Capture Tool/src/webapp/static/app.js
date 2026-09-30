@@ -856,6 +856,7 @@ async function loadProgram() {
         <span class="pf-meta">${escapeHtml(a.language || a.artifact_type)} · v${a.version} · ${a.entities} entities · ${a.frames} frames${a.pending && a.pending.recapture_of ? " · recapture of " + escapeHtml(a.pending.recapture_of) : ""}</span>
         <span class="pf-status ${_attr(a.status)}${a.pending && a.pending.analysing ? " busy" : ""}">${escapeHtml(_statusText(a))}</span>
         ${_checkBadge(a.check)}
+        ${_qualityBadge(a)}
         <span class="pf-acts">
           <button class="btn-link" data-act="rename" type="button">Rename</button>
           ${a.status === "captured" ? "" : `<button class="btn-link" data-act="recapture" type="button">Recapture</button>
@@ -867,6 +868,7 @@ async function loadProgram() {
       <div class="pf-detail"></div>
     </details>`).join("") : `<p class="project-hint" style="margin:0">No files yet — start a capture. Each start/stop becomes one file.</p>`;
   renderCaptureBar(d);
+  renderDeepBar(d);
   document.querySelectorAll("#progFiles .pf-acts [data-act]").forEach(b => b.addEventListener("click", ev => {
     ev.preventDefault(); ev.stopPropagation(); fileAction(b.closest(".prog-file"), b.dataset.act);
   }));
@@ -916,6 +918,70 @@ function _checkBadge(v) {
   const tip = "Verified = every word has the length and column the screenshot's pixels show." +
     (v.unchecked ? ` ${v.unchecked} line(s) couldn't be checked (no fixed-width text grid).` : "");
   return `<span class="pf-check ${warn ? "warn" : ok === v.lines ? "ok" : ""}" title="${_attr(tip)}">${escapeHtml(txt)}</span>`;
+}
+function _qualityBadge(a) {
+  const q = a.quality, dp = a.deep;
+  let out = "";
+  if (q && q.status === "rescan") {
+    const tip = q.issues.map(i => `${i.reason}${i.lines && i.lines.length ? " (lines " + i.lines.join(", ") + ")" : ""}: ${i.advice}`).join("\n");
+    out += `<span class="pf-check bad" title="${_attr(tip)}">Rescan needed</span>`;
+  }
+  if (dp) out += `<span class="pf-check ${dp.current ? "ok" : ""}" title="Statements from the line-by-line review that passed both checks against the code">${dp.facts} reviewed facts${dp.current ? "" : " · out of date"}</span>`;
+  return out;
+}
+let _deepPoll = null;
+function renderDeepBar(d) {
+  const bar = $("progCapBar");
+  const rescan = d.artifacts.filter(a => a.quality && a.quality.status === "rescan");
+  const notDone = d.artifacts.filter(a => a.status !== "captured" && a.quality && !(a.deep && a.deep.current));
+  const div = document.createElement("div");
+  div.className = "deepbar";
+  div.innerHTML = (rescan.length ? `<div class="cb rescan"><b>Rescan needed before the analysis can be relied on:</b>${rescan.map(a =>
+      `<div class="rs-item"><b>${escapeHtml(a.name)}</b> — ${a.quality.issues.map(i => escapeHtml(i.reason + (i.lines && i.lines.length ? " (lines " + i.lines.slice(0, 8).join(", ") + ")" : "") + ": " + i.advice)).join("; ")}
+        <button class="btn-link" data-rescan="${a.id}" type="button">Add screenshots by capturing</button></div>`).join("")}</div>` : "")
+    + `<div class="cb deep"><span id="deepStatus">${notDone.length ? `${notDone.length} file(s) not yet analysed line by line (this runs automatically after each capture).` : "Every file has been reviewed line by line."}</span>
+       <button class="btn-link" data-deep="run" type="button">${notDone.length ? "Analyse now" : "Re-run the analysis"}</button></div>`;
+  bar.appendChild(div);
+  div.querySelectorAll("[data-rescan]").forEach(b => b.addEventListener("click", async () => {
+    try {
+      await _json(`${_pbase()}/recapture`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_id: Number(b.dataset.rescan), mode: "append" }) });
+      toast("Next capture adds to this file: capture the lines listed."); loadProgram();
+    } catch (e) { toast(e.message); }
+  }));
+  div.querySelector("[data-deep]").addEventListener("click", async () => {
+    try { const r = await _json(`${_pbase()}/deepdive`, { method: "POST" }); toast(`Deep analysis started: ${r.total} file(s).`); pollDeep(); }
+    catch (e) { toast(e.message); }
+  });
+  pollDeep(true);
+}
+async function pollDeep(once) {
+  if (_deepPoll) return;
+  let r;
+  try { r = await _json(`${_pbase()}/deepdive`); } catch (e) { return; }
+  const el = $("deepStatus");
+  if (r.job && r.job.running) {
+    if (el) el.textContent = `Reviewing the code line by line: ${r.job.done} of ${r.job.total} file(s) done…`;
+    _deepPoll = setTimeout(() => { _deepPoll = null; pollDeep(); }, 6000);
+  } else if (!once) { _deepPoll = null; loadProgram(); }
+  if (r.job && r.job.errors && r.job.errors.length && el) el.textContent += " Errors: " + r.job.errors.slice(0, 2).join("; ");
+}
+const DEEP_GROUPS = [["What it does", ["purpose", "control_flow"]], ["Business rules and calculations", ["business_rule", "calculation", "configuration"]],
+  ["Data read and written", ["data_read", "data_write"]], ["Interfaces and dependencies", ["interface", "dependency"]], ["Screens", ["ui"]],
+  ["Error handling", ["error_handling"]], ["Risks and defects", ["security", "data_integrity", "defect"]]];
+function _deepHtml(dd, current, q) {
+  const qi = q && q.status === "rescan" ? `<div class="pf-gap"><b>Rescan needed.</b> ${q.issues.map(i => escapeHtml(i.reason + (i.lines && i.lines.length ? " (lines " + i.lines.join(", ") + ")" : "") + ": " + i.advice)).join("<br>")}</div>` : "";
+  if (!dd) return `<div class="pf-verify"><div class="pf-vhead">Line-by-line review</div>${qi}<div class="project-hint">Not run yet — it runs after each capture, or use “Analyse now”.</div></div>`;
+  const cite = f => f.lines[0] === f.lines[1] ? `L${f.lines[0]}` : `L${f.lines[0]}–${f.lines[1]}`;
+  const groups = DEEP_GROUPS.map(([t, cats]) => {
+    const fs = (dd.facts || []).filter(f => cats.includes(f.category));
+    return fs.length ? `<div class="dd-g"><div class="dd-t">${t}</div>${fs.map(f => `<div class="dd-f"><b>${cite(f)}</b> ${f.basis === "inferred" ? "<i>Inferred:</i> " : ""}${escapeHtml(f.statement)}${f.severity ? ` <span class="dd-sev ${_attr(f.severity)}">${escapeHtml(f.severity)}</span>` : ""}${f.review === "corrected" ? ' <small title="Corrected by the second review">(corrected)</small>' : ""}<br><code>${escapeHtml(f.quote || "")}</code></div>`).join("")}</div>` : "";
+  }).join("");
+  const unk = (dd.unknowns || []).length ? `<div class="dd-g"><div class="dd-t">Not shown in this file</div>${dd.unknowns.map(u => `<div class="dd-f">${u.line ? `<b>L${u.line}</b> ` : ""}${escapeHtml(u.what)}</div>`).join("")}</div>` : "";
+  const held = (dd.unverifiable || []).length ? `<div class="project-hint">${dd.unverifiable.length} statement(s) held back: they rest only on lines the capture could not read.</div>` : "";
+  return `<div class="pf-verify"><div class="pf-vhead">Line-by-line review${current ? "" : " (out of date — the file changed)"}</div>${qi}
+    <div>${escapeHtml(dd.purpose || "")}</div>
+    <div class="project-hint">${(dd.facts || []).length} statements passed both checks (quote found on the cited lines; confirmed by an independent second review)${dd.rejected ? ` · ${dd.rejected} rejected` : ""}${dd.corrected_lines ? ` · ${dd.corrected_lines} line reference(s) corrected` : ""} · ${escapeHtml(dd.model || "")}</div>
+    ${held}${groups}${unk}</div>`;
 }
 function _checkHtml(v) {
   if (!v || !v.lines) return "";
@@ -1016,6 +1082,7 @@ async function loadArtifact(el) {
       <button class="btn-link pf-re" type="button">Re-extract</button></div>
     ${errs}
     ${_checkHtml(d.verification)}
+    ${_deepHtml(d.deep, d.deep_current, d.quality)}
     ${profileHtml(d.profile)}
     <div class="pf-entities">${d.entities.map(e => `<div>${escapeHtml(e.name)} <i>${escapeHtml(e.kind)}${e.line_start ? " · L" + e.line_start : ""}</i></div>`).join("") || "<div><i>No entities extracted.</i></div>"}</div>
     <div class="pf-version">Same file captured earlier? Make this a new version of

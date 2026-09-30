@@ -11,6 +11,8 @@ PLATFORMS = [
     ("Microsoft .NET (Windows server)", ("c#", ".net", "asp", "aspx", "vb.net")),
     ("Java", ("java", "jsp", "struts")),
     ("Web browser", ("html", "javascript", "jquery", "css")),
+    ("Python runtime", ("python", ".py")),
+    ("Node.js runtime", ("node", "typescript")),
     ("Oracle Database", ("pl/sql", "oracle")),
     ("Database server", ("sql", "db2", "t-sql")),
     ("Desktop", ("delphi", "pascal", "c++", "foxpro", "access")),
@@ -152,8 +154,11 @@ def observations(store, a, comps, stores) -> list:
         out.append(("The user interface is split across technologies" if len(kinds) > 1 else "The user interface is legacy technology",
                     f"Users work through {len(pres)} screen(s): " + "; ".join(f"{c['name']} ({c['role']}"
                     + (f", {', '.join(c['tech'])}" if c["tech"] else "") + ")" for c in pres) + ".",
-                    "Terminal screens and old web pages can't meet current accessibility standards and need special "
-                    "skills to change. A single web front end over an API would serve both user groups."))
+                    ("Terminal screens and old web pages can't meet current accessibility standards and need special "
+                     "skills to change. A single web front end over an API would serve every user group."
+                     if any("terminal" in k.lower() for k in kinds) else
+                     "Screens built on older technology are harder to keep accessible and secure; a single web front end "
+                     "over an API keeps the user interface on one supported stack.")))
     cov = store.coverage()
     missing = [m for m in cov.get("missing") or [] if m["category"] == "missing_code"
                and m.get("kind") in ("program", "copybook", "job", "screen", "transaction", "procedure", "module")]
@@ -200,6 +205,10 @@ def target_outline(model: dict, disposition_code: str) -> list:
         return ["Retain: the current architecture stays; fix the security findings in place and document the data "
                 "contracts so a later change starts from a known baseline."]
     out = [f"{l}: {TARGET[l]}" for l in layers]
+    if not any(c["role"] == "3270 terminal screen" for c in model["components"]):
+        out = [o.replace("the terminal screens and legacy web pages", "the legacy screens") for o in out]
+    if not any("IMS" in (c["language"] or "") or c["role"] == "Database definition" for c in model["components"]):
+        out = [o.replace("from files and hierarchical databases", "off legacy stores") for o in out]
     out.append("Cross-cutting: use the organisation's identity service for sign-in, a secrets store for credentials, "
                "TLS on every connection, and central logging and monitoring.")
     return out

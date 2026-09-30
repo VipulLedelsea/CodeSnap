@@ -77,6 +77,9 @@ Return ONLY a JSON object (no prose, no code fences) with these keys:
   overview   (string)  — a clear, plain-English summary a non-expert can follow. One sentence on what it does overall, then one short paragraph per main part in everyday language (briefly explain any technical term). Logical order, short sentences. Weave INLINE LINE-NUMBER citations into the sentences, e.g. "(lines 5-11)" or "(line 27)", using the numbers shown. Do NOT mention screenshots.
   tech_stack (string)  — an honest, brief review. If the code is current and well written, SAY SO in one line and stop — do NOT invent nitpicks or filler to make a list. Only when there are genuine, worthwhile improvements, list them (at most 5, most important first). Put EACH point on its OWN line, numbered "1. ", "2. ", ... with a real newline (\n) between items. Empty string if not code.
 
+Accuracy rules: describe ONLY what the code shows. Never invent names, values, systems, behaviour or intent. If a part is
+unclear or looks mis-read, say so plainly instead of guessing. Every line reference must point at the lines that show it.
+
 EXAMPLE — format only. Do NOT reuse this wording; describe the ACTUAL content you receive:
 {"is_code": true, "language": "Python", "extension": "py", "name": "even_odd", "overview": "This script reads a whole number and prints whether it is even or odd (lines 1-4).", "tech_stack": "Up to date and idiomatic for its size; no significant changes needed."}
 
