@@ -93,9 +93,9 @@
           <details class="prog-map" id="progFixBox"><summary id="progFixSummary">Corrections &amp; feedback</summary>
             <div class="fix-grid">
               <div>
-                <div class="prog-section-label">Describe a correction</div>
-                <textarea id="progFixText" rows="3" placeholder="e.g. AIDCALC calls AIDAUDIT, not AIDERR · the DISTRICT table holds no student data · the SmtpPassword finding is a test value"></textarea>
-                <div class="sec-bar"><button class="btn-secondary" id="progFixInterpret" type="button">Interpret</button><span class="project-hint">Uses the text model (≈ $0.01). You review before anything changes.</span></div>
+                <div class="prog-section-label">Tell CodeSnap what is wrong</div>
+                <textarea id="progFixText" rows="3" placeholder="e.g. In AIDCALC.cbl, line 29 was read as CALL 'AIDADIT' but it should be CALL 'AIDAUDIT' · AIDCALC calls AIDAUDIT, not AIDERR · the DISTRICT table holds no student data"></textarea>
+                <div class="sec-bar"><button class="btn-secondary" id="progFixInterpret" type="button">Review correction</button><span class="project-hint">CodeSnap finds the affected source or model item. You review the exact change before it is applied.</span></div>
                 <div id="progFixProposal"></div>
               </div>
               <div>

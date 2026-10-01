@@ -340,20 +340,25 @@ def _health_blocks(h: dict) -> list:
 def _verification_blocks(store) -> list:
     """How much of each transcription was proven against the screenshot pixels, and the lines to look at."""
     allv = store.verification() or {}
-    rows, flags, tot = [], [], {"lines": 0, "ok": 0, "reread": 0, "flagged": 0, "unchecked": 0}
+    rows, flags, tot = [], [], {"lines": 0, "ok": 0, "reread": 0, "manual": 0, "flagged": 0, "unchecked": 0}
     for art in store.artifacts():
         v = allv.get(str(art["id"]))
         if not v or not v.get("lines"):
             continue
         ok = v.get("verified", 0) + v.get("reread", 0)
         gaps = ", ".join((f"{g[0]}" if g[0] == g[1] else f"{g[0]}–{g[1]}") for g in v.get("gaps") or [])
+        note = f"editor lines {gaps} were not captured" if gaps and v.get("gap_coordinate") == "editor" else \
+            (f"lines {gaps} never on screen" if gaps else "")
+        if v.get("manual"):
+            note = (note + "; " if note else "") + f"{v['manual']} line(s) corrected from analyst-supplied text"
         rows.append([art["name"], str(v["lines"]), f"{ok} ({round(100 * ok / v['lines'])}%)", str(v.get("reread", 0)),
-                     str(v.get("flagged", 0)), str(v.get("unchecked", 0)), f"lines {gaps} never on screen" if gaps else ""])
+                     str(v.get("flagged", 0)), str(v.get("unchecked", 0)), note])
         tot["lines"] += v["lines"]
         tot["ok"] += ok
-        for k in ("reread", "flagged", "unchecked"):
+        for k in ("reread", "manual", "flagged", "unchecked"):
             tot[k] += v.get(k, 0)
-        flags += [[art["name"], str(f["line"]), f["text"][:90], f["reason"]] for f in v.get("flags") or []]
+        flags += [[art["name"], str(f["line"]), str(f.get("source_line") or ""), f["text"][:90], f["reason"]]
+                  for f in v.get("flags") or []]
     if not rows:
         return []
     pct = round(100 * tot["ok"] / tot["lines"], 1) if tot["lines"] else 0
@@ -363,8 +368,12 @@ def _verification_blocks(store) -> list:
                               "every word has the length and column the pixels show. Lines where the pixels disagreed "
                               f"were zoomed and read again ({tot['reread']} fixed that way). {tot['flagged']} line(s) are "
                               f"listed to check, and {tot['unchecked']} could not be checked because the text isn't on a "
-                              "fixed-width grid (proportional fonts, UI screens)."},
+                              "fixed-width grid (proportional fonts, UI screens). "
+                              f"{tot['manual']} line(s) were corrected from text supplied by the analyst. "
+                              "Final line numbers are counted from the saved, fully stitched transcription; an editor "
+                              "line is shown separately only when a visible gutter supplied it."},
         {"type": "table", "head": ["File", "Lines", "Verified", "Re-read", "To check", "Not checkable", "Note"],
          "rows": rows, "small": True},
-        *([{"type": "table", "head": ["File", "Line", "Text", "Why"], "rows": flags[:40], "small": True}] if flags else []),
+        *([{"type": "table", "head": ["File", "Final line", "Editor line", "Text", "Why"],
+            "rows": flags[:40], "small": True}] if flags else []),
     ]

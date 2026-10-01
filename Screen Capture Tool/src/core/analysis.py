@@ -805,7 +805,9 @@ def merge_verified(raw_parts: list, metas: list | None = None):
         best = clean_source(text, mode)
         parts = [c for c in (clean_source(r, mode) for r in raw_parts) if c.strip()]
         keep = mode or is_column_sensitive(best) or detect_format(best)
-        return (best if keep else _fix_leading_indent(best)), parts, notes, statuses
+        final = best if keep else _fix_leading_indent(best)
+        verify.remap_line_evidence(text, final, notes)
+        return final, parts, notes, statuses
     notes = {"numbers": False, "gaps": [], "sideways": 0, "wrapped": 0}
     cleaned = [clean_source(r, mode) for r in raw_parts]
     parts = _dedup_best(cleaned) or [c for c in cleaned if c.strip()]
@@ -821,7 +823,9 @@ def merge_verified(raw_parts: list, metas: list | None = None):
         if "[CUT OFF]" not in k and statuses.get(k) not in ("verified", "reread"):
             statuses[k] = "joined"
     keep = mode or is_column_sensitive(best) or detect_format(best)
-    return (best if keep else _fix_leading_indent(best)), parts, notes, statuses
+    final = best if keep else _fix_leading_indent(best)
+    verify.align_line_evidence(final, raw_parts, cleaned, metas, notes)
+    return final, parts, notes, statuses
 
 
 def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8, prefer=frozenset()) -> "list | None":

@@ -214,7 +214,11 @@ def capture_quality(store, art, concerns=None) -> dict:
 def current_concerns(store, art, dd=None):
     """The reviewer's capture concerns, only while they still describe the file's current text."""
     d = ((dd if dd is not None else store.get_meta("deepdive")) or {}).get(str(art["id"])) or {}
-    return d.get("capture_concerns") if d.get("hash") == _hash(art.get("transcription")) else None
+    current_hash = _hash(art.get("transcription"))
+    if d.get("hash") == current_hash:
+        return d.get("capture_concerns")
+    manual = ((store.get_meta("manual_capture_concerns") or {}).get(str(art["id"])) or {})
+    return manual.get("concerns") if manual.get("hash") == current_hash else None
 
 
 def quality_summary(q) -> dict:

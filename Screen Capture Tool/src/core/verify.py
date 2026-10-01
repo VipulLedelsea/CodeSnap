@@ -221,9 +221,15 @@ def merge_by_numbers(parts: list, metas: list):
         elif n in out and start is not None:
             gaps.append([start, n - 1])
             start = None
-    text = "\n".join(out[n][0] for n in sorted(out))
+    ordered = sorted(out)
+    text = "\n".join(out[n][0] for n in ordered)
     notes = {"numbers": True, "first_line": lo, "last_line": hi, "gaps": gaps, "wrapped": wrapped,
-             "sideways": sideways}
+             "sideways": sideways,
+             # These arrays describe `text` positionally.  Keeping them separate from
+             # the text-keyed compatibility lookup matters when a file contains the
+             # same source line more than once.
+             "line_statuses": [out[n][1] for n in ordered],
+             "source_lines": ordered}
     return text, notes, {v[0].rstrip(): v[1] for v in out.values() if v[0].strip()}
 
 
@@ -245,30 +251,120 @@ def lookup(parts: list, metas: list) -> dict:
     return out
 
 
+def _line_map(source: str, target: str, carry_replacements: bool = False) -> list:
+    """Return target-index -> source-index after lines have been cleaned, stitched,
+    or minimally repaired.  Equal blocks are mapped by occurrence and context, so
+    repeated lines do not all collapse onto the same warning.  Same-sized replace
+    blocks may be carried positionally for compiler repairs."""
+    src, dst = (source or "").split("\n"), (target or "").split("\n")
+    sk, dk = [_norm(_stem(l)) for l in src], [_norm(_stem(l)) for l in dst]
+    mapped = [None] * len(dst)
+    sm = difflib.SequenceMatcher(None, sk, dk, autojunk=False)
+    for tag, a0, a1, b0, b1 in sm.get_opcodes():
+        if tag == "equal":
+            for off in range(b1 - b0):
+                mapped[b0 + off] = a0 + off
+        elif carry_replacements and tag == "replace" and a1 - a0 == b1 - b0:
+            for off in range(b1 - b0):
+                mapped[b0 + off] = a0 + off
+    return mapped
+
+
+def remap_line_evidence(source: str, target: str, notes: dict, carry_replacements: bool = True) -> None:
+    """Move position-aligned evidence in ``notes`` from source to target in place.
+
+    This is used after source cleaning and again when producing the final report.
+    Displayed line numbers always come from the target's final positions; editor
+    gutter numbers survive only as optional ``source_lines`` evidence.
+    """
+    mapping = _line_map(source, target, carry_replacements=carry_replacements)
+    src, dst = (source or "").split("\n"), (target or "").split("\n")
+    statuses = list(notes.get("line_statuses") or [])
+    if statuses:
+        # A whitespace-normalised match is enough to locate a row, but not enough
+        # to prove its exact transcription (fixed-column legacy code is the clearest
+        # example).  Only carry pixel status when the saved line is character-exact.
+        notes["line_statuses"] = [
+            statuses[j] if j is not None and j < len(statuses) and src[j].rstrip() == dst[i].rstrip() else None
+            for i, j in enumerate(mapping)
+        ]
+    source_lines = list(notes.get("source_lines") or [])
+    if source_lines:
+        notes["source_lines"] = [source_lines[j] if j is not None and j < len(source_lines) else None for j in mapping]
+
+
+def align_line_evidence(code: str, raw_parts: list, clean_parts: list, metas: list, notes: dict) -> None:
+    """Attach per-occurrence screenshot evidence to the final stitched lines.
+
+    ``lookup`` remains for compatibility, but this positional representation is
+    authoritative.  Each frame is aligned raw -> cleaned -> final, which keeps two
+    identical lines independent when only one of their screenshot rows was bad.
+    """
+    final_lines = (code or "").split("\n")
+    aligned = [None] * len(final_lines)
+    source_lines = [None] * len(final_lines)
+    for raw, clean, meta in zip(raw_parts, clean_parts, metas):
+        raw = raw or ""
+        clean = clean or ""
+        clean_lines = clean.split("\n")
+        raw_to_clean = _line_map(raw, clean, carry_replacements=True)
+        clean_to_final = _line_map(clean, code, carry_replacements=False)
+        statuses = (meta or {}).get("status") or []
+        numbers = (meta or {}).get("numbers") or []
+        for final_i, clean_i in enumerate(clean_to_final):
+            if clean_i is None or clean_i >= len(raw_to_clean):
+                continue
+            raw_i = raw_to_clean[clean_i]
+            if raw_i is None:
+                continue
+            if clean_lines[clean_i].rstrip() != final_lines[final_i].rstrip():
+                continue
+            status = statuses[raw_i] if raw_i < len(statuses) and statuses[raw_i] else "unchecked"
+            aligned[final_i] = best(aligned[final_i] or "", status)
+            if raw_i < len(numbers) and isinstance(numbers[raw_i], int):
+                source_lines[final_i] = numbers[raw_i]
+    notes["line_statuses"] = aligned
+    if any(n is not None for n in source_lines):
+        notes["source_lines"] = source_lines
+
+
 def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: str | None = None) -> dict:
     """Counts for one file plus the lines to look at. `read_code` is the text as read, before any compile fix: lines
     that differ from it are reported as edited."""
     notes = notes or {}
-    read = {l.rstrip() for l in (read_code or "").split("\n")} if read_code is not None else None
+    read_lines = (read_code or "").split("\n") if read_code is not None else None
+    final_lines = (code or "").split("\n")
+    final_to_read = _line_map(read_code or "", code or "", carry_replacements=True) if read_code is not None else []
+    aligned = list(notes.get("line_statuses") or [])
+    source_lines = list(notes.get("source_lines") or [])
     norm = {_norm(k) for k in statuses}
     counts = {"verified": 0, "reread": 0, "confirmed": 0, "joined": 0, "flagged": 0, "unchecked": 0}
     flags = []
-    for i, l in enumerate((code or "").split("\n"), 1):
+    for i, l in enumerate(final_lines, 1):
         if not l.strip():
             continue
-        s = statuses.get(l.rstrip())
+        read_i = final_to_read[i - 1] if final_to_read else None
+        changed = read_lines is not None and (read_i is None or _norm(l) != _norm(read_lines[read_i]))
+        s = aligned[read_i] if read_i is not None and read_i < len(aligned) else None
         if "[CUT OFF]" in l:
             s = "cut"
+        elif changed:
+            s = "edited"
         elif s is None:
-            s = "edited" if read is not None and l.rstrip() not in read and _norm(l) not in norm else "unchecked"
+            s = statuses.get(l.rstrip())
+            if s is None:
+                s = "edited" if read_lines is not None and _norm(l) not in norm else "unchecked"
         if s in ("verified", "reread", "confirmed", "joined"):
             counts[s] += 1
         elif s in REASONS:
             counts["flagged"] += 1
-            flags.append({"line": i, "text": l.strip()[:160], "reason": REASONS[s]})
+            flag = {"line": i, "text": l.strip()[:160], "reason": REASONS[s]}
+            if read_i is not None and read_i < len(source_lines) and isinstance(source_lines[read_i], int):
+                flag["source_line"] = source_lines[read_i]
+            flags.append(flag)
         else:
             counts["unchecked"] += 1
-    lines_ = (code or "").split("\n")
+    lines_ = final_lines
     for b in notes.get("breaks") or []:
         prev, nxt = b if isinstance(b, (list, tuple)) else ("", b)
         nb = [k for k, l in enumerate(lines_) if l.strip()]
@@ -280,6 +376,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
     total = sum(counts.values())
     gaps = notes.get("gaps") or []
     out = {"lines": total, **counts, "numbers": bool(notes.get("numbers")), "gaps": gaps,
+           "gap_coordinate": "editor" if notes.get("numbers") else None,
            "first_line": notes.get("first_line"), "last_line": notes.get("last_line"),
            "sideways": notes.get("sideways", 0), "wrapped": notes.get("wrapped", 0), "flags": flags[:50],
            "breaks": len(notes.get("breaks") or [])}
@@ -302,13 +399,16 @@ def headline(v: dict) -> str:
         bits.append(f"{v['confirmed']} confirmed by a second read")
     if v.get("joined"):
         bits.append(f"{v['joined']} pieced together from sideways-scrolled screenshots")
+    if v.get("manual"):
+        bits.append(f"{v['manual']} corrected from text supplied by the analyst")
     if v["flagged"]:
         bits.append(f"{v['flagged']} to check")
     if v["unchecked"]:
         bits.append(f"{v['unchecked']} couldn't be matched to the pixels (proportional text or editor decorations)")
     s = ", ".join(bits) + "."
     if v.get("gaps"):
-        s += " Never on screen: " + ", ".join(_span(g) for g in v["gaps"][:6]) + "."
+        label = "Never on screen (editor source)" if v.get("gap_coordinate") == "editor" else "Never on screen"
+        s += f" {label}: " + ", ".join(_span(g) for g in v["gaps"][:6]) + "."
     if v.get("breaks"):
         s += f" {v['breaks']} place(s) where two screens don't overlap, so lines may be missing there."
     return s

@@ -957,8 +957,9 @@ function _deepHtml(dd, current, q) {
 function _checkHtml(v) {
   if (!v || !v.lines) return "";
   const span = g => g[0] === g[1] ? `line ${g[0]}` : `lines ${g[0]}–${g[1]}`;
-  const gaps = (v.gaps || []).length ? `<div class="pf-gap">Never on screen: ${(v.gaps || []).map(span).map(escapeHtml).join(", ")}. Scroll to them and use Add screenshots.</div>` : "";
-  const flags = (v.flags || []).map(f => `<div class="pf-flag"><b>L${f.line}</b> <code>${escapeHtml(f.text)}</code><small>${escapeHtml(f.reason)}</small></div>`).join("");
+  const gapLabel = v.gap_coordinate === "editor" ? "Not captured from the editor" : "Never on screen";
+  const gaps = (v.gaps || []).length ? `<div class="pf-gap">${gapLabel}: ${(v.gaps || []).map(span).map(escapeHtml).join(", ")}. Scroll to them and use Add screenshots.</div>` : "";
+  const flags = (v.flags || []).map(f => `<div class="pf-flag"><b>Final line ${f.line}</b>${f.source_line && f.source_line !== f.line ? ` <small>(editor line ${f.source_line})</small>` : ""} <code>${escapeHtml(f.text)}</code><small>${escapeHtml(f.reason)}</small></div>`).join("");
   return `<div class="pf-verify"><div class="pf-vhead">Transcription check</div><div>${escapeHtml(v.headline || "")}</div>${gaps}${flags}</div>`;
 }
 function _pbase() { return `/api/programs/${encodeURIComponent(_program)}`; }
@@ -1201,6 +1202,7 @@ async function applyCorrections(ops, note) {
   $("progFixImpact").innerHTML = _impactHtml(d.impact, d.warnings);
   toast((d.impact || [])[0] || "Correction applied.");
   await loadCorrections();
+  await loadProgram();
   if ($("progAssessBox").open) loadAssessment();
   return d;
 }
@@ -1213,8 +1215,9 @@ async function loadCorrections() {
     $("progFixLog").querySelectorAll(".fix-undo").forEach(b => b.addEventListener("click", async () => {
       try {
         const r = await _json(`/api/programs/${encodeURIComponent(_program)}/corrections/${b.dataset.id}/undo`, { method: "POST" });
-        $("progFixImpact").innerHTML = _impactHtml(r.impact);
+        $("progFixImpact").innerHTML = _impactHtml(r.impact, r.warnings);
         loadCorrections();
+        await loadProgram();
         if ($("progFixSearch").value.trim().length >= 2) searchEntities();
         if ($("progAssessBox").open) loadAssessment();
       } catch (e) { toast(e.message); }
@@ -1240,7 +1243,7 @@ async function interpretCorrection() {
       });
     }
   } catch (e) { $("progFixProposal").textContent = e.message; }
-  btn.disabled = false; btn.textContent = "Interpret";
+  btn.disabled = false; btn.textContent = "Review correction";
 }
 let _fixTimer = null;
 function inlineAsk(container, fields) {

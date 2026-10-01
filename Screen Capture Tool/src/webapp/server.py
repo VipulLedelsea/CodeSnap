@@ -164,7 +164,7 @@ def _artifact_summary(store, artifact: dict) -> dict:
     out["cost"] = store.artifact_cost(artifact["id"])
     v = store.verification(artifact["id"])
     if v and artifact["status"] != "captured":
-        out["check"] = {k: v.get(k) for k in ("lines", "verified", "reread", "confirmed", "flagged", "unchecked", "gaps")}
+        out["check"] = {k: v.get(k) for k in ("lines", "verified", "reread", "confirmed", "manual", "flagged", "unchecked", "gaps")}
     from core import deepdive
     q = None
     if artifact["status"] != "captured" and (artifact.get("transcription") or "").strip():
@@ -687,7 +687,7 @@ def api_program_correct(slug: str, payload: dict = Body(...)):
         return JSONResponse({"error": "Send an op or a list of ops."}, status_code=400)
     with _open_program(slug) as store:
         try:
-            return {"ok": True, **feedback.apply(store, ops, str(payload.get("note", "")))}
+            return {"ok": True, **feedback.apply(store, ops, str(payload.get("note", "")), client=_LazyClient())}
         except CorrectionError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -698,7 +698,7 @@ def api_program_correction_undo(slug: str, correction_id: int):
     from core.model.corrections import CorrectionError
     with _open_program(slug) as store:
         try:
-            return {"ok": True, **feedback.undo(store, correction_id)}
+            return {"ok": True, **feedback.undo(store, correction_id, client=_LazyClient())}
         except CorrectionError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 

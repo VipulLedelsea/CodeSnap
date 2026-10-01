@@ -1,9 +1,12 @@
+import copy
+import hashlib
 import json
 
 from .kinds import ENTITY_KINDS, RELATION_KINDS
 from .store import entity_key
 
 OPS = {
+    "artifact.replace_line": ("artifact", "line", "old_text", "new_text"),
     "entity.rename": ("key", "name"),
     "entity.set_attrs": ("key", "attrs"),
     "entity.delete": ("key",),
@@ -75,6 +78,13 @@ def validate(op, payload):
         raise CorrectionError("severity must be critical, high, medium, low or info")
     if op == "finding.add" and payload["category"] not in FINDING_CATEGORIES:
         raise CorrectionError(f"unknown finding category {payload['category']}")
+    if op == "artifact.replace_line":
+        if not isinstance(payload.get("line"), int) or isinstance(payload.get("line"), bool) or payload["line"] < 1:
+            raise CorrectionError("line must be a positive whole number")
+        if not isinstance(payload.get("old_text"), str) or not isinstance(payload.get("new_text"), str):
+            raise CorrectionError("old_text and new_text must be text")
+        if payload["old_text"] == payload["new_text"]:
+            raise CorrectionError("the corrected line is unchanged")
     for k in ("attrs",):
         if k in OPS[op] and not isinstance(payload.get(k), dict):
             raise CorrectionError("attrs must be an object")
@@ -83,7 +93,10 @@ def validate(op, payload):
 def describe(c) -> str:
     p, op = c["payload"], c["op"]
     name = lambda k: (p.get(k) or "").split(":", 1)[-1]
+    short = lambda s: str(s or "").strip()[:70] + ("…" if len(str(s or "").strip()) > 70 else "")
     return {
+        "artifact.replace_line": lambda: f"Correct {p.get('artifact')} line {p.get('line')}: "
+                                           f"{short(p.get('old_text'))} → {short(p.get('new_text'))}",
         "entity.rename": lambda: f"Rename {name('key')} → {p.get('name')}",
         "entity.set_attrs": lambda: f"Set {', '.join(f'{k}={v}' for k, v in p.get('attrs', {}).items())} on {name('key')}",
         "entity.delete": lambda: f"Remove {name('key')} (not real)",
@@ -140,10 +153,52 @@ def _set_entity(store, e, *, name=None, attrs=None):
                    (name, json.dumps(attrs) if attrs is not None else None, e["id"]))
 
 
+def _resolve_verification_line(store, artifact_id, line):
+    """A supplied replacement resolves character/cut-off doubt on that line, not gaps or possibly missing rows."""
+    from core.verify import REASONS, headline
+    verification = copy.deepcopy(store.verification(artifact_id))
+    if not verification:
+        return
+    resolved_reasons = {REASONS[k] for k in ("mismatch", "cut", "wrapped", "edited")}
+    flags = verification.get("flags") or []
+    kept = [f for f in flags if not (f.get("line") == line and f.get("reason") in resolved_reasons)]
+    removed = len(flags) - len(kept)
+    if not removed:
+        return
+    verification["flags"] = kept
+    verification["flagged"] = max(0, int(verification.get("flagged") or 0) - removed)
+    verification["manual"] = int(verification.get("manual") or 0) + removed
+    verification["headline"] = headline(verification)
+    store.set_verification(artifact_id, verification)
+
+
 def apply_one(store, c) -> str | None:
     op, p = c["op"], dict(c["payload"])
     changed = False
-    if op == "entity.rename":
+    if op == "artifact.replace_line":
+        art = store.current_artifact(p["artifact"])
+        if not art:
+            return f"file {p['artifact']!r} not found"
+        lines = (art.get("transcription") or "").splitlines()
+        n = p["line"]
+        if n > len(lines):
+            return f"line {n} is outside this {len(lines)}-line file"
+        if lines[n - 1] == p["new_text"]:
+            return None
+        if lines[n - 1] != p["old_text"]:
+            return f"line {n} no longer matches the reviewed text"
+        manual = copy.deepcopy((store.get_meta("manual_capture_concerns") or {}).get(str(art["id"])))
+        p.setdefault("_before", {"artifact_id": art["id"], "text": lines[n - 1],
+                                 "text_hash": hashlib.sha1((art.get("transcription") or "").encode()).hexdigest()[:16],
+                                 "verification": copy.deepcopy(store.verification(art["id"])),
+                                 "manual_concerns": manual})
+        lines[n - 1] = p["new_text"]
+        trailing = "\n" if (art.get("transcription") or "").endswith("\n") else ""
+        store.fill_artifact(art["id"], artifact_type=art["artifact_type"], language=art["language"],
+                            transcription="\n".join(lines) + trailing)
+        _resolve_verification_line(store, art["id"], n)
+        changed = True
+    elif op == "entity.rename":
         e = _entity(store, p["key"])
         if not e:
             return "not found"
@@ -261,8 +316,26 @@ def undo(store, correction_id) -> dict:
     op, p = c["op"], c["payload"]
     if op == "entity.merge":
         raise CorrectionError("merges can't be undone automatically — re-extract the affected files")
+    if op == "artifact.replace_line":
+        art = store.current_artifact(p["artifact"])
+        lines = (art.get("transcription") or "").splitlines() if art else []
+        if not art or p["line"] > len(lines) or lines[p["line"] - 1] != p["new_text"]:
+            raise CorrectionError("this source line changed again, so it can't be safely undone")
     store.update_correction(correction_id, active=False)
-    if op in ("entity.rename", "entity.set_attrs") and p.get("_before"):
+    if op == "artifact.replace_line":
+        lines[p["line"] - 1] = p["old_text"]
+        trailing = "\n" if (art.get("transcription") or "").endswith("\n") else ""
+        store.fill_artifact(art["id"], artifact_type=art["artifact_type"], language=art["language"],
+                            transcription="\n".join(lines) + trailing)
+        before = p.get("_before") or {}
+        store.set_verification(art["id"], copy.deepcopy(before.get("verification")))
+        manual = store.get_meta("manual_capture_concerns") or {}
+        if before.get("manual_concerns") is None:
+            manual.pop(str(art["id"]), None)
+        else:
+            manual[str(art["id"])] = before["manual_concerns"]
+        store.set_meta("manual_capture_concerns", manual)
+    elif op in ("entity.rename", "entity.set_attrs") and p.get("_before"):
         e = _entity(store, p["key"]) or (_entity(store, None))
         if e:
             before = p["_before"]

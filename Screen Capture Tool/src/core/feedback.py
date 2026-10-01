@@ -1,13 +1,20 @@
 import json
 import re
+import tempfile
+from pathlib import Path
 
 from core.model import corrections as C
 
-INTERPRET_VERSION = "corrections-v1"
+INTERPRET_VERSION = "corrections-v2"
 SYSTEM = """You turn an analyst's plain-English correction about a legacy program model into structured changes.
 Only use the operations and keys listed. Only reference entity keys and finding signatures that appear in the context.
 If the request is ambiguous or refers to something not in the context, return no changes and explain in `unclear`.
 Operations:
+- artifact.replace_line {artifact, line, old_text, new_text}
+  Correct one mistranscribed source line. `artifact` is the exact file name, `line` is the integer transcript line number,
+  and `old_text` must be copied exactly from the source context, including leading spaces. `new_text` must be the complete
+  corrected line, preserving all unchanged spacing and text. Never infer missing code or propose this operation unless the
+  analyst supplied the correction and the exact existing line appears in context.
 - entity.rename {key, name}
 - entity.set_attrs {key, attrs}  (e.g. {"no_pii": true} = holds no student data; {"pii": "student ID"} = does;
   {"hardcoded_secret": false} = not a secret; {"store_type": "database"})
@@ -90,31 +97,128 @@ def _resolve(store, payload):
     return p
 
 
-def apply(store, ops: list, note: str = "", today=None) -> dict:
+def _refresh_source(store, artifact_name: str, client=None) -> list:
+    """Re-check and re-extract a manually corrected transcript without executing it."""
+    from core.model import ingest_artifact
+    from core.validate import check_source
+    art = store.current_artifact(artifact_name)
+    if not art:
+        return [f"Could not refresh {artifact_name}: file not found."]
+    warnings = []
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / Path(artifact_name).name
+        path.write_text(art.get("transcription") or "")
+        checked = check_source(path)
+    ok = checked["ok"] if checked["checked"] else None
+    errors = checked.get("errors") or checked.get("note") or ""
+    store.set_validation(art["id"], checked.get("tool") or "source check", ok, errors)
+    if checked["checked"] and not checked["ok"]:
+        warnings.append(f"{artifact_name} now has a source-check error: {errors.splitlines()[0] if errors else 'unknown error'}")
+    try:
+        ingest_artifact(store, client, art["id"])
+    except Exception as exc:  # the source edit is still saved and auditable
+        warnings.append(f"The line was corrected, but re-extraction failed: {type(exc).__name__}: {exc}")
+    return warnings
+
+
+def _carry_quality_concerns(store, correction):
+    """Keep unrelated reviewer concerns current after a one-line manual correction."""
+    from core.deepdive import _hash
+    p = correction.get("payload") or {}
+    before = p.get("_before") or {}
+    art = store.current_artifact(p.get("artifact", ""))
+    if not art or not before.get("text_hash"):
+        return
+    aid = str(art["id"])
+    review = ((store.get_meta("deepdive") or {}).get(aid) or {})
+    manual = store.get_meta("manual_capture_concerns") or {}
+    carried = manual.get(aid) or {}
+    if review.get("hash") == before["text_hash"]:
+        concerns = review.get("capture_concerns") or []
+    elif carried.get("hash") == before["text_hash"]:
+        concerns = carried.get("concerns") or []
+    else:
+        return
+    manual[aid] = {"hash": _hash(art.get("transcription")),
+                   "concerns": [c for c in concerns if c.get("line") != p.get("line")],
+                   "resolved_lines": sorted(set((carried.get("resolved_lines") or []) + [p["line"]]))}
+    store.set_meta("manual_capture_concerns", manual)
+
+
+def apply(store, ops: list, note: str = "", today=None, client=None) -> dict:
     from core.assess import run_assessment
     from core.assess.scores import LABELS
     if not store.get_meta("assessment"):
         run_assessment(store, today=today)
     before = snapshot(store)
-    done, warnings = [], []
+    done, warnings, refresh, source_changes = [], [], set(), []
     for item in ops:
         payload = _resolve(store, item.get("payload") or {})
         r = C.add(store, item["op"], payload, item.get("note") or note)
         done.append(r)
         if r.get("warning"):
             warnings.append(f"{r['description']}: {r['warning']}")
+        elif item["op"] == "artifact.replace_line":
+            refresh.add(payload["artifact"])
+            _carry_quality_concerns(store, store.correction(r["id"]))
+            source_changes.append(f"Corrected {payload['artifact']} line {payload['line']} and refreshed its analysis.")
+    for artifact_name in sorted(refresh):
+        warnings.extend(_refresh_source(store, artifact_name, client))
     run_assessment(store, today=today)
     after = snapshot(store)
-    return {"applied": done, "warnings": warnings, "impact": diff(before, after, LABELS)}
+    return {"applied": done, "warnings": warnings, "impact": source_changes + diff(before, after, LABELS)}
 
 
-def undo(store, correction_id: int, today=None) -> dict:
+def undo(store, correction_id: int, today=None, client=None) -> dict:
     from core.assess import run_assessment
     from core.assess.scores import LABELS
     before = snapshot(store)
+    correction = store.correction(correction_id)
     r = C.undo(store, correction_id)
+    warnings = []
+    if correction and correction["op"] == "artifact.replace_line":
+        warnings = _refresh_source(store, correction["payload"]["artifact"], client)
     run_assessment(store, today=today)
-    return {**r, "impact": diff(before, snapshot(store), LABELS)}
+    source_change = ([f"Restored {correction['payload']['artifact']} line {correction['payload']['line']} and refreshed its analysis."]
+                     if correction and correction["op"] == "artifact.replace_line" else [])
+    return {**r, "warnings": warnings, "impact": source_change + diff(before, snapshot(store), LABELS)}
+
+
+_SOURCE_STOP = {"about", "after", "before", "change", "code", "correct", "error", "file", "from", "into", "line",
+                "read", "reading", "replace", "says", "should", "that", "the", "this", "with", "wrong"}
+
+
+def _source_context(store, text, limit=24):
+    """Small, line-numbered source windows relevant to a correction request."""
+    low = text.lower()
+    requested = {int(n) for n in re.findall(r"\b(?:line|ln)\s*#?\s*(\d+)\b", low)}
+    words = {w.lower() for w in re.findall(r"[A-Za-z0-9_.$#@\-]{3,}", text)} - _SOURCE_STOP
+    artifacts, candidates = [], []
+    for art in store.artifacts():
+        lines = (art.get("transcription") or "").splitlines()
+        artifacts.append({"name": art["name"], "language": art.get("language") or "", "lines": len(lines)})
+        stem = Path(art["name"]).stem.lower()
+        named = art["name"].lower() in low or (len(stem) >= 3 and stem in low)
+        for n in requested:
+            if 1 <= n <= len(lines):
+                candidates.append((100 + (50 if named else 0), art["name"], n, lines))
+        for n, line in enumerate(lines, 1):
+            line_low = line.lower()
+            overlap = sum(1 for w in words if w in line_low)
+            if overlap:
+                candidates.append((overlap * 10 + (30 if named else 0), art["name"], n, lines))
+    snippets, seen = [], set()
+    for _, name, n, lines in sorted(candidates, key=lambda x: (-x[0], x[1], x[2])):
+        key = (name, n)
+        if key in seen:
+            continue
+        seen.add(key)
+        start, end = max(1, n - 2), min(len(lines), n + 2)
+        snippets.append({"artifact": name, "focus_line": n,
+                         "lines": [{"line": i, "text": lines[i - 1]} for i in range(start, end + 1)]})
+        if len(snippets) >= limit:
+            break
+    return {"artifacts": artifacts, "snippets": snippets}
 
 
 def _context(store, text, limit=40):
@@ -133,7 +237,19 @@ def _context(store, text, limit=40):
             rels.append({"kind": r["kind"], "from_key": a["key"], "to_key": b["key"]})
     finds = [{"sig": C.finding_sig(f), "severity": f["severity"], "detail": f["detail"][:120]} for f in store.findings()
              if any(w in f["title"].lower() or w in (f["detail"] or "").lower() for w in words)][:limit]
-    return {"entities": ents, "relations": rels[:80], "findings": finds}
+    return {"entities": ents, "relations": rels[:80], "findings": finds, "source": _source_context(store, text)}
+
+
+def _validate_source_change(store, payload):
+    art = store.current_artifact(payload.get("artifact", ""))
+    if not art:
+        raise C.CorrectionError(f"file {payload.get('artifact')!r} is not in this program")
+    lines = (art.get("transcription") or "").splitlines()
+    n = payload["line"]
+    if n > len(lines):
+        raise C.CorrectionError(f"{art['name']} has only {len(lines)} lines")
+    if lines[n - 1] != payload["old_text"]:
+        raise C.CorrectionError("old_text does not exactly match the captured source line")
 
 
 def interpret(store, text: str, client, model=None) -> dict:
@@ -158,10 +274,13 @@ def interpret(store, text: str, client, model=None) -> dict:
     for ch in data.get("changes") or []:
         try:
             C.validate(ch.get("op"), ch.get("payload") or {})
-            refs = [v for k, v in (ch.get("payload") or {}).items() if k in ("key", "from_key", "to_key", "sig")]
-            unknown = [v for v in refs if v not in known and not store.entity_by_key(v)]
-            if unknown:
-                raise C.CorrectionError(f"refers to unknown {', '.join(unknown)}")
+            if ch.get("op") == "artifact.replace_line":
+                _validate_source_change(store, ch["payload"])
+            else:
+                refs = [v for k, v in (ch.get("payload") or {}).items() if k in ("key", "from_key", "to_key", "sig")]
+                unknown = [v for v in refs if v not in known and not store.entity_by_key(v)]
+                if unknown:
+                    raise C.CorrectionError(f"refers to unknown {', '.join(unknown)}")
             valid.append({**ch, "description": C.describe({"op": ch["op"], "payload": ch["payload"]})})
         except C.CorrectionError as exc:
             rejected.append({**ch, "error": str(exc)})
