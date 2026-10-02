@@ -1,0 +1,13 @@
+             PGM        PARM(&PERIOD)
+             DCL        VAR(&PERIOD) TYPE(*CHAR) LEN(6)
+             DCLF       FILE(SCHFIN/DISTMST)
+             MONMSG     MSGID(CPF0000)
+             OVRDBF     FILE(AIDPAY) TOFILE(SCHFIN/AIDPAY) MBR(*FIRST)
+             CALL       PGM(SCHFIN/AIDPOST) PARM(&PERIOD)
+             CPYF       FROMFILE(SCHFIN/AIDPAY) TOFILE(SCHFIN/AIDHIST) MBROPT(*ADD)
+             SBMJOB     CMD(CALL PGM(SCHFIN/AIDRPT)) JOB(AIDRPT)
+ LOOP:       RCVF       RCDFMT(DISTREC)
+             MONMSG     MSGID(CPF0864) EXEC(GOTO CMDLBL(END))
+             GOTO       CMDLBL(LOOP)
+ END:        DLTOVR     FILE(AIDPAY)
+             ENDPGM

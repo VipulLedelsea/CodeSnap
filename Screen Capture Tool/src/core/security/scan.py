@@ -1,7 +1,8 @@
+import re
 from datetime import date
 
 from . import cves, eol
-from .rules import code_lines, family, pii_class, scan_text, text_has_student_data
+from .rules import code_lines, family, pii_class, scan_text, student_data_lines
 from .standards import RULES, escalate, refs_for
 
 CATEGORIES = ("eol", "vulnerability", "security", "privacy")
@@ -11,6 +12,29 @@ _SHORT = {"eol": "end of life", "extended": "extended support only", "ending": "
 _STATUS_TEXT = {"eol": "is past end of life", "extended": "is only on paid extended support",
                 "ending": "reaches end of life within 12 months", "legacy": "is a legacy technology with no upgrade path",
                 "unknown": "has an unconfirmed version", "supported": "is supported"}
+
+
+_PAGE_RESOURCE = re.compile(r"<(script|link|img|iframe|embed|object|form)\b[^>]*\b(src|href|action)\s*=\s*[\"']?http://", re.I)
+
+
+def uncalled_lines(text) -> set:
+    """Lines of script functions (JavaScript, VBScript) that nothing in the same file calls."""
+    lines = (text or "").splitlines()
+    out = set()
+    for i, l in enumerate(lines):
+        m = re.search(r"\bfunction\s+(\w+)\s*\(|^\s*(?:Private |Public )?(?:Sub|Function)\s+(\w+)\s*\(", l, re.I)
+        if not m:
+            continue
+        name = m.group(1) or m.group(2)
+        if len(re.findall(rf"\b{re.escape(name)}\b", text)) > 1:
+            continue
+        depth, j = 0, i
+        for j in range(i, len(lines)):
+            depth += lines[j].count("{") - lines[j].count("}")
+            if (depth <= 0 and j > i and "{" in "".join(lines[i:j + 1])) or re.match(r"^\s*End (Sub|Function)\b", lines[j], re.I):
+                break
+        out.update(range(i + 1, j + 2))
+    return out
 
 
 def _max(a, b):
@@ -114,7 +138,7 @@ def _eol(store, ctx, data, today, online, cache_dir):
             if g["confidence"] != "confirmed":
                 detail += " Version not confirmed from captured files."
                 severity = "info" if severity == "info" else "low"
-            cycle = f" {g['cycle']}" if g.get("cycle") and not g.get("curated") else ""
+            cycle = (f" {g['version']}" if g.get("version") else f" {g['cycle']}") if g.get("cycle") and not g.get("curated") else ""
             store.add_finding("eol", severity, f"{g['name']}{cycle}: {_SHORT[g['status']]}", detail=detail,
                               source=f"{g['source']} ({g['url']})", target_type="artifact",
                               target_id=g["evidence"][0]["artifact_id"], evidence=g["evidence"][:20], rule="EOL",
@@ -139,13 +163,16 @@ def _eol(store, ctx, data, today, online, cache_dir):
 
 
 def _code(store, ctx, sensitive_artifacts, has_pii):
+    from core.deepdive import dead_lines, review_facts
     hits = []
+    reviewed = review_facts(store)
     for art in ctx.artifacts.values():
         text = art.get("transcription") or ""
         if not text.strip():
             continue
-        if art["id"] not in getattr(ctx, "no_pii_arts", set()) and text_has_student_data(
-                code_lines(text, family(art["name"], art.get("language") or "", text))):
+        if art["id"] not in getattr(ctx, "no_pii_arts", set()) and student_data_lines(
+                code_lines(text, family(art["name"], art.get("language") or "", text))) - dead_lines(reviewed.get(art["id"])) \
+                - uncalled_lines(text):
             sensitive_artifacts.add(art["id"])
         try:
             found = scan_text(text, art["name"], art.get("language") or "")
@@ -154,6 +181,8 @@ def _code(store, ctx, sensitive_artifacts, has_pii):
                           error=f"code rules failed on {art['name']}: {type(exc).__name__}: {exc}")
             found = []
         for h in found:
+            if h["rule"] == "SEC-TLS" and h.get("family") == "web" and _PAGE_RESOURCE.search(h.get("snippet") or ""):
+                continue
             hits.append({**h, "artifact_id": art["id"]})
     seen = {(h["artifact_id"], h["line"], h["rule"]) for h in hits}
     for ent in store.entities("config_item"):

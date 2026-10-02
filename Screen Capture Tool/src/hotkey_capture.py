@@ -39,6 +39,7 @@ import sys
 import textwrap
 import threading
 import time
+import tempfile
 from pathlib import Path
 
 # Analysis engine: env loading, background per-image extraction + cache, the
@@ -117,6 +118,7 @@ class App:
         self.burst_mode = False                   # set from --burst (auto-capture while scrolling)
         self.idle_stop = BURST_IDLE_STOP          # secs of no on-screen change before auto-stop; <=0 = manual (end with Cmd+Shift+1)
         self.region = None                        # (L,T,W,H) fractions to capture only the code area; None = full screen
+        self.spacing_profile = None
         self.project_mode = False                 # project mode: capture many files back-to-back (analysis runs in the background)
         self.program = None
         self.capture_kind = "code"
@@ -126,8 +128,10 @@ class App:
         self.capture_enabled = False              # captures allowed (stays on during agent run)
         self.session_dir = None                   # current session's capture folder
         self.count = 0                            # captures taken this session
-        self._last_phash = None                   # for near-duplicate detection
+        self._last_phash = None                   # retained for older capture modes
+        self._last_manual_frame = None
         self.sessions = []                        # every session folder this run
+        self._unsaved_sessions = set()            # retain recoverable evidence after a failed registration
         self._inflight = set()                    # saved captures this worker is analysing right now
         self.display = None                       # display for captures: index, or None = the one under the mouse
         self._capture_lock = threading.Lock()     # serialises the actual screen grab
@@ -171,6 +175,7 @@ class App:
             import anthropic
             self.client = self.tracker.wrap(
                 anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=120.0))
+        self._attach_usage_persistence()
         return self.client
 
     # --- burst mode: auto-capture while the user scrolls; phash drops near-dups ---
@@ -195,6 +200,7 @@ class App:
             notify("CodeSnap", "Still analysing the previous capture — one file at a time.")
             print("(single-file mode: still analysing the previous capture)")
             return
+        self._load_capture_settings()
         self._ensure_client()
         try:
             kind = (CAPTURES_ROOT / ".capture_kind").read_text().strip()
@@ -208,8 +214,8 @@ class App:
         from core.notify import notify
         notify("CodeSnap", "Session started — start scrolling")
         ts = time.strftime("%Y%m%d_%H%M%S")
-        self.session_dir = CAPTURES_ROOT / f"session_{ts}"
-        self.session_dir.mkdir(parents=True, exist_ok=True)
+        CAPTURES_ROOT.mkdir(parents=True, exist_ok=True)
+        self.session_dir = Path(tempfile.mkdtemp(prefix=f"session_{ts}_", dir=CAPTURES_ROOT))
         self.sessions.append(self.session_dir)
         try:
             from core.capture import pick_display
@@ -222,9 +228,36 @@ class App:
               "stops when you stop scrolling. Cmd+Shift+9 to quit.")
         threading.Thread(target=self._burst_loop, args=(self.session_dir,), daemon=True).start()
 
+    def _load_capture_settings(self):
+        """Refresh only at a capture boundary, keeping each file on one selected area."""
+        import os
+        import json
+        from webapp.session import capture_settings
+        try:
+            saved = json.loads((CAPTURES_ROOT / '.capture_settings.json').read_text())
+            if saved.get('pid') != os.getpid():
+                return
+            settings = capture_settings(saved.get('region'), saved.get('display'))
+        except (OSError, ValueError, TypeError):
+            return
+        self.region = tuple(settings['region']) if settings['region'] else None
+        self.display = settings['display']
+        from core.spacing import validate_profile
+        try:
+            self.spacing_profile = validate_profile(saved['spacing']) if saved.get('spacing') else None
+        except ValueError:
+            self.spacing_profile = None
+
+    def _attach_usage_persistence(self):
+        if self.program:
+            from core.usage import persist_record, SavedBudget
+            self.tracker.on_record = lambda record: persist_record(self.program, record)
+            self.tracker.budget = SavedBudget(self.program)
+
     def _safe_extract(self, path, cache_dir):
         try:
             from core.analysis import extract_to_cache
+            self._attach_usage_persistence()
             self.tracker.set_thread_bucket(str(Path(path).parent))
             extract_to_cache(self.client, path, cache_dir)
             self._sync_text_cache(Path(path).parent, [Path(path)], load=False)   # keep the text even if the worker restarts
@@ -254,11 +287,12 @@ class App:
         return False
 
     def _burst_loop(self, session_dir):
-        from core.capture import capture_full_png, capture_region_fixed, next_png_path
+        from core.capture import capture_full_png, capture_region_fixed, next_png_path, content_changed
         from core import status
         cache = session_dir / ".cache"
-        last_hash = None
+        last_frame = None
         kept = 0
+        capture_error = None
         last_change = time.monotonic()
         started = time.monotonic()
         while self.running and kept < BURST_MAX_FRAMES:
@@ -271,14 +305,22 @@ class App:
                 data = capture_region_fixed(self.region) if self.region else capture_full_png()
             except Exception as exc:  # noqa: BLE001
                 print(f"Capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+                capture_error = f"Screen capture stopped unexpectedly: {exc}. Recapture the file to confirm completeness."
                 break
-            h = _phash(data)
-            changed = (last_hash is None) or (h is None) or ((h - last_hash) >= BURST_KEEP_DIST)
+            changed = (last_frame is None) or content_changed(last_frame, data)
             if changed:
-                out = next_png_path(session_dir)
-                out.write_bytes(data)
+                try:
+                    out = next_png_path(session_dir)
+                    out.write_bytes(data)
+                    from core.spacing import bind
+                    bound=bind(out,getattr(self,'spacing_profile',None) if self.region else None)
+                    if self.region and getattr(self,'spacing_profile',None) and not bound['confirmed']:
+                        status.publish(bound.get('reason','Reset the source margin in Pick code area.'),'info')
+                except OSError as exc:
+                    capture_error = f"A screenshot could not be saved: {exc}. Recapture the file to confirm completeness."
+                    break
                 kept += 1
-                last_hash = h
+                last_frame = data
                 last_change = time.monotonic()
                 status.publish(f"Captured frame {kept}")
                 if kept == 1:
@@ -292,7 +334,14 @@ class App:
                     self._kind_guess = getattr(self, "_kind_guess", {})
                     self._kind_guess[str(session_dir)] = self._pool.submit(detect_kind, self.client, out)
                 guess = getattr(self, "_kind_guess", {}).get(str(session_dir))
-                if not (guess is not None and guess.done() and guess.result() == "screen"):
+                guessed_screen = False
+                if guess is not None and guess.done():
+                    try:
+                        guessed_screen = guess.result() == "screen"
+                    except Exception:
+                        # Register the evidence first; analysis will expose a recoverable failure.
+                        pass
+                if not guessed_screen:
                     self._pool.submit(self._safe_extract, out, cache)
             if self.idle_stop > 0:
                 idle = time.monotonic() - last_change
@@ -302,10 +351,23 @@ class App:
                     break
             # manual mode (idle_stop <= 0): never auto-stop — ends via Cmd+Shift+1 or the frame cap
             time.sleep(BURST_INTERVAL)
-        status.publish(f"Scrolling stopped — {kept} unique frame(s), analysing", "info")
+        status.publish(
+            "Only one screenshot saved. If you scrolled, check the selected display and code area, "
+            "then recapture; choose manual stop for a long file." if kept == 1 else
+            f"Scrolling stopped — {kept} unique frame(s), analysing", "info")
         from core.notify import notify
         notify("CodeSnap", f"Capture complete — {kept} frame(s), analysing")
         artifact_id = self._register_capture(session_dir)
+        if capture_error:
+            self.running = self.capture_enabled = False
+            self._mark_failed(artifact_id, capture_error)
+            if self.program and artifact_id:
+                from core.model import ProgramStore
+                with ProgramStore.open(self.program) as store:
+                    store.update_pending(artifact_id, capture_incomplete=True)
+            self._inflight.discard(artifact_id)
+            status.publish(capture_error, "error", stage="done")
+            return
         if self.project_mode:
             print(f"[burst] done capturing: {kept} unique frame(s). Analysing in background — start the next file.")
             self.running = False        # project mode: free the session so the next file can be captured now
@@ -328,14 +390,16 @@ class App:
         from core import status
         from core.model import ProgramStore
         try:
-            with ProgramStore.open(self.program) as store:
+            with ProgramStore.open(self.program) as store, store.transaction():
                 target = store.get_meta("recapture_target") or {}
+                if target.get("artifact_id"):
+                    current = store.current_artifact(target.get("name"))
+                    if not current or current["id"] != target["artifact_id"]:
+                        raise ValueError("The recapture target changed. Choose the current file before retrying.")
                 if target:
                     store.set_meta("recapture_target", None)
                 session_id = store.add_session(mode="burst", region=",".join(map(str, self.region)) if self.region else None)
                 append_to = target.get("artifact_id") if target.get("mode") == "append" else None
-                if append_to and store.artifact(append_to) is None:
-                    append_to = None
                 artifact_id = store.add_pending_capture(imgs, kind=self.capture_kind, session_id=session_id,
                                                         recapture_of=target.get("name"), keep_frames_of=append_to)
                 if append_to:   # analyse the file's earlier screenshots together with the new ones
@@ -350,6 +414,8 @@ class App:
             return artifact_id
         except Exception as exc:  # noqa: BLE001
             print(f"Couldn't save the capture to the program: {exc}", file=sys.stderr)
+            self._unsaved_sessions.add(Path(session_dir))
+            status.publish(f"Capture could not be saved: {exc}. Screenshots retained in {session_dir}.", "error", stage="done")
             return None
 
     @property
@@ -379,8 +445,8 @@ class App:
             return 0
         done = 0
         for aid, kind, frames in self._pending_work():
-            d = CAPTURES_ROOT / f"resume_{aid}_{time.strftime('%H%M%S')}"
-            d.mkdir(parents=True, exist_ok=True)
+            CAPTURES_ROOT.mkdir(parents=True, exist_ok=True)
+            d = Path(tempfile.mkdtemp(prefix=f"resume_{aid}_", dir=CAPTURES_ROOT))
             self.sessions.append(d)
             for i, src in enumerate(frames, 1):
                 shutil.copyfile(src, d / f"{i:03d}.png")
@@ -418,9 +484,19 @@ class App:
         return kind
 
     def _analyse_burst(self, session_dir, artifact_id=None, kind=None):
+        if self.program and artifact_id is None:
+            # Registration failed. Never bypass its target checks by importing a new file.
+            self._unsaved_sessions.add(Path(session_dir))
+            return
         kind = kind or self.capture_kind
         imgs = sorted(session_dir.glob("*.png"))
-        kind = self._resolve_kind(kind, imgs, artifact_id)
+        try:
+            kind = self._resolve_kind(kind, imgs, artifact_id)
+        except Exception as exc:
+            self.running = self.capture_enabled = False
+            self._mark_failed(artifact_id, f"Capture classification failed: {exc}")
+            self._inflight.discard(artifact_id)
+            return
         if not imgs:
             print("[burst] no frames captured.")
             try:
@@ -441,9 +517,10 @@ class App:
         self._analysis_lock.acquire()   # serialise overlapping analyses (captures stay non-blocking)
         self._analysing = True
         self._sync_text_cache(session_dir, imgs, load=True)
-        self._stage(artifact_id, "reading screenshots")
+        self._stage(artifact_id, "reading screenshots", cache_dir=ctx.cache_dir)
         bucket = str(session_dir)
         self.tracker.default_bucket = bucket
+        self._attach_usage_persistence()
         try:
             if self.program:
                 self._share_copybooks()
@@ -469,6 +546,10 @@ class App:
             self.tracker.take(bucket)
         except Exception as exc:  # noqa: BLE001
             print(f"Analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            if self.program:
+                from core.usage import persist_record
+                for record in self.tracker.take(bucket):
+                    persist_record(self.program, record, artifact_id)
             self._mark_failed(artifact_id, f"{type(exc).__name__}: {exc}")
             try:
                 from core import status
@@ -515,13 +596,16 @@ class App:
               f"${total['cost']:.3f} ({steps})")
         print(f"(cost for this file: ${total['cost']:.3f}, {total['calls']} calls)")
 
-    def _stage(self, artifact_id, stage):
+    def _stage(self, artifact_id, stage, cache_dir=None):
         if not (self.program and artifact_id):
             return
         from core.model import ProgramStore
         try:
             with ProgramStore.open(self.program) as store:
-                store.update_pending(artifact_id, stage=stage)
+                changes = {"stage": stage}
+                if cache_dir is not None:
+                    changes["cache_dir"] = str(Path(cache_dir).resolve())
+                store.update_pending(artifact_id, **changes)
         except Exception:  # noqa: BLE001
             pass
 
@@ -544,9 +628,10 @@ class App:
 
     def _sync_text_cache(self, session_dir, imgs, load: bool):
         """Share per-screenshot transcriptions with the program (load before analysis, save after)."""
+        import json
         if not self.program:
             return
-        from core.analysis import cache_path_for
+        from core.analysis import cache_path_for, _publish_cache
         from core.model import ProgramStore
         try:
             with ProgramStore.open(self.program) as store:
@@ -555,11 +640,24 @@ class App:
             local.mkdir(exist_ok=True)
             for img in imgs:
                 name = cache_path_for(img, local).name
-                for suffix in ("", ".corr.json", ".verify.json"):
+                for suffix in ("", ".corr.json", ".verify.json", '.ocr.md'):
                     fn = name if not suffix else name[:-3] + suffix
                     src, dst = (shared / fn, local / fn) if load else (local / fn, shared / fn)
-                    if src.exists() and not dst.exists():
-                        shutil.copyfile(src, dst)
+                    refresh = not load and suffix in ('', '.verify.json')
+                    if src.exists() and (not dst.exists() or refresh):
+                        if suffix == '' and dst.exists():
+                            original = dst.with_suffix('.ocr.md')
+                            if not original.exists():
+                                _publish_cache(original, dst.read_text())
+                        _publish_cache(dst, src.read_text())
+                image=Path(img)
+                ev=shared.parent / (name[:-3]+image.suffix)
+                source,target=(ev.with_suffix('.spacing.json'),image.with_suffix('.spacing.json')) if load else (image.with_suffix('.spacing.json'),ev.with_suffix('.spacing.json'))
+                if source.exists() and (not target.exists() or not load):
+                    from core.spacing import image_hash
+                    metadata = json.loads(source.read_text())
+                    if metadata.get('image_sha256') == image_hash(image):
+                        _publish_cache(target, json.dumps(metadata))
         except Exception as exc:  # noqa: BLE001
             print(f"(screenshot text cache: {exc})", file=sys.stderr)
 
@@ -616,11 +714,16 @@ class App:
         if artifact_id:
             try:
                 with ProgramStore.open(self.program) as store:
+                    if not store.artifact(artifact_id):
+                        return
+                    claim = (store.pending_captures().get(artifact_id) or {}).get("claim") or {}
+                    if claim and claim.get("owner") != self._owner:
+                        raise RuntimeError("Capture ownership changed; results were not applied.")
+                    # Provider callbacks save usage through another connection; never
+                    # hold a SQLite write transaction while calling the provider.
                     final_id = complete_capture(store, self.client, artifact_id, ctx.last_report)
                     for r in records:
-                        store.log_run(r["step"], artifact_id=final_id, model=r["model"], input_tokens=r["input_tokens"],
-                                      output_tokens=r["output_tokens"], cost=r["cost"], ms=r["ms"], ok=r["ok"],
-                                      error=r["error"])
+                        store.log_usage_record(r, artifact_id=final_id)
                     art = store.artifact(final_id)
                 ok = art["status"] != "failed"
                 if ok:
@@ -641,9 +744,7 @@ class App:
                 status.publish("Adding file to the program model", "tool", stage="save")
                 artifact_id = ingest_capture(store, self.client, imgs, ctx.last_report, session_id=session_id)
                 for r in records:
-                    store.log_run(r["step"], artifact_id=artifact_id, model=r["model"], input_tokens=r["input_tokens"],
-                                  output_tokens=r["output_tokens"], cost=r["cost"], ms=r["ms"], ok=r["ok"],
-                                  error=r["error"])
+                    store.log_usage_record(r, artifact_id=artifact_id)
                 name = store.artifact(artifact_id)["name"]
             self._analyse_code(artifact_id, name)
             status.publish(f"Added {name} to program {self.program}", "info", stage="done")
@@ -658,11 +759,12 @@ class App:
             return
         from core.capture import capture_full_png
         ts = time.strftime("%Y%m%d_%H%M%S")
-        self.session_dir = CAPTURES_ROOT / f"session_{ts}"
-        self.session_dir.mkdir(parents=True, exist_ok=True)
+        CAPTURES_ROOT.mkdir(parents=True, exist_ok=True)
+        self.session_dir = Path(tempfile.mkdtemp(prefix=f"session_{ts}_", dir=CAPTURES_ROOT))
         self.sessions.append(self.session_dir)
         self.count = 1
         self._last_phash = None
+        self._last_manual_frame = None
         self.running = True
         self.capture_enabled = True
         try:
@@ -700,11 +802,12 @@ class App:
 
     def _start_session(self):
         ts = time.strftime("%Y%m%d_%H%M%S")
-        self.session_dir = CAPTURES_ROOT / f"session_{ts}"
-        self.session_dir.mkdir(parents=True, exist_ok=True)
+        CAPTURES_ROOT.mkdir(parents=True, exist_ok=True)
+        self.session_dir = Path(tempfile.mkdtemp(prefix=f"session_{ts}_", dir=CAPTURES_ROOT))
         self.sessions.append(self.session_dir)
         self.count = 0
         self._last_phash = None
+        self._last_manual_frame = None
         self.running = True
         self.capture_enabled = True
         print(f"\n[running] session: {self.session_dir.resolve()}")
@@ -747,14 +850,14 @@ class App:
                 if data is None:
                     print("(region selection cancelled)")
                     return
-            ph = _phash(data)
-            if ph is not None and self._last_phash is not None and (ph - self._last_phash) <= DUP_THRESHOLD:
-                print("  near-duplicate of the previous capture — skipped")
+            # An explicit capture may contain a one-character correction.
+            # Similar layout is not proof that the text is unchanged.
+            if data == self._last_manual_frame:
+                print("  identical to the previous capture — skipped")
                 return
-            if ph is not None:
-                self._last_phash = ph
             out = next_png_path(session_dir)
             out.write_bytes(data)
+            self._last_manual_frame = data
             self.count += 1
             print(f"  saved capture {self.count}: {out.name} — reading in background...")
         except Exception as exc:  # noqa: BLE001
@@ -918,6 +1021,9 @@ class App:
         with self._analysis_lock:
             removed = 0
             for d in self.sessions:
+                if d in self._unsaved_sessions:
+                    print(f"Kept unsaved capture screenshots: {d}")
+                    continue
                 if d.exists():
                     shutil.rmtree(d, ignore_errors=True)
                     removed += 1

@@ -14,6 +14,7 @@ Three independent signals, each used only when the screenshot provides it:
 """
 import re
 import difflib
+from core.text import normalized_line
 
 # which copy of a line to keep when several screenshots show it
 RANK = {"verified": 5, "reread": 5, "confirmed": 4, "joined": 3, "unchecked": 2, "edited": 2, "mismatch": 1,
@@ -30,6 +31,7 @@ REASONS = {
     "break": "no overlap between two screens here, so lines between them may never have been on screen: scroll back "
              "over this part more slowly and use Add screenshots",
     "edited": "changed by the compile-fix step after reading; compare it with the screenshot",
+    "spacing": "screenshots disagree about this line's spacing; confirm its source margin and compare the saved readings",
 }
 
 
@@ -78,6 +80,10 @@ def join_sideways(a: str, b: str, min_k: int = 8):
         return None
     if b0 in a0:
         return a
+    # A complete SQL statement is a new source row, not a horizontally
+    # scrolled suffix merely because many INSERTs share the same ending.
+    if re.match(r'^(?:--|(?:CREATE|INSERT|SELECT|UPDATE|DELETE|ALTER|DROP|GRANT|REVOKE|MERGE)\b)', b0, re.I):
+        return None
     b_lead = re.sub(r"^\s*(\[CUT OFF\]\s*)?", "", b)      # a piece cut at its left edge starts with the marker
     for p in range(max(0, len(a0) - len(b0)), len(a0) - min_k + 1):
         if b0.startswith(a0[p:]):
@@ -87,7 +93,7 @@ def join_sideways(a: str, b: str, min_k: int = 8):
 
 def _piece_of(l: str, g: str) -> bool:
     """l is part of line g seen after scrolling right: it starts part-way into g, or runs on past g's cut end."""
-    l0, g0 = " ".join(_stem(l).split()), " ".join(_stem(g).split())
+    l0, g0 = normalized_line(_stem(l)), normalized_line(_stem(g))
     if len(l0) < 8 or not g0:
         return False
     if l0 in g0:
@@ -189,6 +195,7 @@ def merge_by_numbers(parts: list, metas: list):
     for n, cs in cands.items():
         cs = sorted(cs, key=lambda c: -RANK.get(c[1], 0))
         keep = list(cs[0])
+        disagreement = False
         for t, s in cs[1:]:
             if not t.strip():
                 continue
@@ -208,8 +215,14 @@ def merge_by_numbers(parts: list, metas: list):
                 sideways += 1
                 continue
             if _same_line(keep[0], t):
+                if normalized_line(keep[0]) != normalized_line(t):
+                    conflicts += 1
+                    disagreement = True
                 continue                                  # same line, the higher-ranked copy is already kept
             conflicts += 1
+            disagreement = True
+        if disagreement:
+            keep[1] = 'mismatch'
         out[n] = keep
     if conflicts > max(2, 0.1 * len(out)):
         return None
@@ -236,7 +249,7 @@ def merge_by_numbers(parts: list, metas: list):
 # ── per-file summary ────────────────────────────────────────────────────────────────────────────────────────────
 
 def _norm(line: str) -> str:
-    return " ".join(line.split())
+    return normalized_line(line)
 
 
 def lookup(parts: list, metas: list) -> dict:
@@ -338,6 +351,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
     aligned = list(notes.get("line_statuses") or [])
     source_lines = list(notes.get("source_lines") or [])
     norm = {_norm(k) for k in statuses}
+    spacing_conflicts = set(notes.get('spacing_conflicts') or [])
     counts = {"verified": 0, "reread": 0, "confirmed": 0, "joined": 0, "flagged": 0, "unchecked": 0}
     flags = []
     for i, l in enumerate(final_lines, 1):
@@ -350,6 +364,8 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
             s = "cut"
         elif changed:
             s = "edited"
+        elif i in spacing_conflicts:
+            s = 'spacing'
         elif s is None:
             s = statuses.get(l.rstrip())
             if s is None:
@@ -379,9 +395,34 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
            "gap_coordinate": "editor" if notes.get("numbers") else None,
            "first_line": notes.get("first_line"), "last_line": notes.get("last_line"),
            "sideways": notes.get("sideways", 0), "wrapped": notes.get("wrapped", 0), "flags": flags[:50],
-           "breaks": len(notes.get("breaks") or [])}
+           "breaks": sum(flag['reason'] == REASONS['break'] for flag in flags)}
+    if notes.get('spacing_statuses'):
+        measured=sum(s=='measured' for s in notes['spacing_statuses'])
+        out['spacing']={'measured':measured,'total':total,'unconfirmed':max(0,total-measured),
+                        'conflicts':len(spacing_conflicts),'scope':'visible nonblank columns; tabs and invisible trailing blanks are not proven'}
     out["headline"] = headline(out)
     return out
+
+
+def spacing_agreement(code, parts, metas, notes):
+    """Record positioned spacing disagreements; more indentation proves nothing.
+
+    This withholds certainty rather than rewriting selected source. Calibrated
+    automatic selection is a separate step, not an inference from majority OCR.
+    """
+    final = code.split('\n')
+    conflicts = set(notes.get('spacing_conflicts') or [])
+    for part in parts:
+        rows = part.split('\n')
+        mapping = _line_map(part, code)
+        for i, j in enumerate(mapping):
+            if i<len(notes.get('spacing_statuses') or []) and notes['spacing_statuses'][i]=='measured':
+                continue
+            if j is None or not final[i].strip() or '[CUT OFF]' in final[i] + rows[j]:
+                continue
+            if _norm(final[i]) == _norm(rows[j]) and final[i].rstrip() != rows[j].rstrip():
+                conflicts.add(i+1)
+    notes['spacing_conflicts'] = sorted(conflicts)
 
 
 def _span(g):
@@ -406,6 +447,11 @@ def headline(v: dict) -> str:
     if v["unchecked"]:
         bits.append(f"{v['unchecked']} couldn't be matched to the pixels (proportional text or editor decorations)")
     s = ", ".join(bits) + "."
+    spacing=v.get('spacing')
+    if spacing:
+        s+=f" Spacing measured from a confirmed source margin: {spacing['measured']} of {spacing['total']} lines."
+        if spacing.get('unconfirmed'):
+            s+=' Set the source margin in Pick code area; keep column one visible and reset it after moving or zooming the editor.'
     if v.get("gaps"):
         label = "Never on screen (editor source)" if v.get("gap_coordinate") == "editor" else "Never on screen"
         s += f" {label}: " + ", ".join(_span(g) for g in v["gaps"][:6]) + "."

@@ -12,6 +12,7 @@ ECOSYSTEM = {"jquery": ("npm", "jquery"), "bootstrap": ("npm", "bootstrap"), "an
 
 CURATED = {
     "jquery": [
+        ("CVE-2011-4969", "<1.6.3", "medium", "XSS: selectors built from location.hash can be parsed as HTML"),
         ("CVE-2012-6708", "<1.9.0", "medium", "XSS: selector strings starting with text can be parsed as HTML"),
         ("CVE-2015-9251", "<3.0.0", "medium", "XSS: cross-domain AJAX responses executed as script"),
         ("CVE-2019-11358", "<3.4.0", "medium", "Prototype pollution in jQuery.extend(true, ...)"),

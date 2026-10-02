@@ -7,6 +7,7 @@ Run:  python -m webapp        (or: python webapp/server.py)
 """
 
 import time
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, Body, HTTPException
@@ -119,12 +120,41 @@ def api_session_start(single: bool = False, idle_stop: float | None = None, regi
         if limit and spent >= limit:
             return JSONResponse({"error": f"API budget reached for this program (${spent:.2f} of ${limit:.2f}). "
                                           f"Raise the budget to keep capturing."}, status_code=402)
-    api_session_kind(capture_kind)
-    started = _session.start(single=single, idle_stop=idle_stop, region=region, project_mode=project_mode,
-                             program=program, capture_kind=capture_kind, display=display)
+    try:
+        started = _session.start(single=single, idle_stop=idle_stop, region=region, project_mode=project_mode,
+                                 program=program, capture_kind=capture_kind, display=display)
+        api_session_kind(capture_kind)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail='Pick a valid screen and capture area.')
     return {"running": _session.running(), "started": started, "single": single,
             "idle_stop": idle_stop, "region": region, "project_mode": project_mode or bool(program),
             "program": program, "capture_kind": capture_kind}
+
+
+_SPACING_REFERENCE = {}
+
+
+@app.post('/api/session/settings')
+def api_session_settings(payload: dict = Body(...)):
+    try:
+        from webapp.session import capture_settings
+        from core.spacing import profile
+        cfg=capture_settings(payload.get('region'),payload.get('display'))
+        if payload.get('spacing_origin') is not None:
+            if (payload.get('spacing_reference')!=_SPACING_REFERENCE.get('id') or
+                    cfg['display']!=_SPACING_REFERENCE.get('display')):
+                raise ValueError('Retake the screenshot before setting the source margin.')
+            cal=profile(_SPACING_REFERENCE['data'],cfg['region'],payload['spacing_origin'])
+            settings=_session.configure(cfg['region'],cfg['display'],spacing=cal)
+        elif payload.get('clear_spacing'):
+            settings=_session.configure(cfg['region'],cfg['display'],spacing=None)
+        else:
+            settings = _session.configure(cfg['region'],cfg['display'])
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {'ok': True, 'applies': 'next_capture', **settings}
 
 
 def _program_exists(slug: str) -> bool:
@@ -147,6 +177,15 @@ def _client():
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise HTTPException(status_code=400, detail="No API key set — add it in the app first.")
     return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=120.0)
+
+
+def _program_client(slug):
+    from core.usage import program_client, SavedBudget, UsageTracker, BudgetExceeded
+    try:
+        SavedBudget(slug).check(UsageTracker())
+        return program_client(slug, _client())
+    except BudgetExceeded as exc:
+        raise HTTPException(status_code=402, detail=str(exc))
 
 
 def _artifact_summary(store, artifact: dict) -> dict:
@@ -175,6 +214,10 @@ def _artifact_summary(store, artifact: dict) -> dict:
             out["deep"] = {"facts": len(dd.get("facts") or []), "current": dd.get("hash") == deepdive._hash(artifact.get("transcription"))}
         out["recapture"] = deepdive.recapture_outcome(store, artifact, q)
     out["state"] = deepdive.file_state(store, artifact, q)
+    rebuilding = _REBUILDS.get(store.info["slug"])
+    if rebuilding and rebuilding["name"] == artifact["name"]:
+        out["state"] = "reading"
+        out["rebuild"] = dict(rebuilding)
     return out
 
 
@@ -182,13 +225,13 @@ def _progress(arts: list) -> dict:
     """Files, not captures: a recapture in progress counts against the file it replaces."""
     names = {a["name"] for a in arts if not (a.get("pending") or {}).get("recapture_of")}
     by_file = {}
-    for a in arts:
+    for a in sorted(arts, key=lambda a: bool((a.get("pending") or {}).get("recapture_of"))):
         key = (a.get("pending") or {}).get("recapture_of") or a["name"]
         if key not in names:
             names.add(key)
         cur = by_file.get(key)
         busy = a["state"] in ("waiting", "reading", "reviewing")
-        if cur is None or busy:
+        if cur is None or busy or (a.get("pending") or {}).get("recapture_of"):
             by_file[key] = a["state"]
     c = {k: sum(1 for v in by_file.values() if v == k) for k in ("done", "needs_recapture", "failed", "waiting", "reading", "reviewing")}
     total = len(by_file)
@@ -198,6 +241,8 @@ def _progress(arts: list) -> dict:
 
 
 _DEEP = {}
+_REBUILDS = {}
+_REBUILD_LOCK = threading.Lock()
 
 
 def _deep_start(slug: str, artifact_ids=None) -> dict:
@@ -207,7 +252,9 @@ def _deep_start(slug: str, artifact_ids=None) -> dict:
     job = _DEEP.get(slug)
     if job and job.get("running"):
         return job
-    client = _client()
+    if slug in _REBUILDS:
+        raise HTTPException(status_code=409, detail="Wait for the saved capture rebuild to finish before reviewing.")
+    client = _program_client(slug)
     with _open_program(slug) as store:
         total = len(artifact_ids) if artifact_ids else len(deepdive.pending(store)) or int(deepdive.program_stale(store))
     job = {"running": True, "done": 0, "total": total, "errors": [], "started": time.time()}
@@ -266,8 +313,10 @@ def api_program_create(payload: dict = Body(...)):
 @app.get("/api/programs/{slug}")
 def api_program(slug: str):
     with _open_program(slug) as store:
+        revision = store.model_stamp()
         return {
             "program": store.info,
+            "revision": revision,
             "coverage": store.coverage(),
             "usage": store.usage(),
             "usage_by_step": store.usage_by_step()["steps"],
@@ -275,7 +324,7 @@ def api_program(slug: str):
             "progress": _progress(arts),
             "recapture_target": store.get_meta("recapture_target"),
             "report": {"built_at": store.get_meta("report_built_at"),
-                       "current": store.get_meta("report_stamp") == store.model_stamp()},
+                       "current": store.get_meta("report_stamp") == revision},
             "waiting": sum(1 for a in store.artifacts() if a["status"] == "captured"),
             "session_running": _session.running(),
         }
@@ -287,6 +336,10 @@ def api_program_recapture(slug: str, payload: dict = Body(...)):
         art = store.artifact(int((payload or {}).get("artifact_id") or 0))
         if art is None:
             raise HTTPException(status_code=404, detail="No such file in this program.")
+        if (store.current_artifact(art['name']) or {}).get('id') != art['id']:
+            raise HTTPException(status_code=409, detail="This version was replaced. Choose the current file.")
+        if (store.pending_captures().get(art['id']) or {}).get('recapture_of'):
+            raise HTTPException(status_code=409, detail="This is a pending replacement. Choose the original file to recapture or add screenshots.")
         mode = "append" if (payload or {}).get("mode") == "append" else "replace"
         target = {"name": art["name"], "artifact_id": art["id"], "version": art["version"], "mode": mode}
         store.set_meta("recapture_target", target)
@@ -306,9 +359,10 @@ def api_program_pending_process(slug: str):
         waiting = sum(1 for a in store.artifacts() if a["status"] == "captured")
     if not waiting:
         return {"ok": True, "waiting": 0}
-    if _session.running():
+    if _session.running() and _session.program == slug:
         return {"ok": True, "waiting": waiting, "note": "The running capture session is analysing them."}
-    _session.process_pending(slug)
+    if not _session.process_pending(slug):
+        return JSONResponse({"error": "Another program is being processed. Retry when it finishes."}, status_code=409)
     return {"ok": True, "waiting": waiting, "note": "Analysing in the background."}
 
 
@@ -320,27 +374,85 @@ def api_program_artifact_screenshots(slug: str, artifact_id: int, payload: dict 
     images = [str(x) for x in (payload or {}).get("images") or []][:40]
     if not images:
         return JSONResponse({"error": "Choose one or more screenshots."}, status_code=400)
-    tmp = Path(tempfile.mkdtemp())
-    paths = []
-    for i, data in enumerate(images, 1):
-        head, _, body = data.partition(",")
-        if "base64" not in head or not body:
-            return JSONResponse({"error": "Screenshots must be images."}, status_code=400)
-        ext = "jpg" if "jpeg" in head or "jpg" in head else "png"
-        p = tmp / f"{i:03d}.{ext}"
-        p.write_bytes(base64.b64decode(body))
-        paths.append(p)
+    with tempfile.TemporaryDirectory() as directory:
+        tmp = Path(directory)
+        paths = []
+        for i, data in enumerate(images, 1):
+            head, _, body = data.partition(",")
+            if "base64" not in head or not body:
+                return JSONResponse({"error": "Screenshots must be images."}, status_code=400)
+            ext = "jpg" if "jpeg" in head or "jpg" in head else "png"
+            p = tmp / f"{i:03d}.{ext}"
+            try:
+                import io
+                from PIL import Image
+                decoded = base64.b64decode(body, validate=True)
+                with Image.open(io.BytesIO(decoded)) as image:
+                    if image.format not in ('PNG', 'JPEG'):
+                        raise ValueError('Unsupported image format')
+                    image.verify()
+            except (ValueError, OSError) as exc:
+                return JSONResponse({"error": "Choose a valid PNG or JPEG screenshot."}, status_code=400)
+            p.write_bytes(decoded)
+            paths.append(p)
+        with _open_program(slug) as store:
+            art = store.artifact(artifact_id)
+            if art is None:
+                raise HTTPException(status_code=404, detail="No such file in this program.")
+            if (store.current_artifact(art['name']) or {}).get('id') != artifact_id:
+                raise HTTPException(status_code=409, detail="This version was replaced. Choose the current file.")
+            if (store.pending_captures().get(artifact_id) or {}).get('recapture_of'):
+                raise HTTPException(status_code=409, detail="This is a pending replacement. Add screenshots to the original file.")
+            kind = "screen" if art["artifact_type"] == "ui_screen" else "code"
+            new_id = store.add_pending_capture(paths, kind=kind, session_id=store.add_session(mode="upload"),
+                                               recapture_of=art["name"], keep_frames_of=artifact_id)
+            frames = len(store.artifact_evidence(new_id))
+        out = api_program_pending_process(slug)
+        return {**out, "artifact_id": new_id, "frames": frames, "added": len(paths)}
+
+
+@app.delete("/api/programs/{slug}/artifacts/{artifact_id}")
+def api_program_artifact_delete(slug: str, artifact_id: int):
     with _open_program(slug) as store:
-        art = store.artifact(artifact_id)
-        if art is None:
-            raise HTTPException(status_code=404, detail="No such file in this program.")
-        info = store.pending_captures().get(artifact_id) or {}
-        kind = "screen" if art["artifact_type"] == "ui_screen" else "code"
-        new_id = store.add_pending_capture(paths, kind=kind, session_id=store.add_session(mode="upload"),
-                                           recapture_of=art["name"], keep_frames_of=artifact_id)
-        frames = len(store.artifact_evidence(new_id))
-    out = api_program_pending_process(slug)
-    return {**out, "artifact_id": new_id, "frames": frames, "added": len(paths)}
+        if not store.artifact(artifact_id):
+            return JSONResponse({"error": "File not found"}, status_code=404)
+        if slug in _REBUILDS or store.capture_progress(artifact_id).get("analysing") or (_DEEP.get(slug) or {}).get("running"):
+            return JSONResponse({"error": "This program is being analysed. Wait for analysis to finish before removing the file."},
+                                status_code=409)
+        from core.model.removal import remove_file
+        try:
+            removed = remove_file(store, artifact_id)
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        from core.model.linker import link_program
+        link_program(store)
+        return {"ok": True, "removed": artifact_id, "removed_versions": removed}
+
+
+@app.post("/api/programs/{slug}/artifacts/{artifact_id}/rebuild")
+def api_program_artifact_rebuild(slug: str, artifact_id: int):
+    with _open_program(slug) as store:
+        if not store.artifact(artifact_id):
+            return JSONResponse({"error": "File not found"}, status_code=404)
+        from core import deepdive
+        pending_worker = _session._pending
+        capture_worker_running = _session.running() or (pending_worker is not None and pending_worker.poll() is None)
+        if ((_DEEP.get(slug) or {}).get("running") or (capture_worker_running and deepdive._active(store)) or
+                any(store.capture_progress(a["id"]).get("analysing") for a in store.artifacts())):
+            return JSONResponse({"error": "Wait for current analysis to finish before rebuilding a saved capture."}, status_code=409)
+        from core.model.restitch import rebuild_saved_capture
+        with _REBUILD_LOCK:
+            if slug in _REBUILDS:
+                return JSONResponse({"error": "A saved capture is already being rebuilt. Wait for it to finish."}, status_code=409)
+            job = {"name": store.artifact(artifact_id)["name"], "stage": "Reading saved screenshots", "done": 0, "total": 0}
+            _REBUILDS[slug] = job
+        try:
+            return rebuild_saved_capture(store, artifact_id, progress=lambda **values: job.update(values))
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        finally:
+            with _REBUILD_LOCK:
+                _REBUILDS.pop(slug, None)
 
 
 @app.post("/api/programs/{slug}/artifacts/{artifact_id}/retry")
@@ -352,8 +464,10 @@ def api_program_artifact_retry(slug: str, artifact_id: int):
         if artifact_id not in store.pending_captures():
             return JSONResponse({"error": "Only a capture that hasn't been analysed can be retried — use Recapture."},
                                 status_code=400)
-        store.update_pending(artifact_id, error=None, claim=None)
-        store.set_status(artifact_id, "captured")
+        try:
+            store.retry_pending(artifact_id)
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
     return api_program_pending_process(slug)
 
 
@@ -385,12 +499,60 @@ def api_program_artifact(slug: str, artifact_id: int):
         file_entity = store.entity_by_key(f"file:{artifact['name']}")
         profile = (file_entity or {}).get("attrs", {}).get("profile")
         from core import deepdive
+        from core.model.line_review import items
         dd = (store.get_meta("deepdive") or {}).get(str(artifact_id))
-        q = deepdive.capture_quality(store, artifact, (dd or {}).get("capture_concerns"))
+        q = deepdive.capture_quality(store, artifact, deepdive.current_concerns(store, artifact))
         return {"artifact": artifact, "entities": entities, "evidence": evidence, "profile": profile,
                 "verification": store.verification(artifact_id), "deep": dd,
                 "deep_current": bool(dd) and dd.get("hash") == deepdive._hash(artifact.get("transcription")),
-                "quality": {"status": q["status"], "issues": q["issues"]}}
+                "quality": {"status": q["status"], "issues": q["issues"]},
+                "review_lines": items(store, artifact)}
+
+
+@app.get("/api/programs/{slug}/artifacts/{artifact_id}/review/{line}")
+def api_line_review(slug: str, artifact_id: int, line: int):
+    from core.model.line_review import detail
+    with _open_program(slug) as store:
+        art = store.artifact(artifact_id)
+        if not art or not art['is_current']:
+            raise HTTPException(status_code=404, detail="This file was removed or replaced. Refresh the review.")
+        try:
+            return detail(store, art, line)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/programs/{slug}/artifacts/{artifact_id}/review/{line}")
+def api_line_review_answer(slug: str, artifact_id: int, line: int, payload: dict = Body(...)):
+    from core import feedback, deepdive
+    from core.model.corrections import CorrectionError
+    with _open_program(slug) as store:
+        art = store.artifact(artifact_id)
+        if not art or not art['is_current']:
+            raise HTTPException(status_code=404, detail="This file was removed or replaced. Refresh the review.")
+        if slug in _REBUILDS or (_DEEP.get(slug) or {}).get('running') or any(
+                store.capture_progress(a['id']).get('analysing') for a in store.artifacts()):
+            raise HTTPException(status_code=409, detail="Wait for analysis to finish before answering.")
+        lines = (art.get('transcription') or '').splitlines()
+        if (payload.get('text_hash') != deepdive._hash(art.get('transcription')) or
+                not 0 < line <= len(lines) or payload.get('old_text') != lines[line-1]):
+            raise HTTPException(status_code=409, detail="This source changed. Refresh the screenshot question before answering.")
+        text = payload.get('new_text')
+        if not isinstance(text, str) or not text.strip() or '\n' in text or '\r' in text:
+            raise HTTPException(status_code=400, detail="Enter one complete source line, preserving its spaces.")
+        op = 'artifact.confirm_line' if text == lines[line-1] else 'artifact.replace_line'
+        change = {'artifact': art['name'], 'line': line, 'old_text': lines[line-1]}
+        if op == 'artifact.replace_line':
+            change['new_text'] = text
+        try:
+            result = feedback.apply(store, [{'op': op, 'payload': change}],
+                                    note='User answered a saved screenshot question.', client=None)
+        except CorrectionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        from core.model.line_review import items
+        remaining = items(store, store.artifact(artifact_id))
+        return {'ok': True, **result, 'review_status': 'completed', 'review_lines': remaining,
+                'remaining_issues': [item for item in remaining if item['line'] == line]}
 
 
 @app.post("/api/programs/{slug}/artifacts/{artifact_id}/rename")
@@ -414,27 +576,28 @@ def api_program_artifact_type(slug: str, artifact_id: int, payload: dict = Body(
             raise HTTPException(status_code=404, detail="No such file in this program.")
         store.set_artifact_type(artifact_id, atype)
         try:
-            counts = ingest_artifact(store, _LazyClient(), artifact_id)
+            counts = ingest_artifact(store, _LazyClient(slug), artifact_id)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"Re-extraction failed: {exc}"}, status_code=500)
         return {"ok": True, **counts, "artifact": _artifact_summary(store, store.artifact(artifact_id))}
 
 
 class _LazyClient:
-    def __init__(self):
+    def __init__(self, slug):
+        self.slug = slug
         self._client = None
 
     @property
     def messages(self):
         if self._client is None:
-            self._client = _client()
+            self._client = _program_client(self.slug)
         return self._client.messages
 
 
 @app.post("/api/programs/{slug}/artifacts/{artifact_id}/reextract")
 def api_program_artifact_reextract(slug: str, artifact_id: int):
     from core.model import ingest_artifact
-    client = _client()
+    client = _program_client(slug)
     with _open_program(slug) as store:
         if store.artifact(artifact_id) is None:
             raise HTTPException(status_code=404, detail="No such file in this program.")
@@ -537,7 +700,8 @@ def api_program_assess_inputs(slug: str, payload: dict = Body(...)):
 
 def _diagrams(store):
     from core.diagrams import all_diagrams
-    return all_diagrams(store)
+    from core.report import _redactor
+    return _redactor(store).map(all_diagrams(store))
 
 
 @app.get("/api/programs/{slug}/diagrams")
@@ -555,7 +719,8 @@ def api_program_diagrams_export(slug: str, fmt: str):
     from core.diagrams.export import bundle
     with _open_program(slug) as store:
         ds = _diagrams(store)
-        name = store.info["name"]
+        from core.report import _redactor
+        name = _redactor(store)(store.info["name"])
         if fmt == "vsdx":
             body, mt = vsdx(ds, f"{name} diagrams"), "application/vnd.ms-visio.drawing"
         elif fmt == "drawio":
@@ -687,7 +852,7 @@ def api_program_correct(slug: str, payload: dict = Body(...)):
         return JSONResponse({"error": "Send an op or a list of ops."}, status_code=400)
     with _open_program(slug) as store:
         try:
-            return {"ok": True, **feedback.apply(store, ops, str(payload.get("note", "")), client=_LazyClient())}
+            return {"ok": True, **feedback.apply(store, ops, str(payload.get("note", "")), client=_LazyClient(slug))}
         except CorrectionError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -698,7 +863,7 @@ def api_program_correction_undo(slug: str, correction_id: int):
     from core.model.corrections import CorrectionError
     with _open_program(slug) as store:
         try:
-            return {"ok": True, **feedback.undo(store, correction_id, client=_LazyClient())}
+            return {"ok": True, **feedback.undo(store, correction_id, client=_LazyClient(slug))}
         except CorrectionError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -709,7 +874,7 @@ def api_program_correction_interpret(slug: str, payload: dict = Body(...)):
     text = str((payload or {}).get("text", "")).strip()
     if not text:
         return JSONResponse({"error": "Describe the correction first."}, status_code=400)
-    client = _client()
+    client = _program_client(slug)
     with _open_program(slug) as store:
         return {"ok": True, **feedback.interpret(store, text, client)}
 
@@ -787,7 +952,7 @@ def api_program_evidence(slug: str, evidence_id: int):
 @app.post("/api/programs/{slug}/import")
 def api_program_import(slug: str, extract: bool = True):
     from core.model import import_reports
-    client = _client() if extract else None
+    client = _program_client(slug) if extract else None
     with _open_program(slug) as store:
         try:
             imported = import_reports(store, [REPORTS, PENDING], client=client)
@@ -883,7 +1048,8 @@ def api_project_analyze(payload: dict = Body(...)):
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return JSONResponse({"error": "No API key set — add it in the app first."}, status_code=400)
     import anthropic
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=120.0)
+    from core.usage import UsageTracker
+    client = UsageTracker().wrap(anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=120.0))
     try:
         report = analyze_project(client, files)
     except Exception as exc:  # noqa: BLE001
@@ -980,8 +1146,11 @@ def api_screen(delay: float = 0.0, notify: bool = False, display: str | None = N
             _notify("CodeSnap", "Screenshot taken — switch back to draw the code box.")
         except Exception:  # noqa: BLE001 - notification is optional
             pass
+    import hashlib
+    reference=hashlib.sha256(png).hexdigest()
+    _SPACING_REFERENCE.update(id=reference,data=png,display=shown)
     return Response(content=png, media_type="image/png",
-                    headers={"Cache-Control": "no-store", "X-CodeSnap-Display": str(shown)})
+                    headers={"Cache-Control": "no-store", "X-CodeSnap-Display": str(shown), 'X-CodeSnap-Spacing-Reference':reference})
 
 
 @app.post("/api/session/kind")

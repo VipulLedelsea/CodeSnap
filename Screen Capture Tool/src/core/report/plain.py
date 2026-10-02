@@ -7,13 +7,13 @@ RULES = {
     "SEC-CRED": ("a password or key is written directly into the code (hard-coded credential)",
                  "anyone who can read the code can use it, and it can't be changed without a code release",
                  "move it to a secure secrets store and change the password"),
-    "SEC-TLS": ("data is sent without encryption (plain HTTP or an unencrypted database connection)",
-                "it can be read or changed on the network", "require TLS 1.2 or later on the connection (HTTPS, Encrypt=True)"),
-    "SEC-ERR": ("errors are silently ignored, so a failed step looks like success",
+    "SEC-TLS": ("data is sent over an unencrypted connection",
+                "it can be read or changed on the network", "require TLS 1.2 or later on the connection"),
+    "SEC-ERR": ("errors are ignored and processing carries on, so a failed step can look like success",
                 "failures such as a payment that did not post go unnoticed and are not logged",
                 "log and raise every error; stop the run and alert support when a step fails"),
     "SEC-AUTHZ": ("an action that changes data has no authorization check",
-                  "any signed-in or anonymous caller could run it, for example to approve a payment",
+                  "unless a global filter applies, any signed-in or anonymous caller could run it",
                   "require a named role for the action and record who performed it"),
     "SEC-CSRF": ("a form post is not protected against cross-site request forgery (CSRF)",
                  "another web page could make a signed-in user's browser submit it without their knowledge",
@@ -52,8 +52,8 @@ RULES = {
     "SUP-EOL": ("{x} is past the vendor's end of support (end of life)", "it no longer receives security fixes",
                 "upgrade or replace it"),
     "WEB-EOL": ("{x} on the website is past end of support", "it no longer receives security fixes", "upgrade it"),
-    "SUP-SKILLS": ("few people still have the skills to maintain this technology",
-                   "support depends on a small, shrinking pool of staff or vendors",
+    "SUP-SKILLS": ("specialist maintenance skills are required; support availability is unconfirmed",
+                   "named maintainers and vendor support cover need confirmation",
                    "document the code and cross-train, or plan a move to a more common platform"),
     "UIS-GET": ("sensitive data such as a password is sent in the web address (GET request)",
                 "web addresses are stored in browser history and server logs", "send it in the request body (POST)"),
@@ -61,6 +61,9 @@ RULES = {
                     "use a masked password field"),
     "UIS-PW": ("a password is shown or pre-filled on screen", "anyone who sees the screen can read it",
                "never display or pre-fill passwords"),
+    "UIS-PREFILL": ("a password is written into the page source as the field's default value",
+                    "anyone who opens the page or its source can read it",
+                    "remove it from the page, change it, and give each user their own sign-in"),
     "UIS-MIXED": ("part of the page is loaded over unencrypted HTTP (mixed content)",
                   "that part can be tampered with on the network", "load everything over HTTPS"),
     "UIS-CSRF": ("forms have no protection against forged requests (CSRF)",
@@ -129,7 +132,7 @@ RULES = {
     "USE-CONFIRM": ("important actions have no confirmation step", "mistakes are easy to make", "add a confirmation"),
     "USE-BUTTON": ("buttons are unclear", "users hesitate or pick the wrong one", "label buttons by what they do"),
     "USE-LONGFORM": ("the form is very long", "entry is slow and error-prone", "split it into steps"),
-    "DEBT-LEGACY": ("an outdated library or language feature is still in use", "it makes changes riskier and blocks upgrades",
+    "DEBT-LEGACY": ("legacy language features are present; runtime compatibility needs confirmation", "confirm maintenance and upgrade implications for the deployed runtime",
                     "upgrade or replace it"),
     "DEBT-GOTO": ("the code jumps around with GO TO statements", "the logic is hard to follow and change safely",
                   "restructure into clear routines"),
@@ -228,8 +231,44 @@ def what(rule: str, text: str = "") -> str:
     s = r[0].replace("{x}", _subject(text) or "a component")
     if rule == "UIB-OBSERVED" and "—" in (text or ""):
         s = text.split("—", 1)[1].strip()
-        s = s[:1].lower() + s[1:]
+        s = re.sub(r":\s*[\w.-]+\.(screen|html?|aspx?|jsp)\s*$", "", s).rstrip(" .")
+        s = lower_first(s)
     return s
+
+
+def describe(f) -> tuple:
+    """(what, why, fix) for one finding, worded for what its own evidence shows."""
+    rule = f.get("rule") or ""
+    snip = " ".join((e or {}).get("snippet") or "" for e in f.get("evidence") or [])
+    detail = f.get("detail") or ""
+    if rule in ("SEC-TLS", "UIS-MIXED"):
+        url = re.search(r"http://[\w.:/%?=&-]+", snip)
+        if url and "form" in detail.lower():
+            return (f"the form is sent over plain HTTP ({url.group(0)})", "what the user enters can be read or changed on "
+                    "the network", "send it over HTTPS")
+        if url:
+            return (f"a script or other part of the page is loaded over plain HTTP ({url.group(0)})",
+                    "anyone on the network path can change it and run their own code in the page",
+                    "load it over HTTPS, or host a maintained copy with the application")
+        if re.search(r"Encrypt|TrustServerCertificate|database connection|Provider=|Data Source", snip + " " + detail, re.I):
+            opt = "Use Encryption for Data=True" if re.search(r"SQLOLEDB|Provider=", snip, re.I) else "Encrypt=True"
+            return ("a database connection does not require encryption", "unless the server forces encryption, data on "
+                    "the connection can be read on the network", f"require encryption on the connection ({opt}) and "
+                    "validate the server certificate")
+    return what(rule, f.get("title") or ""), why(rule), fix(rule)
+
+
+def lower_first(s: str) -> str:
+    """Lower-case the first letter to continue a sentence, unless the first word is a name (AIDPAYRN, WS-PAY-STATUS, jQuery)."""
+    w = (s or "").split(" ", 1)[0]
+    if not w or re.search(r"[-_\d]|^[A-Z]{2,}|^[a-z]+[A-Z]", w) or (len(w) > 1 and w[1:].lower() != w[1:]):
+        return s or ""
+    return s[:1].lower() + s[1:]
+
+
+def tagged(text: str, tag: str) -> str:
+    """'x (hard-coded credential)' + 'high' -> 'x (hard-coded credential, high)': one bracket, not two."""
+    return text[:-1] + f", {tag})" if text.endswith(")") else f"{text} ({tag})"
 
 
 def why(rule: str) -> str:

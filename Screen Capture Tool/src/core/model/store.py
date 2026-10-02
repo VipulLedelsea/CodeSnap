@@ -68,6 +68,26 @@ class ProgramStore:
         self._db.execute("PRAGMA busy_timeout = 5000")
         with self._lock:
             migrate(self._db)
+        self._repair_source_collisions()
+
+    def _repair_source_collisions(self):
+        """Recover old managed-path collisions from the authoritative database text."""
+        import uuid
+        created = []
+        try:
+            with self.transaction() as db:
+                collisions = db.execute("SELECT source_path FROM artifact WHERE source_path IS NOT NULL "
+                                        "GROUP BY source_path HAVING COUNT(*) > 1").fetchall()
+                for row in collisions:
+                    for artifact in db.execute("SELECT id,transcription FROM artifact WHERE source_path=?", (row[0],)).fetchall():
+                        path = self.sources_dir / f"{uuid.uuid4().hex}.source"
+                        path.write_text(artifact["transcription"] or "")
+                        created.append(path)
+                        db.execute("UPDATE artifact SET source_path=? WHERE id=?", (path.name, artifact["id"]))
+        except Exception:
+            for path in created:
+                path.unlink(missing_ok=True)
+            raise
 
     @classmethod
     def create(cls, name: str, description: str = "", root=None) -> "ProgramStore":
@@ -115,13 +135,16 @@ class ProgramStore:
     @contextmanager
     def transaction(self):
         with self._lock:
-            self._db.execute("BEGIN IMMEDIATE")
+            nested = self._db.in_transaction
+            self._db.execute("SAVEPOINT store_nested" if nested else "BEGIN IMMEDIATE")
             try:
                 yield self._db
             except Exception:
-                self._db.execute("ROLLBACK")
+                self._db.execute("ROLLBACK TO store_nested" if nested else "ROLLBACK")
+                if nested:
+                    self._db.execute("RELEASE store_nested")
                 raise
-            self._db.execute("COMMIT")
+            self._db.execute("RELEASE store_nested" if nested else "COMMIT")
 
     def _one(self, sql, args=()):
         with self._lock:
@@ -165,6 +188,12 @@ class ProgramStore:
             ext = Path(src).suffix.lstrip(".") or ext
         digest = hashlib.sha256(data).hexdigest()
         existing = self._one("SELECT id FROM evidence WHERE sha256 = ?", (digest,))
+        if not isinstance(src,(bytes,bytearray)):
+            from core.spacing import calibration_for
+            calibration=calibration_for(src)
+            if calibration.get('image_sha256')==digest:
+                target=self.evidence_dir / ((existing['path'] if existing else f'{digest}.{ext}'))
+                target.with_suffix('.spacing.json').write_text(json.dumps(calibration))
         if existing:
             return existing["id"]
         dest = self.evidence_dir / f"{digest}.{ext}"
@@ -190,30 +219,29 @@ class ProgramStore:
                      transcription: str = "", evidence_ids=(), status: str = "transcribed") -> int:
         check_kind(artifact_type, ARTIFACT_TYPES, "artifact type")
         check_kind(status, ARTIFACT_STATUSES, "artifact status")
-        previous = self.current_artifact(name)
-        version = previous["version"] + 1 if previous else 1
-        source = self.sources_dir / f"{safe_filename(name)}.v{version}"
+        import uuid
+        source = self.sources_dir / f"{uuid.uuid4().hex}.source"
         source.write_text(transcription or "")
         now = _now()
-        if previous:
-            self.clear_artifact(previous["id"])
-        with self.transaction() as db:
-            if previous:
-                db.execute(
-                    "UPDATE artifact SET is_current = 0, status = 'superseded', updated = ? WHERE id = ?",
-                    (now, previous["id"]),
-                )
-            artifact_id = db.execute(
-                "INSERT INTO artifact(name, artifact_type, language, version, supersedes_id, is_current, "
-                "status, transcription, source_path, created, updated) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
-                (name, artifact_type, language, version, previous["id"] if previous else None,
-                 status, transcription or "", source.name, now, now),
-            ).lastrowid
-            for order, evidence_id in enumerate(evidence_ids):
-                db.execute(
-                    "INSERT OR IGNORE INTO artifact_evidence(artifact_id, evidence_id, ord) VALUES (?, ?, ?)",
-                    (artifact_id, evidence_id, order),
-                )
+        try:
+            with self.transaction() as db:
+                previous = self.current_artifact(name)
+                version = previous["version"] + 1 if previous else 1
+                if previous:
+                    self.clear_artifact(previous["id"])
+                    db.execute("UPDATE artifact SET is_current=0, status='superseded', updated=? WHERE id=?",
+                               (now, previous["id"]))
+                artifact_id = db.execute(
+                    "INSERT INTO artifact(name, artifact_type, language, version, supersedes_id, is_current, "
+                    "status, transcription, source_path, created, updated) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
+                    (name, artifact_type, language, version, previous["id"] if previous else None,
+                     status, transcription or "", source.name, now, now)).lastrowid
+                for order, evidence_id in enumerate(evidence_ids):
+                    db.execute("INSERT OR IGNORE INTO artifact_evidence(artifact_id,evidence_id,ord) VALUES (?,?,?)",
+                               (artifact_id, evidence_id, order))
+        except Exception:
+            source.unlink(missing_ok=True)
+            raise
         return artifact_id
 
     def rename_artifact(self, artifact_id: int, new_name: str):
@@ -228,6 +256,25 @@ class ProgramStore:
             db.execute("UPDATE artifact SET name = ?, updated = ? WHERE name = ?", (new_name, _now(), artifact["name"]))
             db.execute("UPDATE entity SET key = ?, name = ?, updated = ? WHERE key = ?",
                        (new_key, new_name, _now(), old_key))
+            pending = self.get_meta("pending_captures", {}) or {}
+            for info in pending.values():
+                if info.get("recapture_of") == artifact["name"]:
+                    info["recapture_of"] = new_name
+            self.set_meta("pending_captures", pending)
+            target = self.get_meta("recapture_target")
+            if isinstance(target, dict):
+                for field in ("name", "recapture_of"):
+                    if target.get(field) == artifact["name"]:
+                        target[field] = new_name
+                self.set_meta("recapture_target", target)
+            elif target == artifact["name"]:
+                self.set_meta("recapture_target", new_name)
+            for row in db.execute("SELECT id,payload FROM correction").fetchall():
+                payload = json.loads(row["payload"])
+                if payload.get("artifact") == artifact["name"]:
+                    payload["artifact"] = new_name
+                    db.execute("UPDATE correction SET payload=? WHERE id=?", (json.dumps(payload), row["id"]))
+
 
     # --- captures: every start/stop of a capture is its own file, saved before analysis ---
     @property
@@ -267,7 +314,7 @@ class ProgramStore:
         return {int(k): v for k, v in (self.get_meta("pending_captures", {}) or {}).items()}
 
     def _set_pending(self, artifact_id: int, info: dict | None):
-        with self._lock:
+        with self.transaction():
             pend = self.get_meta("pending_captures", {}) or {}
             if info is None:
                 pend.pop(str(artifact_id), None)
@@ -279,41 +326,68 @@ class ProgramStore:
                             recapture_of: str | None = None, keep_frames_of: int | None = None) -> int:
         """Save a finished capture as a file straight away (status 'captured'), before any analysis runs, so a
         stopped or restarted capture worker can never lose it. Analysis later fills it in (complete_capture)."""
-        evidence_ids = [e["id"] for e in self.artifact_evidence(keep_frames_of)] if keep_frames_of else []
-        evidence_ids += [i for i in (self.add_evidence(Path(p), session_id=session_id) for p in images)
-                         if i not in evidence_ids]
-        stamp = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
-        name = self.unique_name(f"Capture {stamp}" + (" (screen)" if kind == "screen" else ""))
-        artifact_id = self.add_artifact(name, "ui_screen" if kind == "screen" else "code", "", "",
-                                        evidence_ids=evidence_ids, status="captured")
-        self._set_pending(artifact_id, {"kind": kind, "provisional_name": name, "recapture_of": recapture_of,
-                                        "added_to": keep_frames_of,
-                                        "created": _now(), "attempts": 0, "error": None, "claim": None})
-        return artifact_id
+        with self.transaction():
+            target = self.current_artifact(recapture_of) if recapture_of else None
+            if recapture_of and target is None:
+                raise ValueError("The recapture target was removed. Choose a current file before retrying.")
+            if keep_frames_of and (not target or target['id'] != keep_frames_of):
+                raise ValueError("The append target has been replaced. Choose the current file before retrying.")
+            evidence_ids = [e["id"] for e in self.artifact_evidence(keep_frames_of)] if keep_frames_of else []
+            evidence_ids += [i for i in (self.add_evidence(Path(p), session_id=session_id) for p in images)
+                             if i not in evidence_ids]
+            stamp = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
+            name = self.unique_name(f"Capture {stamp}" + (" (screen)" if kind == "screen" else ""))
+            artifact_id = self.add_artifact(name, "ui_screen" if kind == "screen" else "code", "", "",
+                                            evidence_ids=evidence_ids, status="captured")
+            self._set_pending(artifact_id, {"kind": kind, "provisional_name": name, "recapture_of": recapture_of,
+                                            "recapture_target_id": target['id'] if target else None,
+                                            "recapture_target_hash": hashlib.sha256((target['transcription'] or '').encode()).hexdigest() if target else None,
+                                            "added_to": keep_frames_of,
+                                            "created": _now(), "attempts": 0, "error": None, "claim": None})
+            return artifact_id
 
     def update_pending(self, artifact_id: int, **changes):
-        info = self.pending_captures().get(artifact_id)
-        if info is not None:
-            info.update(changes)
+        with self.transaction():
+            info = self.pending_captures().get(artifact_id)
+            if info is not None:
+                info.update(changes)
+                self._set_pending(artifact_id, info)
+
+    def retry_pending(self, artifact_id):
+        with self.transaction() as db:
+            info = self.pending_captures().get(artifact_id)
+            if info is None:
+                raise ValueError("Only an unanalysed capture can be retried.")
+            if info.get('capture_incomplete'):
+                raise RuntimeError("Screen capture was interrupted. Recapture the file or add the missing screenshots; retrying analysis cannot restore unsaved frames.")
+            claim = info.get("claim") or {}
+            if claim and _owner_alive(claim.get("owner")):
+                raise RuntimeError("This capture is being analysed. Wait for it to finish before retrying.")
+            info.update(error=None, claim=None, stage=None)
             self._set_pending(artifact_id, info)
+            db.execute("UPDATE artifact SET status='captured',updated=? WHERE id=?", (_now(), artifact_id))
 
     def clear_pending(self, artifact_id: int):
         self._set_pending(artifact_id, None)
 
     def claim_pending(self, artifact_id: int, owner: str, stale_after: float = 900.0) -> bool:
-        """One analysis per capture, even with two workers running: a claim older than stale_after is ignored."""
+        """Never reclaim work from a live process solely because it takes a long time."""
         import time as _time
-        with self._lock:
+        with self.transaction() as db:
+            if not db.execute("SELECT 1 FROM artifact WHERE id=? AND status='captured'", (artifact_id,)).fetchone():
+                return False
             info = self.pending_captures().get(artifact_id)
             if info is None:
                 return False
             claim = info.get("claim") or {}
             if (claim and claim.get("owner") != owner and _owner_alive(claim.get("owner"))
-                    and _time.time() - float(claim.get("at", 0)) < stale_after):
+                    ):
                 return False
             info["claim"] = {"owner": owner, "at": _time.time()}
             info["attempts"] = int(info.get("attempts") or 0) + 1
-            self._set_pending(artifact_id, info)
+            pending = self.get_meta("pending_captures", {}) or {}
+            pending[str(artifact_id)] = info
+            db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES ('pending_captures',?)", (json.dumps(pending),))
             return True
 
     def fill_artifact(self, artifact_id: int, *, artifact_type: str, language: str, transcription: str,
@@ -321,22 +395,36 @@ class ProgramStore:
         check_kind(artifact_type, ARTIFACT_TYPES, "artifact type")
         check_kind(status, ARTIFACT_STATUSES, "artifact status")
         art = self.artifact(artifact_id)
-        source = self.sources_dir / f"{safe_filename(art['name'])}.v{art['version']}"
+        if art is None:
+            raise ValueError("No such artifact")
+        import uuid
+        source = self.sources_dir / f"{uuid.uuid4().hex}.source"
         source.write_text(transcription or "")
-        with self.transaction() as db:
-            db.execute("UPDATE artifact SET artifact_type = ?, language = ?, transcription = ?, source_path = ?, "
-                       "status = ?, updated = ? WHERE id = ?",
-                       (artifact_type, language or "", transcription or "", source.name, status, _now(), artifact_id))
+        try:
+            with self.transaction() as db:
+                db.execute("UPDATE artifact SET artifact_type = ?, language = ?, transcription = ?, source_path = ?, "
+                           "status = ?, updated = ? WHERE id = ?",
+                           (artifact_type, language or "", transcription or "", source.name, status, _now(), artifact_id))
+        except Exception:
+            source.unlink(missing_ok=True)
+            raise
 
     def model_stamp(self) -> str:
         """Changes whenever something the report depends on changes: files, corrections, staff inputs, reviewed findings."""
         import hashlib as _h
-        parts = [self._all("SELECT id, name, version, updated, length(transcription) FROM artifact WHERE is_current = 1 ORDER BY id"),
+        sources = self._all("SELECT id,name,version,updated,transcription FROM artifact WHERE is_current=1 ORDER BY id")
+        for source in sources:
+            source["transcription"] = _h.sha256((source["transcription"] or "").encode()).hexdigest()
+        parts = [sources,
+                 self._all("SELECT id,kind,key,name,attrs,origin FROM entity ORDER BY id"),
+                 self._all("SELECT id,kind,from_id,to_id,attrs,origin FROM relation ORDER BY id"),
                  self._all("SELECT id, active FROM correction ORDER BY id"),
                  self._all("SELECT title, status FROM finding WHERE status != 'open' OR origin != 'auto' ORDER BY title"),
                  self.get_meta("assessment_inputs", {}),
                  self.get_meta("verification", {}),
-                 self.get_meta("report_settings", {}),
+                 {k: v for k, v in self.get_meta("report_settings", {}).items() if k != "signed_off_basis"},
+                 self.get_meta("transcription_benchmark", {}),
+                 self.get_meta("source_layout_validation", {}),
                  {k: (v or {}).get("ran_at") for k, v in (self.get_meta("deepdive", {}) or {}).items()},
                  (self.get_meta("deepdive_program", {}) or {}).get("ran_at")]
         return _h.sha1(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:16]
@@ -345,8 +433,13 @@ class ProgramStore:
         """How far a waiting capture has got: screenshots read so far, and whether a worker is on it now."""
         frames = self.artifact_evidence(artifact_id)
         text = self.evidence_dir / ".text"
-        read = sum(1 for e in frames if (text / f"{e['sha256']}.md").exists())
         info = self.pending_captures().get(artifact_id) or {}
+        # Workers read into a session cache and copy it to the program only after
+        # analysis finishes. Count those completed reads while the work is live.
+        caches = [text]
+        if info.get("cache_dir"):
+            caches.append(Path(info["cache_dir"]))
+        read = sum(1 for e in frames if any((cache / f"{e['sha256']}.md").is_file() for cache in caches))
         claim = info.get("claim") or {}
         return {"frames": len(frames), "read": read, "stage": info.get("stage"),
                 "analysing": bool(claim) and _owner_alive(claim.get("owner"))}
@@ -361,10 +454,20 @@ class ProgramStore:
         with self.transaction() as db:
             db.execute("DELETE FROM artifact_evidence WHERE artifact_id = ?", (artifact_id,))
             db.execute("DELETE FROM evidence_link WHERE target_type = 'artifact' AND target_id = ?", (artifact_id,))
+            db.execute("DELETE FROM finding WHERE target_type = 'artifact' AND target_id = ?", (artifact_id,))
+            db.execute("DELETE FROM finding WHERE target_type = 'entity' AND target_id NOT IN (SELECT id FROM entity)")
             db.execute("DELETE FROM artifact WHERE id = ?", (artifact_id,))
         self.clear_pending(artifact_id)
         if self.verification(artifact_id):
             self.set_verification(artifact_id, None)
+        deep = self.get_meta("deepdive", {}) or {}
+        deep.pop(str(artifact_id), None)
+        self.set_meta("deepdive", deep)
+        target = self.get_meta("recapture_target") or {}
+        if target.get("artifact_id") == artifact_id:
+            self.set_meta("recapture_target", None)
+        for key in ("assessment", "deepdive_program", "report_stamp"):
+            self.set_meta(key, None)
 
     def export_copybooks(self) -> Path:
         target = self.path / "copybooks"
@@ -665,6 +768,23 @@ class ProgramStore:
                 (step, artifact_id, model, prompt_version, input_tokens, output_tokens, cost, ms, int(ok), error, _now()),
             ).lastrowid
 
+    def log_usage_record(self, record, artifact_id=None):
+        with self.transaction() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS usage_receipt(call_id TEXT PRIMARY KEY, run_id INTEGER)")
+            call_id = record.get("call_id")
+            if call_id:
+                existing = db.execute("SELECT run_id FROM usage_receipt WHERE call_id=?", (call_id,)).fetchone()
+                if existing:
+                    db.execute("UPDATE run SET step=? WHERE id=?", (record["step"], existing[0]))
+                    if artifact_id is not None:
+                        db.execute("UPDATE run SET artifact_id=? WHERE id=?", (artifact_id, existing[0]))
+                    return existing[0]
+            run_id = self.log_run(record["step"], artifact_id=artifact_id,
+                                  **{k: record.get(k) for k in ("model", "input_tokens", "output_tokens", "cost", "ms", "ok", "error")})
+            if call_id:
+                db.execute("INSERT INTO usage_receipt VALUES (?,?)", (call_id, run_id))
+            return run_id
+
     def runs(self) -> list:
         return self._all("SELECT * FROM run ORDER BY id")
 
@@ -725,9 +845,12 @@ class ProgramStore:
         for placeholder in self.entities(origin="placeholder"):
             referrers = self._all(
                 "SELECT DISTINCT e.name, e.kind, r.kind AS relation, a.name AS artifact FROM relation r "
-                "JOIN entity e ON e.id = r.from_id LEFT JOIN artifact a ON a.id = r.artifact_id WHERE r.to_id = ?",
+                "JOIN entity e ON e.id = r.from_id LEFT JOIN artifact a ON a.id = r.artifact_id WHERE r.to_id = ? "
+                "AND (r.artifact_id IS NULL OR a.is_current = 1)",
                 (placeholder["id"],),
             )
+            if not referrers:
+                continue
             if self._one("SELECT 1 FROM relation WHERE kind = 'same_as' AND (from_id = ? OR to_id = ?)",
                          (placeholder["id"], placeholder["id"])):
                 continue

@@ -23,7 +23,7 @@ TITLES = {
     "ACC-COLOR": "Meaning shown by colour only", "ACC-TEXTSIZE": "Text too small", "UIB-OBSOLETE": "Built for an obsolete browser",
     "UIS-GET": "Sensitive data sent in the URL", "UIS-CSRF": "No cross-site request forgery protection",
     "UIS-BLANK": "Reverse tabnabbing", "UIS-MIXED": "Mixed / plain-HTTP content", "UIS-HIDDEN": "Trusted value in hidden field",
-    "UIS-PWFIELD": "Password shown as typed", "UIS-PII": "Student data shown in full",
+    "UIS-PWFIELD": "Password shown as typed", "UIS-PREFILL": "Password written in the page source", "UIS-PII": "Student data shown in full",
     "WEB-HTTPS": "No HTTPS", "WEB-CERT": "Invalid TLS certificate", "WEB-TLS": "Obsolete TLS", "WEB-HSTS": "No HSTS",
     "WEB-CSP": "No Content-Security-Policy", "WEB-XCTO": "No nosniff header", "WEB-REFERRER": "No Referrer-Policy",
     "WEB-FRAME": "Clickjacking possible", "WEB-COOKIE": "Insecure cookie", "WEB-DISCLOSURE": "Server version disclosed",

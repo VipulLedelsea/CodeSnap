@@ -32,6 +32,7 @@ DEFAULTS = {"version": "v1.0", "classification": "Confidential", "firm": "Ledels
 def get(store) -> dict:
     saved = store.get_meta("report_settings") or {}
     out = {k: (saved.get(k) or DEFAULTS.get(k) or "") for k, _ in FIELDS}
+    out["signed_off_basis"] = saved.get("signed_off_basis", "")
     return out
 
 
@@ -41,6 +42,9 @@ def save(store, values: dict) -> dict:
         if k in (values or {}):
             cur[k] = str(values[k] or "").strip()
     store.set_meta("report_settings", cur)
+    if "signed_off" in (values or {}):
+        cur["signed_off_basis"] = store.model_stamp() if cur.get("signed_off", "").lower() in ("yes", "y", "true", "1") else ""
+        store.set_meta("report_settings", cur)
     return get(store)
 
 

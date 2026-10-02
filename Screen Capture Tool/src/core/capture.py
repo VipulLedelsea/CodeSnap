@@ -12,6 +12,27 @@ import tempfile
 MAX_CAPTURE_PX = 1568  # cap the long side; images above this cost more tokens for no gain
 
 
+def content_changed(previous: bytes | None, current: bytes) -> bool:
+    """Detect changed text even when two pages have the same perceptual layout.
+
+    Ignore tiny changes such as the caret; compare against the last saved frame.
+    """
+    if previous is None:
+        return True
+    from PIL import Image, ImageChops
+    try:
+        a = Image.open(io.BytesIO(previous)).convert("L")
+        b = Image.open(io.BytesIO(current)).convert("L")
+        if a.size != b.size:
+            return True
+        a.thumbnail((768, 768))
+        b = b.resize(a.size)
+        histogram = ImageChops.difference(a, b).histogram()
+        return sum(histogram[20:]) / (a.width * a.height) >= 0.003
+    except Exception:
+        return previous != current
+
+
 def _native_resolution():
     """mss on macOS grabs at 'nominal' (1x) resolution by default, so on a Retina screen code is captured at half
     its real pixel density and small fonts become hard to read. Drop that flag so region captures keep full detail."""

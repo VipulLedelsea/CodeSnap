@@ -292,3 +292,20 @@ The web UI shows two upcoming modules marked *soon*: **Documents** (summarise
 articles/notes) and **Data extract** (pull tables/structured data). The core
 engine already routes non-code content, so these are extensions of the same
 pipeline.
+
+## Prompt caching and costs
+
+Prompt caching is enabled by default for the reusable instruction/tool prefix
+of Claude requests. It uses the default five-minute lifetime. New screenshot
+and source content stays outside that breakpoint, so every new capture is read.
+Existing explicit cache settings are respected. Set `CODESNAP_PROMPT_CACHE=0`
+to disable automatic instruction caching.
+
+Cache hits require an identical prefix, the provider's minimum token length,
+and a still-valid cache entry. Short prompts may receive no cache hits. Cache
+writes cost more than ordinary input; repeated reads cost less. Actual savings
+must be measured from response usage rather than assumed. Usage tracking now
+applies separate uncached-input, cache-write and cache-read prices and retains
+cache counters in in-memory usage summaries. Previously saved cost records are
+not repriced. This feature is separate from the local screenshot text cache.
+See [Anthropic's prompt caching documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).

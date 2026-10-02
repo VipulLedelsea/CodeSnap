@@ -1604,6 +1604,7 @@
   "vb6": {
    "label": "Visual Basic 6.0",
    "status": "auto",
+   "mainstream": "2005-03-31",
    "eol": "2008-04-08",
    "url": "https://learn.microsoft.com/en-us/previous-versions/visualstudio/visual-basic-6/visual-basic-6-support-policy",
    "note": "The VB6 IDE has had no support since 2008; only the VB6 runtime files still ship with Windows ('It Just Works'). Controls/OCXs from third parties are usually unsupported."
@@ -1636,19 +1637,19 @@
    "label": "Natural / Adabas",
    "status": "supported",
    "url": "https://www.softwareag.com/en_corporate/platform/adabas-natural.html",
-   "note": "Vendor-supported, but Natural/Adabas skills are scarce; confirm the installed release against the vendor roadmap."
+   "note": "Vendor-supported, but Natural/Adabas maintenance requires specialist skills; support availability is to confirm; confirm the installed release against the vendor roadmap."
   },
   "pli": {
    "label": "IBM Enterprise PL/I",
    "status": "supported",
    "url": "https://www.ibm.com/support/pages/lifecycle",
-   "note": "Current Enterprise PL/I releases are supported; older compilers (e.g. PL/I for MVS & VM) are long out of service. PL/I skills are scarce."
+   "note": "Current Enterprise PL/I releases are supported; older compilers (e.g. PL/I for MVS & VM) are long out of service. PL/I support availability is to confirm."
   },
   "hlasm": {
    "label": "IBM High Level Assembler",
    "status": "supported",
    "url": "https://www.ibm.com/products/high-level-assembler-and-toolkit-feature",
-   "note": "Supported with z/OS, but assembler maintenance skills are very scarce."
+   "note": "Supported with z/OS, but assembler maintenance requires specialist skills; support availability is to confirm."
   },
   "zos": {
    "label": "z/OS / TSO / ISPF",
@@ -1660,7 +1661,7 @@
    "label": "Easytrieve Report Generator",
    "status": "supported",
    "url": "https://techdocs.broadcom.com/us/en/ca-mainframe-software/devops/ca-easytrieve-report-generator.html",
-   "note": "Vendor-supported (Broadcom); old Easytrieve Plus releases and skills are scarce."
+   "note": "Vendor-supported (Broadcom); installed release and specialist support availability need confirmation."
   },
   "sas": {
    "label": "SAS 9.x",
@@ -1716,13 +1717,13 @@
    "label": "IBM IMS (DB/DC)",
    "status": "supported",
    "url": "https://www.ibm.com/support/pages/lifecycle",
-   "note": "IMS 15 is supported; hierarchical DL/I data and MFS screens are scarce skills. Confirm the IMS release."
+   "note": "IMS 15 is supported; IMS support availability is to confirm. Confirm the IMS release."
   },
   "idms": {
    "label": "CA IDMS",
    "status": "supported",
    "url": "https://techdocs.broadcom.com/us/en/ca-mainframe-software/database-management/ca-idms-reference/19-0.html",
-   "note": "Vendor-supported (Broadcom IDMS 19.0); network-model DML and IDMS DBA skills are scarce."
+   "note": "Vendor-supported (Broadcom IDMS 19.0); network-model DML and IDMS DBA support availability is to confirm."
   },
   "oracle-forms": {
    "label": "Oracle Forms & Reports",

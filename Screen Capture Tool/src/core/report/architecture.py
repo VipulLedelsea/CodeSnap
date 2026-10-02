@@ -8,7 +8,7 @@ PLATFORMS = [
     ("IBM mainframe (z/OS)", ("cobol", "jcl", "cics", "ims", "pl/i", "assembler", "assembly", "hlasm", "bms", "mfs", "rexx", "idms", "3270")),
     ("IBM i (AS/400)", ("rpg", "cl", "ibm i", "dds")),
     ("Windows desktop (VB6)", ("visual basic 6", "vb6", "visual basic", "vba")),
-    ("Microsoft .NET (Windows server)", ("c#", ".net", "asp", "aspx", "vb.net")),
+    ("Microsoft .NET (host to confirm)", ("c#", ".net", "asp", "aspx", "vb.net")),
     ("Java", ("java", "jsp", "struts")),
     ("Web browser", ("html", "javascript", "jquery", "css")),
     ("Python runtime", ("python", ".py")),
@@ -26,13 +26,15 @@ def _platform(lang: str, name: str, role: str = "") -> str:
         return "Web browser"
     key = f"{lang} {name}".lower()
     for p, keys in PLATFORMS:
-        if any(k in key for k in keys):
+        if any(re.search(rf"(?<![a-z0-9]){re.escape(k)}(?![a-z0-9])", key) for k in keys):
             return p
     return "Other"
 
 
 def _layer_role(art: dict, comp: dict, displays: list) -> tuple:
     t, lang, name = art.get("artifact_type") or "", (art.get("language") or ""), art["name"].lower()
+    if name.endswith('.bms') and re.search(r'\bDFHM(?:SD|DI|DF)\b', art.get('transcription') or '', re.I):
+        return 'Presentation', 'BMS map source'
     if t == "ui_screen" or name.endswith(".screen"):
         kind = "3270 terminal screen" if "3270" in name or "terminal" in (art.get("transcription") or "").lower()[:400] else "Application screen"
         return "Presentation", kind
@@ -42,13 +44,21 @@ def _layer_role(art: dict, comp: dict, displays: list) -> tuple:
             r"\bDBD\s+NAME=|\bCREATE\s+TABLE\b", (art.get("transcription") or "")[:3000], re.I) and "pl/sql" not in lang.lower():
         return "Data", "Database definition"
     if lang.lower().startswith("pl/sql") or name.endswith((".pkb", ".pks")):
-        return "Data", "Database procedures (business logic in the database)"
+        return "Data", "Stored procedures"
     if "jcl" in lang.lower() or name.endswith(".jcl"):
         return "Integration", "Batch job control (scheduling)"
     if displays:
         return "Application", "Interactive program"
     if "cobol" in lang.lower():
-        return "Application", "Batch program"
+        from core.cobol.detect import detect_kind
+        source = art.get('transcription') or ''
+        if detect_kind(source, extension=__import__('pathlib').Path(name).suffix) == 'copybook':
+            return 'Data', 'Record layout copybook'
+        if re.search(r'\bPROCEDURE\s+DIVISION\s+USING\b', source, re.I):
+            return 'Application', 'Called subprogram'
+        if re.search(r'\bSELECT\s+[\w-]+\s+ASSIGN\b|\bOPEN\s+(?:INPUT|OUTPUT|I-O)\b', source, re.I):
+            return "Application", "Batch program"
+        return 'Application', 'Program'
     return "Application", "Program"
 
 
@@ -77,26 +87,44 @@ def build(store, a: dict, techs: list) -> dict:
         reads = [x for x in reads if x not in writes]
         calls = names(("calls",), ("program", "paragraph", "procedure", "transaction"))
         calls = [x for x in calls if "(not provided)" in x or x.upper() == x]
+        calls = [x.replace(' (not provided)', ' (standard system utility; availability to confirm)')
+                 if x.split(' (')[0].upper() in ('IEFBR14', 'IEBGENER') else x for x in calls]
         own = art.get("transcription") or ""
         calls = [x for x in calls if not re.search(rf"\b{re.escape(x.split(' (')[0])}\s+BEGSR\b|\bBEGSR\s+{re.escape(x.split(' (')[0])}\b"
                                                    rf"|^\s*\d*\s+{re.escape(x.split(' (')[0])}\.\s*$", own, re.M | re.I)]
         displays = names(("displays",), ("screen",))
+        from .evidence import display_files, record_formats
+        dfs = display_files([art])
+        fmts = record_formats([art])
+        reads = [x for x in reads if x.split(" (")[0].upper() not in dfs]
+        displays = [x for x in displays if x.split(" (")[0].upper() not in fmts
+                    and x.split(" (")[0].lower() != c["name"].rsplit(".", 1)[0].lower()]
         layer, role = _layer_role(art, c, displays)
+        defines, define_dbs = [], []
+        if role == "Database definition":
+            mine_e = [e for eid, e in sorted(ents.items()) if c["name"] in src.get(eid, set())]
+            define_dbs = [e["name"] for e in mine_e if e["kind"] == "data_store"
+                          and "IMS" in ((e.get("attrs") or {}).get("store_type") or "")]
+            defines = define_dbs + [e["name"] for e in mine_e if e["kind"] == "table"]
+            reads = []
         ts = sorted({f"{t.get('name')} {t.get('version') or t.get('cycle') or ''}".strip() for t in techs
                      if t.get("file") == c["name"]})
         routines = [e["name"] for eid, e in ents.items() if c["name"] in src.get(eid, set())
                     and e["kind"] in ("paragraph", "function", "procedure", "method", "subroutine")]
         lang = art.get("language") or c.get("language") or ""
-        if role == "Database definition" and "dbd" in c["name"].lower():
+        if not lang and re.search(r'/\*\s*REXX\b', own, re.I) and re.search(r'^\s*ADDRESS\s+TSO\b', own, re.M | re.I):
+            lang = 'REXX'
+        if role == "Database definition" and ("dbd" in c["name"].lower() or re.search(r"\bDBD\s+NAME=", art.get("transcription") or "")):
             lang = "IMS DBD"
         if lang.lower() in ("ui screen", "screen", ""):
             lang = ("3270 terminal screen" if role == "3270 terminal screen" else "Web page (HTML)"
                     if layer == "Presentation" and re.search(r"https?:|www\.|<html|browser|\.gov|\.com", (art.get("transcription") or "")[:3000], re.I)
                     else "Graphical screen" if layer == "Presentation" else lang)
         comps.append({"name": c["name"], "layer": layer, "role": role, "language": lang,
-                      "platform": _platform(art.get("language") or "", c["name"], role), "tech": ts, "reads": reads,
+                      "platform": _platform(lang, c["name"], role), "tech": ts, "reads": reads,
                       "writes": writes, "calls": [x for x in calls if x not in routines], "displays": displays,
-                      "lines": c.get("lines", 0), "routines": routines})
+                      "lines": c.get("lines", 0), "routines": routines, "defines": defines,
+                      "define_dbs": define_dbs})
     stores = {}
     for c in comps:
         for n in c["reads"]:
@@ -118,71 +146,86 @@ def observations(store, a, comps, stores) -> list:
         out.append(("The application spans several platforms",
                     f"Its {len(comps)} components run on {len(plats)} platforms: " + "; ".join(
                         f"{p} ({', '.join(c['name'] for c in comps if c['platform'] == p)})" for p in plats) + ".",
-                    "Each platform needs its own skills, hosting, release process and support contract, and modernizing "
-                    "one leaves the others as they are. A target architecture should reduce the number of platforms."))
+                    "Changes across these platforms may need different development and deployment skills. Confirm hosting, "
+                    "release ownership and support arrangements before planning the transition."))
     files = [n for n in stores if "FILE" in n.upper() or n.upper().endswith(("-DAT", ".DAT"))]
-    if files or stores:
-        out.append(("Components exchange data through files and shared data stores, not APIs",
-                    f"{len(stores)} data store(s) connect the components" + (f", including {len(files)} sequential file(s) "
-                    f"({', '.join(files[:4])})" if files else "") + ". No service or API layer was found.",
-                    "Every file layout and shared table is an unwritten contract between programs. A replacement must "
-                    "reproduce each one, and there is no single interface a new front end or partner system could use."))
-    shared = [(n, s) for n, s in stores.items() if len(s["writers"] | s["readers"]) > 1]
+    plat_of = {c["name"]: c["platform"] for c in comps}
+    shared = [(n, s) for n, s in stores.items() if len(s["writers"] | s["readers"]) > 1
+              and len({plat_of.get(x) for x in s["writers"] | s["readers"]}) == 1]
+    apis = [e["name"] for e in store.entities("api_endpoint")]
+    if shared:
+        out.append(("Components exchange data through files and shared data stores" + (", alongside identified APIs" if apis else ""),
+                    f"{len(shared)} data store{'s connect' if len(shared) > 1 else ' connects'} the components ("
+                    + ", ".join(n for n, _ in shared[:4]) + ")." + (f" {len(apis)} web endpoint(s) were identified ({', '.join(apis[:3])})."
+                                                                  if apis else " No service or API layer was found."),
+                    "Programs using the same record layout or table depend on that structure. Review those dependencies before "
+                    "changing it; the available code does not establish whether other interfaces exist."))
+    elif stores and not apis:
+        out.append(("No service or API layer was identified in the supplied code",
+                    f"Each component works on its own files and tables: no data store is used by more than one "
+                    f"component on the same platform" + (f", and {len(files)} file names ({', '.join(files[:4])}) suggest file-based integration; confirm whether they go to "
+                    f"or come from systems outside the code provided" if files else "") + ". No service or API layer was found.",
+                    "Confirm file producers, consumers and record layouts before changing these interfaces. Record expected "
+                    "inputs and outputs in interface tests."))
     multi_w = [(n, s) for n, s in stores.items() if len(s["writers"]) > 1]
     if multi_w:
         out.append(("Some data has more than one writer",
                     "; ".join(f"{n} is written by {', '.join(sorted(s['writers']))}" for n, s in multi_w[:4]) + ".",
-                    "With several writers there is no single owner of the data's rules, so data errors are hard to trace. "
+                    "Several writers can apply different validation rules. Confirm ownership and compare their update paths. "
                     "The target should give each data set one owning service."))
     elif shared:
         out.append(("Data is shared between components",
                     "; ".join(f"{n} is used by {', '.join(sorted(s['writers'] | s['readers']))}" for n, s in shared[:4]) + ".",
-                    "Shared data couples the components: a change to its layout needs every user changed at the same time."))
+                    "Shared data creates a schema dependency. A layout change may require coordinated updates to its readers and writers."))
     io = ("READ", "WRITE", "OPEN", "CLOSE", "PRINT", "INIT", "FINAL")
     rules = [(c["name"], [r for r in c["routines"] if any(w in r.upper() for w in RULE_WORDS)
                           and not any(w in r.upper() for w in io)]) for c in comps]
     rules = [(n, r) for n, r in rules if r]
     if rules:
-        out.append(("Business rules sit inside the programs",
-                    "Calculation and validation routines were found in the code: " + "; ".join(
+        out.append(("Routine names suggest business-rule responsibilities",
+                    "Routine names suggest calculation or validation responsibilities: " + "; ".join(
                         f"{', '.join(r[:4])} in {n}" for n, r in rules[:3]) + ".",
-                    "These rules are the application's real value and are undocumented outside the code. Any option other "
-                    "than retain must extract them first, and ideally move them into a tested, configurable rules layer."))
+                    "Review the routine bodies and compare them with business specifications. Before an option other "
+                    "than retain changes these routines, establish expected inputs and outputs with characterization tests."))
     pres = [c for c in comps if c["layer"] == "Presentation"]
     if pres:
         kinds = sorted({c["role"] for c in pres})
-        out.append(("The user interface is split across technologies" if len(kinds) > 1 else "The user interface is legacy technology",
-                    f"Users work through {len(pres)} screen(s): " + "; ".join(f"{c['name']} ({c['role']}"
+        out.append(("The user interface is split across technologies" if len(kinds) > 1 else "The supplied user interface",
+                    f"The {len(pres)} screen file(s) provided: " + "; ".join(f"{c['name']} ({c['role']}"
                     + (f", {', '.join(c['tech'])}" if c["tech"] else "") + ")" for c in pres) + ".",
-                    ("Terminal screens and old web pages can't meet current accessibility standards and need special "
-                     "skills to change. A single web front end over an API would serve every user group."
+                    ("Terminal interfaces need accessibility testing with the intended assistive tools. Review the web pages against the agreed "
+                     "accessibility target. A web front end is one option; user needs and integration constraints remain to confirm."
                      if any("terminal" in k.lower() for k in kinds) else
-                     "Screens built on older technology are harder to keep accessible and secure; a single web front end "
-                     "over an API keeps the user interface on one supported stack.")))
+                     "The screen files show the presentation structure. Confirm supported browsers, accessibility and security requirements before "
+                     "choosing whether to retain or replace the interface.")))
     cov = store.coverage()
-    missing = [m for m in cov.get("missing") or [] if m["category"] == "missing_code"
+    from .evidence import display_files, record_formats
+    fmts = record_formats(store.artifacts())
+    missing = [m for m in cov.get("missing") or [] if m["category"] == "missing_code" and m["name"].upper() not in fmts
                and m.get("kind") in ("program", "copybook", "job", "screen", "transaction", "procedure", "module")]
     if missing:
         out.append(("Parts of the application were not provided",
-                    f"{len(missing)} referenced component(s) are missing: " + ", ".join(f"{m['name']} ({m['kind']})" for m in missing[:8]) + ".",
+                    f"{len(missing)} referenced component(s) are missing: " + ", ".join(
+                        f"{m['name']} ({'display file' if m['name'].upper() in display_files(store.artifacts()) else m['kind']})"
+                        for m in missing[:8]) + ".",
                     "The architecture and the risk ratings cover only what was provided; these parts could change the "
                     "picture, especially if they hold business rules or integrations."))
     from . import plain as P
-    sec = [f for f in store.findings() if f.get("rule") in ("SEC-CRED", "SEC-TLS", "UIS-MIXED", "SEC-AUTH", "SEC-AUTHZ")
+    sec = [f for f in store.findings() if f.get("rule") in ("SEC-CRED", "UIS-PREFILL", "SEC-TLS", "UIS-MIXED", "SEC-AUTH", "SEC-AUTHZ")
            and f.get("status") not in ("dismissed", "fixed")]
-    if sec:
+    if sec and len({(f.get("evidence") or [{}])[0].get("file") for f in sec}) >= 2:
         kinds = []
         for f in sec:
-            w = P.what(f["rule"], f["title"])
+            w = P.describe(f)[0]
             n = sum(1 for g in sec if g["rule"] == f["rule"])
-            w = f"{w} ({n} place{'s' if n > 1 else ''})"
+            w = P.tagged(w, f"{n} place{'s' if n > 1 else ''}") if n > 1 else w
             if w not in kinds:
                 kinds.append(w)
-        out.append(("Security is built into each program rather than provided centrally",
-                    f"{len(sec)} finding(s) show this: {P.sentence(kinds)}. No shared identity service or secrets "
-                    f"store is used.",
-                    "Each component must be fixed separately. The target should use the organisation's identity service, "
-                    "a secrets store and TLS everywhere, so security is handled once."))
+        out.append(("Security findings occur in several components",
+                    f"{len(sec)} finding(s) were identified: {P.sentence(kinds)}. The findings do not establish whether a central identity service or secrets "
+                    f"store is configured elsewhere; confirm the deployment settings.",
+                    "Check each affected component and any shared security configuration. Where available, use the organisation's identity service, "
+                    "a secrets store and TLS for relevant connections."))
     return out
 
 
@@ -227,11 +270,18 @@ def flows(model: dict) -> list:
     """One plain sentence per component that moves data."""
     out = []
     for c in model["components"]:
-        if not (c["reads"] or c["writes"] or c["displays"] or c["calls"]):
+        if not (c["reads"] or c["writes"] or c["displays"] or c["calls"] or c.get("defines")):
             continue
         bits = []
         if c["role"] == "Database definition":
-            out.append(f"{c['name']} (database definition): defines {', '.join(c['reads'][:5]) or 'the database structure'}.")
+            d = c.get("defines") or []
+            dbs = c.get("define_dbs") or []
+            segs = [x for x in d if x not in dbs]
+            from .plain import sentence
+            out.append(f"{c['name']} (database definition): defines "
+                       + ((f"the IMS database {dbs[0]}" if "IMS" in (c["language"] or "") else f"database {dbs[0]}")
+                          + (f" with segments {sentence(segs[:6])}" if segs else "") if dbs else
+                          sentence(d[:6]) if d else "the database structure") + ".")
             continue
         for key, verb, n in (("reads", "reads", 5), ("writes", "writes", 5), ("displays", "shows screens", 4),
                              ("calls", "calls", 4)):

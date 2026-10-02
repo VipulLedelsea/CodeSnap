@@ -1,4 +1,5 @@
 import json
+import hashlib
 import re
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from .extract import PROMPT_VERSION, extract_structure
 from .kinds import ENTITY_KINDS, RELATION_KINDS
 
 STRUCTURED_TYPES = {"code", "sql", "db_schema", "config", "api", "job", "web", "ui_screen"}
-TYPE_BY_EXTENSION = {"bms": "ui_screen", "jcl": "job", "sql": "sql", "ddl": "db_schema", "config": "config",
+TYPE_BY_EXTENSION = {"bms": "code", "jcl": "job", "sql": "sql", "ddl": "db_schema", "config": "config",
                      "html": "web", "htm": "web", "aspx": "web", "ascx": "web", "asp": "web", "jsp": "web",
                      "jspx": "web", "xhtml": "web", "cshtml": "web", "wsdl": "api", "sps": "job",
                      "xml": "config", "properties": "config", "ini": "config", "cfg": "config", "conf": "config",
@@ -16,11 +17,16 @@ TYPE_BY_EXTENSION = {"bms": "ui_screen", "jcl": "job", "sql": "sql", "ddl": "db_
 
 
 def artifact_type_for(report: dict, is_code: bool) -> str:
+    if is_code and (report.get("extension") or "").lower().lstrip(".") == "bms":
+        return "code"
     if report.get("artifact_type"):
         return report["artifact_type"]
     if not is_code:
         return "other"
-    return TYPE_BY_EXTENSION.get((report.get("extension") or "").lower().lstrip("."), "code")
+    extension=(report.get("extension") or "").lower().lstrip(".")
+    extra={'vue':'web','jsx':'web','tsx':'web','razor':'web','hbs':'web','mustache':'web','ftl':'web','vm':'web',
+           'xsl':'config','xslt':'config','caml':'config','bpel':'api','rdl':'config','rdlc':'config','dtsx':'config','mxml':'web'}
+    return TYPE_BY_EXTENSION.get(extension,extra.get(extension,'code'))
 
 
 def artifact_name(report: dict, fallback: str = "capture") -> str:
@@ -99,6 +105,8 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
     artifact = store.artifact(artifact_id)
     if artifact is None:
         raise KeyError(artifact_id)
+    from core.technology_support import resolve
+    support=resolve(artifact['name'],artifact.get('language') or '')
     if artifact["artifact_type"] not in STRUCTURED_TYPES or not (artifact["transcription"] or "").strip():
         return {"entities": 0, "relations": 0, "skipped": True}
     store.clear_artifact(artifact_id)
@@ -118,6 +126,10 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
         else:
             return _apply_llm(store, artifact_id, artifact, code, structure)
     if parsed is not None:
+        from core.technology_support import coverage
+        parsed['structure'].setdefault('file_attrs',{})['analysis_coverage']=coverage(
+            artifact['name'],artifact.get('language') or '',parsed['parser'],
+            limited=bool(support and support['model_enrichment']))
         counts = apply_structure(store, artifact_id, parsed["structure"], artifact["name"], len(code.splitlines()))
         store.log_run("structure", artifact_id=artifact_id, model=parsed["parser"], prompt_version=parsed["parser"],
                       input_tokens=0, output_tokens=0, ms=parsed["ms"])
@@ -125,6 +137,8 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
         _relink(store)
         return {**counts, "parser": parsed["parser"]}
     try:
+        if client is None:
+            raise ValueError("This visible source format requires model analysis; no analysis client is available.")
         structure = extract_structure(client, code, filename=artifact["name"], language=artifact["language"])
     except Exception as exc:
         store.log_run("structure", artifact_id=artifact_id, prompt_version=PROMPT_VERSION, ok=False,
@@ -141,6 +155,9 @@ def _apply_llm(store, artifact_id, artifact, code, structure):
                       cost=usage_cost(call["model"], call["input_tokens"], call["output_tokens"]),
                       ok=call.get("stop_reason") != "max_tokens",
                       error="output truncated (max_tokens)" if call.get("stop_reason") == "max_tokens" else None)
+    if any(call.get('stop_reason')=='max_tokens' for call in structure['calls']):
+        store.set_status(artifact_id,'failed')
+        raise ValueError('Source analysis was truncated; it must be completed before treating the file as analyzed.')
     if not structure.get("file_attrs"):
         try:
             from core import langpacks
@@ -149,6 +166,9 @@ def _apply_llm(store, artifact_id, artifact, code, structure):
                 structure["file_attrs"] = det["file_attrs"]
         except Exception:
             pass
+    from core.technology_support import coverage
+    structure.setdefault('file_attrs',{})['analysis_coverage']=coverage(
+        artifact['name'],artifact.get('language') or '',PROMPT_VERSION)
     counts = apply_structure(store, artifact_id, structure, artifact["name"], len(code.splitlines()))
     store.set_status(artifact_id, "structured")
     _relink(store)
@@ -169,6 +189,12 @@ def _parse_deterministic(code: str, artifact: dict, prefer_llm: bool = False):
     from core.extractors import PARSER_VERSION as EXTRACTORS_VERSION, parse_artifact
     from core.langs.structure import PARSER_VERSION as TS_VERSION, parse_source
     began = time.monotonic()
+    from core.technology_support import resolve
+    support=resolve(artifact['name'],artifact.get('language') or '')
+    # A generic config inventory cannot stand in for a visual tool's business
+    # rules/data flow. Let model analysis read the visible schema/source.
+    if prefer_llm and support and support['model_enrichment']:
+        return None
     atype = artifact.get("artifact_type") or ""
     from core import langpacks
     extractors = (EXTRACTORS_VERSION, lambda c, n, l: parse_artifact(c, n, l, atype))
@@ -238,10 +264,27 @@ def new_version_from(store, client, source_id: int, target_name: str, report: di
                         "validation_tool": src["validation_tool"] or "compiler"}
     code = report.get("code") or ""
     is_code = bool(code.strip())
-    new_id = store.add_artifact(target_name, artifact_type_for(report, is_code), report.get("language", ""), code,
-                                evidence_ids=ev)
-    store.repoint_runs(source_id, new_id)
-    store.delete_artifact(source_id)
+    # Publish together; provider-backed parsing happens after the write transaction.
+    with store.transaction():
+        pending = store.pending_captures().get(source_id) or {}
+        if pending.get('capture_incomplete'):
+            raise ValueError('Screen capture was interrupted. Recapture or add the missing screenshots before replacing a file.')
+        expected = pending.get('recapture_target_id')
+        current = store.current_artifact(target_name)
+        if expected is not None and (not current or current['id'] != expected):
+            raise ValueError('The recapture target changed during analysis. Results were saved; choose the current file before retrying.')
+        expected_hash = pending.get('recapture_target_hash')
+        if expected_hash and hashlib.sha256((current['transcription'] or '').encode()).hexdigest() != expected_hash:
+            raise ValueError('The recapture target text changed during analysis. No replacement was made.')
+        if not store.artifact(source_id):
+            raise ValueError('This capture was removed during analysis.')
+        if pending.get('recapture_of'):
+            from core.deepdive import note_recapture
+            note_recapture(store, target_name)
+        new_id = store.add_artifact(target_name, artifact_type_for(report, is_code), report.get("language", ""), code,
+                                    evidence_ids=ev)
+        store.repoint_runs(source_id, new_id)
+        store.delete_artifact(source_id)
     _finish(store, client, new_id, report, is_code)
     return new_id
 
@@ -254,6 +297,8 @@ def complete_capture(store, client, artifact_id: int, report: dict | None) -> in
     art = store.artifact(artifact_id)
     if art is None:
         return artifact_id
+    if info.get('capture_incomplete'):
+        raise ValueError('Screen capture was interrupted. Recapture or add the missing screenshots before completing analysis.')
     code = (report or {}).get("code") or ""
     is_code = bool((report or {}).get("is_code", True)) and bool(code.strip())
     if not report or not code.strip():
@@ -261,12 +306,10 @@ def complete_capture(store, client, artifact_id: int, report: dict | None) -> in
         store.set_status(artifact_id, "failed")
         return artifact_id
     target = info.get("recapture_of")
+    expected = info.get('recapture_target_id')
+    if target and expected is not None and (store.current_artifact(target) or {}).get('id') != expected:
+        raise ValueError('The recapture target changed during analysis. No replacement was made.')
     if target and (store.current_artifact(target) or {}).get("id") not in (None, artifact_id):
-        try:
-            from core.deepdive import note_recapture
-            note_recapture(store, target)
-        except Exception:  # noqa: BLE001
-            pass
         return new_version_from(store, client, artifact_id, target, report)
     if art["name"] == info.get("provisional_name"):
         store.rename_artifact(artifact_id, store.unique_name(artifact_name(report), exclude_id=artifact_id))

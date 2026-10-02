@@ -1,0 +1,16 @@
+{
+  "codesnap_ui_screen": 1,
+  "prompt_version": "ui-screen-v1",
+  "title": "AIDQ - District Aid Inquiry",
+  "screen_type": "terminal",
+  "technology_hints": ["3270 terminal", "CICS BMS map"],
+  "fields": [
+    {"label": "District ID", "kind": "text", "required": true},
+    {"label": "Fiscal Year", "kind": "number"},
+    {"label": "Total Aid", "kind": "display", "read_only": true},
+    {"label": "Status", "kind": "display", "read_only": true, "notes": "single-letter code, no legend"}
+  ],
+  "actions": [{"label": "PF3=Exit", "kind": "pf_key"}, {"label": "PF5=Refresh", "kind": "pf_key"}],
+  "messages": [{"text": "DFHAC2206 TRANSACTION ABEND", "severity": "error"}],
+  "issues": ["status shown as cryptic single-letter code", "error message gives no guidance"]
+}

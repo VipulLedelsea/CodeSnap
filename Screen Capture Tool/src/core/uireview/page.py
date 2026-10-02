@@ -257,6 +257,9 @@ def check_page(text: str) -> list:
         n = rec["a"].get("name") or rec["a"].get("id") or ""
         if re.search(r"pass(word)?|pwd", n, re.I) and rec["type"] not in ("password", "hidden") and rec["tag"] == "input":
             add("UIS-PWFIELD", "ui_security", "medium", rec["line"], f"password field '{n}' is not masked", n, cwe="CWE-549")
+        if re.search(r"pass(word)?|pwd", n, re.I) and rec["tag"] == "input" and (rec["a"].get("value") or "").strip():
+            add("UIS-PREFILL", "ui_security", "high", rec["line"], f"password field '{n}' is pre-filled with a value "
+                "written in the page source", n, cwe="CWE-798", nist=["IA-5(7)", "IA-5"])
         if rec["tag"] == "asp:textbox" and re.search(r"pass(word)?|pwd", n, re.I) and rec["a"].get("textmode", "").lower() != "password":
             add("UIS-PWFIELD", "ui_security", "medium", rec["line"], f"password field '{n}' is not masked", n, cwe="CWE-549")
     for b in s.buttons:
@@ -268,5 +271,6 @@ def check_page(text: str) -> list:
     for line, tag, url in s.resources:
         if re.match(r"http://(?!localhost|127\.)", url, re.I) and tag in ("script", "iframe", "link", "img", "embed", "object"):
             add("UIS-MIXED", "ui_security", "medium" if tag == "img" else "high", line,
-                f"{tag} loaded over plain HTTP (mixed content)", url, cwe="CWE-319", nist=["SC-8"])
+                f"{tag} loaded over plain HTTP (mixed content)", url, cwe="CWE-829" if tag in ("script", "iframe") else "CWE-319",
+                nist=["SC-8"])
     return out

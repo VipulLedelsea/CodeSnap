@@ -1,0 +1,40 @@
+........................................................................ [  4%]
+........................................................................ [  8%]
+........................................................................ [ 12%]
+........................................................................ [ 17%]
+........................................................................ [ 21%]
+........................................................................ [ 25%]
+........................................................................ [ 30%]
+........................................................................ [ 34%]
+........................................................................ [ 38%]
+........................................................................ [ 43%]
+......................................................x................. [ 47%]
+........................................................................ [ 51%]
+........................................................................ [ 55%]
+........................................................................ [ 60%]
+........................................................................ [ 64%]
+........................................................................ [ 68%]
+........................................................................ [ 73%]
+........................................................................ [ 77%]
+........................................................................ [ 81%]
+........................................................................ [ 86%]
+........................................................................ [ 90%]
+........................................................................ [ 94%]
+........................................................................ [ 99%]
+................                                                         [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.12/site-packages/_pytest/config/__init__.py:1345
+  /Users/vipuld/Desktop/Important/Ledelsea Intern Project /ScreenCaptureInterpreter/Screen Capture Tool/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py:1345: PytestAssertRewriteWarning: Module already imported so cannot be rewritten; anyio
+    self._mark_plugins_for_rewrite(hook, disable_autoload)
+
+.venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /Users/vipuld/Desktop/Important/Ledelsea Intern Project /ScreenCaptureInterpreter/Screen Capture Tool/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+tests/test_live2_fixes.py::test_mode_switch_is_read_at_next_capture
+  /Users/vipuld/Desktop/Important/Ledelsea Intern Project /ScreenCaptureInterpreter/Screen Capture Tool/src/core/capture.py:107: DeprecationWarning: mss.mss is deprecated and will be removed in a future release; use mss.MSS instead
+    with mss.mss() as sct:
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1671 passed, 1 xfailed, 3 warnings in 334.51s (0:05:34)
+Offline audit guard: 0 network/provider attempts blocked; zero allowed.

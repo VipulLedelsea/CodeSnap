@@ -222,8 +222,9 @@ def main() -> int:
         return 1
 
     ts = time.strftime("%Y%m%d_%H%M%S")
+    from core.usage import UsageTracker
     ctx = ToolContext(
-        client=anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=120.0),
+        client=UsageTracker().wrap(anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5, timeout=120.0)),
         images=images,
         cache_dir=Path(args.dir) / ".cache",
         out_dir=Path(args.out),

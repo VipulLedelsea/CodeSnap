@@ -403,7 +403,7 @@ def _jcl_statements(text: str) -> list:
         if m:
             stmts.append({"line": n, "label": m.group(1).upper(), "op": m.group(2).upper(), "text": m.group(3)})
         elif stmts:
-            stmts[-1]["text"] += line[2:72].strip()
+            stmts[-1]["text"] += ' ' + line[2:72].strip()
     return stmts
 
 

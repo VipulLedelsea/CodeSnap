@@ -194,7 +194,7 @@ EXTRACT_SYSTEM_PROMPT = (
     "  - It is CORRECT and REQUIRED to output invalid, non-runnable code if that is what is "
     "on screen. Producing clean code from broken input is a FAILURE.\n"
     "Output PLAIN TEXT only — no Markdown: no # headings, no ``` code fences, no - bullets. "
-    "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. Count spaces exactly, both leading spaces and runs of spaces inside a line (aligned PIC/VALUE clauses must land in the same column as on screen); in assembler/BMS a continuation character sits in column 72. Use plain ASCII hyphens and quotes. "
+    "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. Count spaces exactly, both leading spaces and runs of spaces inside a line (aligned PIC/VALUE clauses must land in the same column as on screen); in assembler/BMS keep continuation characters in the columns actually shown, even when nonstandard. Preserve observed Unicode characters and quotes. "
     + _LEGACY_FORMAT_CLAUSE +
     "Do NOT include the editor's line-number gutter, fold arrows, breakpoint dots, minimaps, "
     "scrollbars, tab bars, or status bars — only the content itself, keeping its own indentation. "
@@ -233,7 +233,7 @@ EXTRACT_JSON_SYSTEM_PROMPT = (
     'written>, "suggested": <what you think it should be>}. This is where your instinct to fix '
     "things goes: note it HERE, but do NOT change raw_transcription. Empty array if nothing looked "
     "off.\n"
-    "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. Count spaces exactly, both leading spaces and runs of spaces inside a line (aligned PIC/VALUE clauses must land in the same column as on screen); in assembler/BMS a continuation character sits in column 72. Use plain ASCII hyphens and quotes. "
+    "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. Count spaces exactly, both leading spaces and runs of spaces inside a line (aligned PIC/VALUE clauses must land in the same column as on screen); in assembler/BMS keep continuation characters in the columns actually shown, even when nonstandard. Preserve observed Unicode characters and quotes. "
     + _LEGACY_FORMAT_CLAUSE +
     "Do NOT include the editor's line-number gutter, fold arrows, breakpoint dots, minimaps, "
     "scrollbars, tab bars, or status bars \u2014 only the content itself. If several windows are "
@@ -251,6 +251,33 @@ EXTRACT_JSON_SYSTEM_PROMPT = (
 _numbers_note = {}
 
 
+def _recover_transcription_array(text: str):
+    """Recover only fully decoded source strings from an interrupted JSON reply."""
+    match = _re.search(r'"raw_transcription"\s*:\s*\[', text)
+    if not match:
+        return None
+    decoder, lines, offset = json.JSONDecoder(), [], match.end()
+    while offset < len(text):
+        while offset < len(text) and text[offset].isspace():
+            offset += 1
+        if offset >= len(text) or text[offset] == ']':
+            break
+        try:
+            value, end = decoder.raw_decode(text, offset)
+        except json.JSONDecodeError:
+            break
+        if not isinstance(value, str):
+            break
+        lines.append(value)
+        offset = end
+        while offset < len(text) and text[offset].isspace():
+            offset += 1
+        if offset >= len(text) or text[offset] != ',':
+            break
+        offset += 1
+    return lines
+
+
 def _normalize_extract(text: str) -> dict:
     """Turn the model's reply into {'raw': <verbatim text>, 'corrections': [ ... ]}.
 
@@ -259,7 +286,12 @@ def _normalize_extract(text: str) -> dict:
     """
     data = _parse_json(text)
     if not isinstance(data, dict) or "raw_transcription" not in data:
-        return {"raw": text.strip(), "corrections": []}
+        recovered = _recover_transcription_array(text)
+        if recovered is not None:
+            if not recovered:
+                raise ValueError("The structured screenshot response was incomplete and contained no complete source lines.")
+            return {"raw": "\n".join(recovered).strip("\n"), "corrections": [], "recovered": True}
+        return {"raw": text.strip("\r\n"), "corrections": []}
     rt = data.get("raw_transcription", "")
     raw = "\n".join(str(x) for x in rt) if isinstance(rt, list) else str(rt)
     corr = data.get("corrections_applied", [])
@@ -298,7 +330,7 @@ EXTRACT_INDENT_SYSTEM_PROMPT = (
     '  "corrections_applied": an array of {"line": <1-based index>, "saw": <exact text>, '
     '"suggested": <what you think it should be>} for anything that looked wrong \u2014 your outlet; '
     "do NOT change raw_transcription. Empty array if nothing looked off.\n"
-    "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. Count spaces exactly, both leading spaces and runs of spaces inside a line (aligned PIC/VALUE clauses must land in the same column as on screen); in assembler/BMS a continuation character sits in column 72. Use plain ASCII hyphens and quotes. "
+    "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. Count spaces exactly, both leading spaces and runs of spaces inside a line (aligned PIC/VALUE clauses must land in the same column as on screen); in assembler/BMS keep continuation characters in the columns actually shown, even when nonstandard. Preserve observed Unicode characters and quotes. "
     + _LEGACY_FORMAT_CLAUSE +
     "Ignore the editor's line-number gutter, fold arrows, minimaps, scrollbars, tabs, and status "
     "bars. Transcribe ONLY the primary focused editor pane. For a line cut off at the edge, end its "
@@ -315,7 +347,7 @@ def _normalize_extract_indent(text: str) -> dict:
     """
     data = _parse_json(text)
     if not isinstance(data, dict) or "raw_transcription" not in data:
-        return {"raw": text.strip(), "corrections": []}
+        return {"raw": text.strip("\r\n"), "corrections": []}
     rt = data.get("raw_transcription", [])
     lines = []
     for item in rt if isinstance(rt, list) else [rt]:
@@ -350,7 +382,7 @@ def extract_structured_indent(client, path: Path) -> dict:
     return _normalize_extract_indent(text)
 
 
-def extract_structured(client, path: Path) -> dict:
+def extract_structured(client, path: Path, *, calibration=None) -> dict:
     """Send ONE image; return {'raw': verbatim text, 'corrections': [ {line, saw, suggested} ]}.
 
     Asking for the transcription as a JSON array of line strings nudges the model into
@@ -370,17 +402,36 @@ def extract_structured(client, path: Path) -> dict:
             {"type": "text", "text": "Transcribe this screenshot. Return only the JSON object."},
         ]}],
     )
-    text = "".join(getattr(b, "text", "") for b in msg.content).strip()
+    if getattr(msg, "stop_reason", None) == "max_tokens":
+        raise ValueError("Screenshot transcription was truncated; the frame must be read again before accepting the file.")
+    text = "".join(getattr(b, "text", "") for b in msg.content).strip("\r\n")
     out = _normalize_extract(text)
-    if _os.environ.get("CODESNAP_COLUMN_FIX", "1") != "0":
-        from core.colfix import respace
-        out["raw"], out["respaced_lines"] = respace(path, out["raw"])
-    out["verify"] = verify_screenshot(client, path, out["raw"])
-    out["raw"] = out["verify"].pop("text")
+    out['observed_raw'] = out['raw']
+    out['raw'],out['verify'],out['respaced_lines'] = measured_frame(client,path,out['raw'],calibration=calibration)
     out["verify"]["numbers"] = out.get("numbers") or []
     out["verify"]["numbers_seen"] = out.get("numbers_seen", False)          # did the model return the key at all?
     out["verify"]["numbers_rejected"] = out.get("numbers_rejected", 0)      # numbers returned but not consistent
     return out
+
+
+def measured_frame(client,path,raw,*,calibration=None):
+    """One spacing path for fresh OCR, cached frames and saved rebuilding."""
+    from core import spacing, colfix
+    from core.text import literal_continuations
+    with spacing.frame(path,calibration) as (image,origin,evidence):
+        if any(line.lstrip().startswith('[CUT OFF]') for line in raw.splitlines()):
+            origin=None
+            evidence.update(calibrated=False,reason='The left edge is cut off; source column one is not visible.')
+        fixed,changed=(colfix.respace(image,raw,source_x=origin) if origin is not None else colfix.respace(image,raw)) if _os.environ.get('CODESNAP_COLUMN_FIX','1')!='0' else (raw,0)
+        verified=verify_screenshot(client,image,fixed,source_x=origin)
+        result=verified.pop('text')
+        protected=literal_continuations(result)
+        evidence['line_status']=[('literal' if i in protected or '\t' in line else
+            'measured' if evidence['calibrated'] and verified['status'][i] in ('verified','reread') else
+            'relative' if verified['status'][i] in ('verified','reread') else 'unmeasured')
+            if line.strip() else '' for i,line in enumerate(result.split('\n'))]
+        verified['spacing']=evidence
+        return result,verified,changed
 
 
 REREAD_SYSTEM_PROMPT = (
@@ -414,7 +465,7 @@ def detect_kind(client, path: Path) -> str:
         return "code"
 
 
-def verify_screenshot(client, path: Path, raw: str) -> dict:
+def verify_screenshot(client, path: Path, raw: str, *, source_x=None) -> dict:
     """Check every transcribed line against the pixels (core.colfix.check). Lines whose pixels show a different
     character count are fixed for free when only the spacing was wrong; otherwise only those lines are cropped, zoomed
     and read again, and a re-read is kept only if it now matches the pixels. Returns
@@ -422,12 +473,17 @@ def verify_screenshot(client, path: Path, raw: str) -> dict:
     from core import colfix
     lines = raw.split("\n")
     try:
-        chk = colfix.check(path, raw)
+        chk = colfix.check(path, raw, source_x=source_x) if source_x is not None else colfix.check(path, raw)
     except Exception:  # noqa: BLE001
-        return {"text": raw, "grid": False, "status": ["" if not l.strip() else "unchecked" for l in lines], "reread": 0}
+        return {"text": raw, "grid": False, "status": ["" if not l.strip() else "unchecked" for l in lines],
+                "reread": 0, "absolute_columns": False}
     status, rows = chk["status"], chk["rows"]
+    from core.text import literal_continuations
+    protected = literal_continuations(raw)
     todo = {}
     for i, row in rows.items():
+        if i in protected or '\t' in lines[i]:
+            continue  # A pixel spacing repair cannot rewrite a literal body or guess tab stops.
         fixed = colfix.accept_reread(lines[i], row)
         if fixed is not None and max(abs(a - b) for a, b in zip(colfix._starts(fixed), colfix._starts(lines[i]))) <= colfix.MAX_SHIFT:
             lines[i], status[i] = fixed, "verified"
@@ -460,7 +516,8 @@ def verify_screenshot(client, path: Path, raw: str) -> dict:
                     n_re += 1
                 elif isinstance(g, dict) and g.get("overlay") and text.split() == lines[i].split():
                     status[i] = "confirmed"      # a pointer over the text explains the pixels; both reads agree
-    return {"text": "\n".join(lines), "grid": chk["grid"], "status": status, "reread": n_re}
+    return {"text": "\n".join(lines), "grid": chk["grid"], "status": status, "reread": n_re,
+            "absolute_columns": chk.get("absolute_columns", False)}
 
 
 def extract_legacy(client, path: Path) -> str:
@@ -536,6 +593,7 @@ import difflib as _difflib
 import re as _re
 
 _SEQNO = _re.compile(r"^\s*(\d{6})")
+_SOURCE_LABEL = _re.compile(r"(?:\d{2,}-[\w-]+\.|[A-Za-z_][\w]*:)")
 
 
 def _sim(x: str, y: str) -> float:
@@ -543,8 +601,23 @@ def _sim(x: str, y: str) -> float:
     mx, my = _SEQNO.match(x), _SEQNO.match(y)
     if mx and my and mx.group(1) != my.group(1):
         return 0.0
-    x, y = x.replace("[CUT OFF]", ""), y.replace("[CUT OFF]", "")
-    return _difflib.SequenceMatcher(None, x.strip(), y.strip()).ratio()
+    x, y = x.replace("[CUT OFF]", "").strip(), y.replace("[CUT OFF]", "").strip()
+    if x == y:
+        return 1.0
+    # Repeated legacy blocks often differ only in a receipt code, amount or
+    # paragraph number. Similar typography is not proof that they are one line.
+    if _re.findall(r"\d+", x) != _re.findall(r"\d+", y):
+        return 0.0
+    if _re.fullmatch(r"[\w-]+\.", x) and _re.fullmatch(r"[\w-]+\.", y):
+        return 0.0
+    sql_object = r'(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW|(?:UNIQUE\s+)?INDEX)|INSERT\s+INTO)\s+([\w."\[\]]+)'
+    sx, sy = _re.match(sql_object, x, _re.I), _re.match(sql_object, y, _re.I)
+    if sx and sy and sx.group(1).upper() != sy.group(1).upper():
+        return 0.0
+    sx, sy = _re.search(r'\bFROM\s+([\w."\[\]]+)', x, _re.I), _re.search(r'\bFROM\s+([\w."\[\]]+)', y, _re.I)
+    if sx and sy and sx.group(1).upper() != sy.group(1).upper():
+        return 0.0
+    return _difflib.SequenceMatcher(None, x, y).ratio()
 
 
 def _overlap_len(a: list, b: list, min_overlap: int = 2, max_check: int = 400,
@@ -561,20 +634,22 @@ def _overlap_len(a: list, b: list, min_overlap: int = 2, max_check: int = 400,
     return 0
 
 
-def _mostly_contained(b: list, merged: list, thresh: float = 0.92) -> bool:
-    """True if almost every non-blank line of b already appears (fuzzily) in merged —
+def _mostly_contained(b: list, merged: list) -> bool:
+    """True if every non-blank line of b already appears exactly in merged —
     i.e. b is a re-capture of content we already have, so it adds nothing."""
-    bl = [l.strip() for l in b if l.strip()]
+    # OCR may add whitespace immediately after a legacy comment indicator.
+    norm = lambda line: _re.sub(r'^\*\s+', '* ', line.strip())
+    bl = [norm(l) for l in b if l.strip()]
     if not bl:
         return True
-    ms = [l.strip() for l in merged if l.strip()]
+    ms = [norm(l) for l in merged if l.strip()]
     if not ms or len(bl) > len(ms):
         return False
     # b must reappear as a contiguous run, not just as lines scattered through merged —
     # otherwise a short last frame ("    }" / "end-proc;") is thrown away as "already seen"
-    need = max(1, int(round(len(bl) * thresh)))
     for o in range(len(ms) - len(bl) + 1):
-        if sum(1 for x, y in zip(bl, ms[o:o + len(bl)]) if _sim(x, y) >= 0.9) >= need:
+        # A frame cannot be discarded when even one of its source lines is new.
+        if all(x == y for x, y in zip(bl, ms[o:o + len(bl)])):
             return True
     return False
 
@@ -600,6 +675,9 @@ def _strip_gutter(text: str) -> str:
     while each line's real indentation survives. Only fires when most non-blank
     lines look gutter-numbered, so ordinary code is untouched."""
     import textwrap
+    from core.text import literal_continuations
+    if literal_continuations(text):
+        return text  # Numeric literal/data rows cannot establish an editor gutter.
     lines = text.split("\n")
     matches = [_GUTTER_CAP.match(l) for l in lines]
     nonempty = [l for l in lines if l.strip()]
@@ -621,18 +699,21 @@ def _indent_score(t: str) -> int:
 
 
 def _dedup_best(items: list) -> list:
-    """Drop items that are the same code modulo whitespace; keep the best-indented
-    copy of each, in first-seen order."""
+    """Collapse content duplicates, retaining the first observed spacing.
+
+    More indentation is not stronger evidence; calibrated reconciliation and
+    spacing-conflict reporting happen after positional frame alignment.
+    """
+    from core.text import normalized_line, literal_continuations
     groups, order = {}, []
     for c in items:
-        key = _re.sub(r"\s+", "", c)
-        if not key:
+        protected = literal_continuations(c)
+        key = tuple(line if i in protected else normalized_line(line) for i, line in enumerate(c.splitlines()))
+        if not any(key):
             continue
         if key not in groups:
             groups[key] = c
             order.append(key)
-        elif _indent_score(c) > _indent_score(groups[key]):
-            groups[key] = c
     return [groups[k] for k in order]
 
 
@@ -648,9 +729,14 @@ def _strip_md_headers(text: str) -> str:
     that appears in a real code line. Preserves ordinary comments and prose headers, and
     C preprocessor directives (which have no space after '#')."""
     lines = text.split("\n")
+    from core.text import literal_continuations
+    protected = literal_continuations(text)
     codeset = [l.strip() for l in lines if l.strip() and not l.lstrip().startswith("#")]
     out = []
-    for l in lines:
+    for index, l in enumerate(lines):
+        if index in protected:
+            out.append(l)
+            continue
         m = _re.match(r"^\s*#{1,6}\s+(.+?)\s*$", l)
         if m:
             h = m.group(1).strip()
@@ -676,7 +762,12 @@ def _strip_indent_guides(text: str) -> str:
     i.e. it is followed by 2+ whitespace chars ("|   return"). A real leading '|'
     (F#/OCaml match arm) is "| Some": one space then code, so it is left intact."""
     out = []
-    for line in text.split("\n"):
+    from core.text import literal_continuations
+    protected = literal_continuations(text)
+    for index, line in enumerate(text.split("\n")):
+        if index in protected:
+            out.append(line)
+            continue
         j, n, buf, changed = 0, len(line), [], False
         while j < n:
             c = line[j]
@@ -707,6 +798,12 @@ def source_mode(raw_parts: list) -> str | None:
         return None
     if is_column_sensitive(joined):
         return "columns"
+    # Markup and template bodies may contain real bars or apparent headings.
+    # Preserve these rather than treating their text as editor decoration.
+    if _re.search(r"^\s*(?:<\?xml\b|<!DOCTYPE\b|<[A-Za-z][\w:.-]*(?:\s[^>]*|/?)>|<%@|@page\b)", joined, _re.M | _re.I):
+        return "format"
+    if _re.search(r"^\s*\|\s+.+?->", joined, _re.M) and _re.search(r"\bmatch\b.+\bwith\b", joined):
+        return "format"
     if detect_format(joined) or looks_dedented_asm(joined):
         return "format"
     return None
@@ -719,18 +816,23 @@ def _clean_source(text: str, mode: str | None = None) -> str:
     only strips transcription/formatting noise, never changes the code itself."""
     if not text or not text.strip():
         return text or ""
+    # An explicit generic-language wrapper distinguishes numbered editor output
+    # from BASIC's otherwise indistinguishable numbered assignment statements.
+    if mode != 'columns' and _re.search(r'^\s*```(?:py|python|java|js|javascript|c|cpp|csharp|cs)\s*$', text, _re.M | _re.I):
+        mode = 'plain'
     from core.cobol import is_column_sensitive
     if mode == "columns" or (mode is None and is_column_sensitive(_FENCE_RE.sub(lambda m: m.group(1), text))):
         blocks = _FENCE_RE.findall(text)
         text = "\n\n".join(blocks) if blocks else _re.sub(r"^[ \t]*```.*$", "", text, flags=_re.M)
-        from core.cobol.normalize import normalize_transcription
-        return normalize_transcription(text).strip("\n")
-    from core.langpacks.formats import detect_format, looks_dedented_asm, minimal_clean, restore_asm_columns
+        # Capture records observed source, including possibly invalid columns.
+        # Compiler-format adapters must not silently rewrite that evidence.
+        return text.strip("\n")
+    from core.langpacks.formats import detect_format, looks_dedented_asm
     unfenced = _FENCE_RE.sub(lambda m: m.group(1), text)
     if mode == "format" or (mode is None and (detect_format(unfenced) or looks_dedented_asm(unfenced))):
         blocks = _FENCE_RE.findall(text)
         text = "\n\n".join(blocks) if blocks else _re.sub(r"^[ \t]*```.*$", "", text, flags=_re.M)
-        return restore_asm_columns(minimal_clean(text))
+        return text.strip("\n")
     blocks = _FENCE_RE.findall(text)
     if blocks:
         cleaned = [_strip_gutter(b).strip("\n") for b in blocks]
@@ -786,6 +888,31 @@ def merge_frames(raw_parts: list, metas: list | None = None):
     return code, parts
 
 
+def _observed_cobol_columns(parts):
+    """Use an observed valid copy of a misaligned paragraph/comment, never invent padding."""
+    from collections import Counter
+    labels = _re.compile(r"\d{2,}-[\w-]+\.")
+    choices = {}
+    for part in parts:
+        for line in part.splitlines():
+            text = line.strip()
+            if labels.fullmatch(text) or text.startswith("*"):
+                if len(line) > 6 and (line[6] == "*" if text.startswith("*") else
+                                      line[6] == " " and 7 <= len(line) - len(line.lstrip()) <= 10):
+                    choices.setdefault(text, Counter())[line] += 1
+    output = []
+    for part in parts:
+        lines = []
+        for line in part.split("\n"):
+            matches = choices.get(line.strip())
+            if matches and len(line) > 6 and (line[6] != "*" if line.strip().startswith("*") else
+                                             not (line[6] == " " and 7 <= len(line) - len(line.lstrip()) <= 10)):
+                line = matches.most_common(1)[0][0]
+            lines.append(line)
+        output.append("\n".join(lines))
+    return output
+
+
 def merge_verified(raw_parts: list, metas: list | None = None):
     """merge_frames plus verification: returns (code, clean_parts, notes, statuses). `metas` are the per-screenshot
     checks (verify_for); when every screenshot has editor line numbers the lines are placed by number, otherwise by
@@ -805,11 +932,19 @@ def merge_verified(raw_parts: list, metas: list | None = None):
         best = clean_source(text, mode)
         parts = [c for c in (clean_source(r, mode) for r in raw_parts) if c.strip()]
         keep = mode or is_column_sensitive(best) or detect_format(best)
-        final = best if keep else _fix_leading_indent(best)
+        final = best
+        from core.spacing import reconcile
+        final,spacing_notes=reconcile(final,raw_parts,metas)
+        notes.update(spacing_notes)
         verify.remap_line_evidence(text, final, notes)
+        verify.spacing_agreement(final, raw_parts, metas, notes)
         return final, parts, notes, statuses
     notes = {"numbers": False, "gaps": [], "sideways": 0, "wrapped": 0}
     cleaned = [clean_source(r, mode) for r in raw_parts]
+    from core.cobol.detect import detect_kind as source_kind
+    if (mode == "columns" and not any((m or {}).get('spacing', {}).get('calibrated') for m in metas)
+            and source_kind('\n'.join(raw_parts)) in ('cobol', 'copybook')):
+        cleaned = _observed_cobol_columns(cleaned)
     parts = _dedup_best(cleaned) or [c for c in cleaned if c.strip()]
     prefer = {k for k, v in statuses.items() if v in ("verified", "reread")}
     stitched = _stitch(parts, prefer, notes)
@@ -823,16 +958,40 @@ def merge_verified(raw_parts: list, metas: list | None = None):
         if "[CUT OFF]" not in k and statuses.get(k) not in ("verified", "reread"):
             statuses[k] = "joined"
     keep = mode or is_column_sensitive(best) or detect_format(best)
-    final = best if keep else _fix_leading_indent(best)
+    final = best
+    from core.spacing import reconcile
+    final,spacing_notes=reconcile(final,cleaned,metas)
+    notes.update(spacing_notes)
     verify.align_line_evidence(final, raw_parts, cleaned, metas, notes)
+    verify.spacing_agreement(final, cleaned, metas, notes)
+    # Conflicting reads are evidence of uncertainty even if either isolated row
+    # happened to match a pixel grid. Preserve the selected text and flag its join.
+    final_lines = final.splitlines()
+    for context in notes.get("overlap_conflicts", []):
+        for i in range(len(context) - 1, len(final_lines)):
+            if [l.strip() for l in final_lines[i - len(context) + 1:i + 1]] == context:
+                notes["line_statuses"][i] = "mismatch"
     return final, parts, notes, statuses
 
 
-def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8, prefer=frozenset()) -> "list | None":
+def _conflict_context(lines, at):
+    """Keep the owning paragraph in a warning so repeated statements don't inherit it."""
+    start = max(0, at - 5)
+    for index in range(at, -1, -1):
+        if _re.fullmatch(r"\d{2,}-[\w-]+\.", lines[index].strip()):
+            start = index
+            break
+    return [line.strip() for line in lines[start:at + 1]]
+
+
+def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8, prefer=frozenset(), notes=None) -> "list | None":
     """Merge frame b onto merged. Finds where the TAIL of merged reappears *inside* b
     (frames often re-show earlier lines), then appends only what follows. Returns the
     merged list, or None if no overlap is found."""
     max_k = min(len(merged), 60)
+    old_labels = {row.strip() for row in merged}
+    sql_identity = _re.compile(r'^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW|(?:UNIQUE\s+)?INDEX)\s+([\w."\[\]]+)', _re.I)
+    old_objects = {m.group(0).strip().upper() for row in merged if (m := sql_identity.match(row))}
     for k in range(max_k, min_overlap - 1, -1):
         tail = merged[-k:]
         # a 2-3 line overlap made only of punctuation ("}", "{", "END-IF.") is not evidence
@@ -840,15 +999,218 @@ def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8
             continue
         for o in range(0, len(b) - k + 1):
             window = b[o:o + k]
-            sims = [_sim(x, y) for x, y in zip(tail, window)]
+            sims = []
+            for x, y in zip(tail, window):
+                score = _sim(x, y)
+                if score < 0.7:
+                    break
+                sims.append(score)
             # every line must match (OCR noise allowed), not just the average
-            if sims and sum(sims) / len(sims) >= thresh and min(sims) >= 0.7:
+            if len(sims) == k and sum(sims) / len(sims) >= thresh:
+                # A later repeated END-IF window cannot discard a new paragraph
+                # visible before it in this frame.
+                new_prefix = b[:o]
+                if any(_SOURCE_LABEL.fullmatch(line.strip()) and
+                       line.strip() not in old_labels for line in new_prefix):
+                    continue
+                if any(m.group(0).strip().upper() not in old_objects for row in new_prefix
+                       if (m := sql_identity.match(row))):
+                    continue
                 # a line cut off at the bottom of one screen is usually whole on the next — keep the whole copy
                 tail = [w if "[CUT OFF]" in t and "[CUT OFF]" not in w else t for t, w in zip(tail, window)]
                 # two screenshots read a line differently: keep the copy the pixel check verified
                 tail = [w if w != t and w.rstrip() in prefer and t.rstrip() not in prefer else t
                         for t, w in zip(tail, window)]
-                return merged[:-k] + tail + b[o + k:]
+                result = merged[:-k] + tail + b[o + k:]
+                if notes is not None:
+                    for i, (x, y) in enumerate(zip(merged[-k:], window)):
+                        if (x.strip() != y.strip() and len(x.strip()) >= 6 and len(y.strip()) >= 6 and
+                                "[CUT OFF]" not in x + y and
+                                (x.rstrip() in prefer) == (y.rstrip() in prefer)):
+                            at = len(merged) - k + i
+                            notes.setdefault("overlap_conflicts", []).append(
+                                _conflict_context(result, at))
+                return result
+    # A unique paragraph label or numbered maintenance comment establishes
+    # position independently of repeated logic. Retain rows a later read skipped.
+    marker = _re.compile(r"\d{2,}-[\w-]+\.|[A-Za-z_][\w]*:|\*.*\d.*")
+    old_keys, new_keys = [l.strip() for l in merged], [l.strip() for l in b]
+    for pos in range(max(0, len(merged) - 60), len(merged)):
+        anchor = old_keys[pos]
+        if not marker.fullmatch(anchor) or old_keys.count(anchor) != 1 or new_keys.count(anchor) != 1:
+            continue
+        offset = new_keys.index(anchor)
+        left, right = merged[pos:], b[offset:]
+        equal = sum(block.size for block in _difflib.SequenceMatcher(
+            None, old_keys[pos:], new_keys[offset:], autojunk=False).get_matching_blocks())
+        if equal < max(2, 0.6 * min(len(left), len(right))):
+            continue
+        # Align each paragraph separately; repeated END-IF and MOVE rows must not
+        # carry a match across distinct paragraph identities.
+        labels = _SOURCE_LABEL
+        def sections(lines):
+            blocks, key = {"anchor": []}, "anchor"
+            for line in lines:
+                if labels.fullmatch(line.strip()) and blocks[key]:
+                    key = line.strip()
+                    if key in blocks:
+                        return None
+                    blocks[key] = []
+                blocks[key].append(line)
+            return blocks
+        old_blocks, new_blocks = sections(left), sections(right)
+        if old_blocks is None or new_blocks is None:
+            continue
+        order = list(old_blocks)
+        for i, key in enumerate(new_blocks):
+            if key not in order:
+                previous = list(new_blocks)[i - 1]
+                order.insert(order.index(previous) + 1, key)
+        joined, disputed = [], []
+        for key in order:
+            if key not in old_blocks:
+                joined.extend(new_blocks[key])
+                continue
+            if key not in new_blocks:
+                joined.extend(old_blocks[key])
+                continue
+            old_rows, new_rows = old_blocks[key], new_blocks[key]
+            opcodes = _difflib.SequenceMatcher(None, [l.strip() for l in old_rows],
+                                               [l.strip() for l in new_rows], autojunk=False).get_opcodes()
+            for tag, a0, a1, b0, b1 in opcodes:
+                xs, ys = old_rows[a0:a1], new_rows[b0:b1]
+                if tag == "equal":
+                    joined.extend(y if y.rstrip() in prefer and x.rstrip() not in prefer else x
+                                  for x, y in zip(xs, ys))
+                elif tag == "delete":
+                    joined.extend(xs)
+                elif tag == "insert":
+                    joined.extend(ys)
+                elif len(xs) == len(ys):
+                    for x, y in zip(xs, ys):
+                        chosen = x if x.rstrip() in prefer and y.rstrip() not in prefer else y
+                        if (x.rstrip() in prefer) == (y.rstrip() in prefer):
+                            disputed.append(len(joined))
+                        joined.append(chosen)
+                elif len(xs) == 1 and a1 == len(old_rows) and xs[0].strip().split()[:1] == ys[0].strip().split()[:1]:
+                    disputed.append(len(joined))
+                    joined.extend(ys)  # a conflicting last screen row plus the newly exposed continuation
+                else:
+                    disputed.append(len(joined))
+                    joined.extend(xs + ys)
+        result = merged[:pos] + joined
+        if notes is not None:
+            for i in disputed:
+                at = pos + i
+                notes.setdefault("overlap_conflicts", []).append(
+                    _conflict_context(result, at))
+        return result
+    return None
+
+
+def _anchored_frame(merged, incoming, prefer, notes):
+    """Reconcile an overlap using unique source rows, including sticky editor headers."""
+    norm = lambda line: line.replace('[CUT OFF]', '').strip()
+    old, new = [norm(line) for line in merged], [norm(line) for line in incoming]
+    sticky = _re.compile(r"(?:[\w-]+:\s*(?:PROC|PROCEDURE)\b.*|DCL\s+1\s+\w+[,;]?|SELECT\s*\(.*)", _re.I)
+    candidates = []
+    for offset, anchor in enumerate(new):
+        if len(anchor) < 12 or sum(c.isalnum() for c in anchor) < 6 or old.count(anchor) != 1 or new.count(anchor) != 1:
+            continue
+        pos = old.index(anchor)
+        if pos < max(0, len(old)-100):
+            continue
+        prefix = new[:offset]
+        revisited = False
+        if prefix:
+            pinned = sticky.fullmatch(prefix[0]) and all(not row or
+                (sticky.fullmatch(row) and row in old[:pos]) for row in prefix)
+            known = all(not row or old[:pos].count(row) == 1 for row in prefix)
+            positions = [old[:pos].index(row) for row in prefix if row and row in old[:pos]]
+            revisited = known and len(positions) >= 2 and positions == sorted(positions)
+            if not pinned and not revisited:
+                continue
+        matcher = _difflib.SequenceMatcher(None, old[pos:], new[offset:], autojunk=False)
+        blocks = matcher.get_matching_blocks()
+        equal = sum(block.size for block in blocks)
+        if equal < max(1 if revisited else 3, 0.65*min(len(old)-pos, len(new)-offset)):
+            continue
+        candidates.append((equal, -offset, pos, offset, matcher))
+    if not candidates:
+        return None
+    _, _, pos, offset, matcher = max(candidates, key=lambda c:c[:2])
+    left, right = merged[pos:], incoming[offset:]
+    joined, disputed = [], []
+    for tag, a0, a1, b0, b1 in matcher.get_opcodes():
+        xs, ys = left[a0:a1], right[b0:b1]
+        if tag == 'equal':
+            joined.extend(y if ('[CUT OFF]' in x and '[CUT OFF]' not in y) or
+                          (y.rstrip() in prefer and x.rstrip() not in prefer and '[CUT OFF]' not in y)
+                          else x for x,y in zip(xs,ys))
+        elif tag == 'delete':
+            joined.extend(xs)
+        elif tag == 'insert':
+            joined.extend(ys)
+        elif len(xs)==1 and '[CUT OFF]' in xs[0] and ys and ys[0].strip().startswith(xs[0].replace('[CUT OFF]','').strip()):
+            joined.extend(ys)
+        elif len(xs)==len(ys):
+            for x,y in zip(xs,ys):
+                chosen = x if x.rstrip() in prefer and y.rstrip() not in prefer else y
+                if x.strip()!=y.strip() and (x.rstrip() in prefer)==(y.rstrip() in prefer):
+                    disputed.append(len(joined))
+                joined.append(chosen)
+        else:
+            disputed.append(len(joined))
+            joined.extend(xs+ys)
+    result = merged[:pos]+joined
+    for index in disputed:
+        notes.setdefault('overlap_conflicts',[]).append(_conflict_context(result,pos+index))
+    return result
+
+
+def _rpg_section_frame(merged, incoming):
+    """Place a revisited RPG routine by its unique change comment, preserving its tail."""
+    marker = _re.compile(r'\*\s+(?:CHG|ENH)-[\w-]+:.*')
+    norm = lambda row: row.replace('[CUT OFF]', '').strip().rstrip('.')
+    for offset, row in enumerate(incoming):
+        key = norm(row)
+        if not marker.fullmatch(key):
+            continue
+        positions = [i for i, old in enumerate(merged) if norm(old) == key]
+        if len(positions) != 1:
+            continue
+        start = positions[0]
+        prefix = [norm(line) for line in incoming[:offset] if line.strip()]
+        preceding = [norm(line) for line in merged[:start] if line.strip()]
+        if prefix and (len(prefix) < 2 or prefix[-2:] != preceding[-2:]):
+            continue
+        end = next((i for i in range(start+1, len(merged))
+                    if marker.fullmatch(norm(merged[i]))), len(merged))
+        fresh = incoming[offset:]
+        if not any(_re.fullmatch(r'C\s+\w+\s+BEGSR', norm(line), _re.I) for line in fresh):
+            continue
+        # This frame must revisit one routine, rather than span another routine.
+        if any(marker.fullmatch(norm(line)) for line in fresh[1:]):
+            continue
+        old = [line for line in merged[start:end] if line.strip()]
+        new = [line for line in fresh if line.strip()]
+        matcher = _difflib.SequenceMatcher(None, list(map(norm, old)), list(map(norm, new)), autojunk=False)
+        if sum(block.size for block in matcher.get_matching_blocks()) < 3:
+            continue
+        joined = []
+        for tag, a0, a1, b0, b1 in matcher.get_opcodes():
+            if tag == 'equal':
+                joined.extend(y if '[CUT OFF]' in x and '[CUT OFF]' not in y else x
+                              for x, y in zip(old[a0:a1], new[b0:b1]))
+            elif tag == 'delete':
+                joined.extend(old[a0:a1])
+            elif tag == 'insert' or not any(line.strip() for line in old[a0:a1]):
+                joined.extend(new[b0:b1])
+            else:
+                # Differing meaningful source is ambiguous; retain the review warning.
+                break
+        else:
+            return merged[:start] + joined + merged[end:]
     return None
 
 
@@ -874,7 +1236,8 @@ def _upgrade_cut(merged: list, b: list) -> list:
     for line in merged:
         if "[CUT OFF]" in line:
             stem = line.replace("[CUT OFF]", "").rstrip()
-            full = next((w for w in whole if len(w.rstrip()) > len(stem) and w.rstrip().startswith(stem)), None)
+            matches = list(dict.fromkeys(w for w in whole if len(w.rstrip()) >= len(stem) and w.rstrip().startswith(stem)))
+            full = matches[0] if len(matches) == 1 else None
             line = full if full is not None else line
         out.append(line)
     return out
@@ -927,7 +1290,11 @@ def _stitch(parts: list, prefer, notes: dict) -> str:
             notes["sideways"] = notes.get("sideways", 0) + side[1]
             notes.setdefault("joined", []).extend(getattr(sideways_merge, "joined", []))
             continue
-        stitched = _stitch_two(merged, lines, prefer=prefer)
+        stitched = _rpg_section_frame(merged, lines)
+        if stitched is None:
+            stitched = _stitch_two(merged, lines, prefer=prefer, notes=notes)
+        if stitched is None:
+            stitched = _anchored_frame(merged, lines, prefer, notes)
         if stitched is None:
             stitched = _prepend(merged, lines)   # a screenshot added later can show an earlier part of the file
         if stitched is None:
@@ -945,31 +1312,20 @@ def analyse_incremental(client, image_paths: list, cache_dir: Path = None) -> di
     Returns the same {"explanation", "extracted_text"} shape as analyse_images,
     so build_docx() and the callers work unchanged.
     """
-    parts = []
-    n = len(image_paths)
-    for i, path in enumerate(image_paths, 1):
-        data = _robust.read_bytes(path)
-        digest = hashlib.sha256(data).hexdigest()
-        cache_file = (cache_dir / f"{digest}.md") if cache_dir is not None else None
-
-        if cache_file is not None and cache_file.exists():
-            print(f"  [{i}/{n}] {path.name} (cached)")
-            text = cache_file.read_text()
+    parts, metas = [], []
+    for path in image_paths:
+        if cache_dir is not None:
+            extract_to_cache(client, path, cache_dir)
+            text = cache_path_for(path, cache_dir).read_text()
+            meta = verify_for(path, cache_dir)
         else:
-            print(f"  [{i}/{n}] reading {path.name}...")
-            try:
-                text = extract_one(client, path)
-            except Exception as exc:  # noqa: BLE001 - skip a bad frame, keep the rest
-                print(f"      (skipped — {type(exc).__name__}: {exc})", file=sys.stderr)
-                continue
-            if cache_file is not None:
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                cache_file.write_text(text)
-
-        if text.strip():
-            parts.append(text.strip())
-
-    full_text = stitch_parts(parts)
+            extracted = extract_structured(client, path)
+            text, meta = extracted["raw"], extracted.get("verify") or {}
+        if not text.strip():
+            raise ValueError(f"No readable text in screenshot {path.name}; incomplete captures cannot be finalized.")
+        parts.append(text.strip("\r\n"))
+        metas.append(meta)
+    full_text, _, notes, statuses = merge_verified(parts, metas)
     if not full_text.strip():
         return {"explanation": "", "extracted_text": "",
                 "is_code": False, "language": "", "extension": ""}
@@ -993,28 +1349,67 @@ def cache_path_for(path: Path, cache_dir: Path) -> Path:
     return cache_dir / f"{digest}.md"
 
 
-def extract_to_cache(client, path: Path, cache_dir: Path) -> None:
-    """Extract one image's text and cache it (no-op if already cached).
+import threading as _cache_threading
+_cache_locks_guard = _cache_threading.Lock()
+import weakref as _cache_weakref
+_cache_locks = _cache_weakref.WeakValueDictionary()
 
-    Used for background pre-extraction at capture time; analyse_incremental()
-    later finds the cache hit and skips the API call. Same hash/key scheme as
-    analyse_incremental so the two share one cache.
-    """
+
+def _publish_cache(path, text):
+    import tempfile
+    import os
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            output.write(text)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def extract_to_cache(client, path: Path, cache_dir: Path) -> None:
+    """Share one in-flight extraction per cache entry and publish complete text atomically."""
     cf = cache_path_for(path, cache_dir)
-    if cf.exists():
-        return
-    res = extract_structured(client, path)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cf.write_text(res["raw"])
-    try:
-        cf.with_suffix(".corr.json").write_text(json.dumps(res["corrections"]))
-    except Exception:  # noqa: BLE001 - corrections are advisory; never fail the cache write
-        pass
-    try:
-        if res.get("verify"):
-            cf.with_suffix(".verify.json").write_text(json.dumps(res["verify"]))
-    except Exception:  # noqa: BLE001
-        pass
+    key = str(cf.resolve())
+    with _cache_locks_guard:
+        lock = _cache_locks.setdefault(key, _cache_threading.Lock())
+    with lock:
+        if cf.exists():
+            from core import spacing
+            calibration=spacing.calibration_for(path)
+            old=verify_for(path,cache_dir)
+            if (old.get('spacing') or {}).get('revision')!=spacing.REVISION or old.get('spacing_signature')!=spacing.signature(calibration):
+                original=cf.read_text()
+                if not cf.with_suffix('.ocr.md').exists():
+                    _publish_cache(cf.with_suffix('.ocr.md'),original)
+                legacy = _normalize_extract(original) if original.lstrip().startswith('{') and '"raw_transcription"' in original else None
+                fixed,checked,_=measured_frame(None,path,legacy['raw'] if legacy else original,calibration=calibration)
+                if legacy:
+                    checked.update({k:legacy[k] for k in ('numbers','numbers_seen','numbers_rejected') if k in legacy})
+                checked.update({k:old[k] for k in ('numbers','numbers_seen','numbers_rejected') if k in old})
+                checked['spacing_signature']=spacing.signature(calibration)
+                checked['source_sha256']=hashlib.sha256(fixed.encode()).hexdigest()
+                _publish_cache(cf.with_suffix('.verify.json'),json.dumps(checked))
+                _publish_cache(cf,fixed)
+            return
+        res = extract_structured(client, path)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        from core import spacing
+        res.setdefault('verify',{})['spacing_signature']=spacing.signature(spacing.calibration_for(path))
+        res['verify']['source_sha256']=hashlib.sha256(res['raw'].encode()).hexdigest()
+        _publish_cache(cf.with_suffix('.ocr.md'),res.get('observed_raw',res['raw']))
+        try:
+            _publish_cache(cf.with_suffix(".corr.json"), json.dumps(res["corrections"]))
+        except Exception:  # noqa: BLE001 - corrections are advisory; never fail the cache write
+            pass
+        try:
+            if res.get("verify"):
+                _publish_cache(cf.with_suffix(".verify.json"), json.dumps(res["verify"]))
+        except Exception:  # noqa: BLE001
+            pass
+        _publish_cache(cf, res["raw"])
 
 
 def verify_for(path: Path, cache_dir: Path) -> dict:
@@ -1022,6 +1417,8 @@ def verify_for(path: Path, cache_dir: Path) -> dict:
     cf = cache_path_for(path, cache_dir).with_suffix(".verify.json")
     try:
         data = json.loads(cf.read_text()) if cf.exists() else {}
+        if isinstance(data,dict) and data.get('source_sha256') and data['source_sha256']!=hashlib.sha256(cache_path_for(path,cache_dir).read_text().encode()).hexdigest():
+            return {}
         return data if isinstance(data, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
@@ -1100,9 +1497,10 @@ def build_docx(result: dict) -> "Document":
     from docx import Document
 
     doc = Document()
-    extracted = result.get("extracted_text", "").strip()
-    if extracted:
-        markdown_to_docx(doc, extracted)
+    extracted = result.get("extracted_text", "").strip("\r\n")
+    if extracted.strip():
+        for line in extracted.splitlines():
+            doc.add_paragraph(line)
     else:
         doc.add_paragraph("(No text content was extracted from the images.)")
     return doc

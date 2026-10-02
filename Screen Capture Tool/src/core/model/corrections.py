@@ -6,6 +6,7 @@ from .kinds import ENTITY_KINDS, RELATION_KINDS
 from .store import entity_key
 
 OPS = {
+    "artifact.confirm_line": ("artifact", "line", "old_text"),
     "artifact.replace_line": ("artifact", "line", "old_text", "new_text"),
     "entity.rename": ("key", "name"),
     "entity.set_attrs": ("key", "attrs"),
@@ -78,12 +79,12 @@ def validate(op, payload):
         raise CorrectionError("severity must be critical, high, medium, low or info")
     if op == "finding.add" and payload["category"] not in FINDING_CATEGORIES:
         raise CorrectionError(f"unknown finding category {payload['category']}")
-    if op == "artifact.replace_line":
+    if op in ("artifact.replace_line", "artifact.confirm_line"):
         if not isinstance(payload.get("line"), int) or isinstance(payload.get("line"), bool) or payload["line"] < 1:
             raise CorrectionError("line must be a positive whole number")
-        if not isinstance(payload.get("old_text"), str) or not isinstance(payload.get("new_text"), str):
+        if not isinstance(payload.get("old_text"), str) or (op == "artifact.replace_line" and not isinstance(payload.get("new_text"), str)):
             raise CorrectionError("old_text and new_text must be text")
-        if payload["old_text"] == payload["new_text"]:
+        if op == "artifact.replace_line" and payload["old_text"] == payload["new_text"]:
             raise CorrectionError("the corrected line is unchanged")
     for k in ("attrs",):
         if k in OPS[op] and not isinstance(payload.get(k), dict):
@@ -95,6 +96,7 @@ def describe(c) -> str:
     name = lambda k: (p.get(k) or "").split(":", 1)[-1]
     short = lambda s: str(s or "").strip()[:70] + ("…" if len(str(s or "").strip()) > 70 else "")
     return {
+        "artifact.confirm_line": lambda: f"Confirmed {p.get('artifact')} line {p.get('line')} against its screenshot",
         "artifact.replace_line": lambda: f"Correct {p.get('artifact')} line {p.get('line')}: "
                                            f"{short(p.get('old_text'))} → {short(p.get('new_text'))}",
         "entity.rename": lambda: f"Rename {name('key')} → {p.get('name')}",
@@ -175,27 +177,37 @@ def _resolve_verification_line(store, artifact_id, line):
 def apply_one(store, c) -> str | None:
     op, p = c["op"], dict(c["payload"])
     changed = False
-    if op == "artifact.replace_line":
+    if op in ("artifact.replace_line", "artifact.confirm_line"):
+        if op == "artifact.confirm_line":
+            p['new_text'] = p['old_text']
         art = store.current_artifact(p["artifact"])
         if not art:
             return f"file {p['artifact']!r} not found"
+        reviewed_version = p.get('_reviewed_artifact_id', (p.get('_before') or {}).get('artifact_id'))
+        if reviewed_version is not None and reviewed_version != art['id']:
+            return 'this file was recaptured; review this line again or explicitly rebase the correction'
         lines = (art.get("transcription") or "").splitlines()
         n = p["line"]
         if n > len(lines):
             return f"line {n} is outside this {len(lines)}-line file"
-        if lines[n - 1] == p["new_text"]:
+        if op == "artifact.replace_line" and lines[n - 1] == p["new_text"]:
+            p['_reviewed_artifact_id'] = art['id']
+            store.update_correction(c['id'], payload=p)
+            _resolve_verification_line(store, art["id"], n)
             return None
         if lines[n - 1] != p["old_text"]:
             return f"line {n} no longer matches the reviewed text"
+        p['_reviewed_artifact_id'] = art['id']
         manual = copy.deepcopy((store.get_meta("manual_capture_concerns") or {}).get(str(art["id"])))
         p.setdefault("_before", {"artifact_id": art["id"], "text": lines[n - 1],
                                  "text_hash": hashlib.sha1((art.get("transcription") or "").encode()).hexdigest()[:16],
                                  "verification": copy.deepcopy(store.verification(art["id"])),
                                  "manual_concerns": manual})
-        lines[n - 1] = p["new_text"]
-        trailing = "\n" if (art.get("transcription") or "").endswith("\n") else ""
-        store.fill_artifact(art["id"], artifact_type=art["artifact_type"], language=art["language"],
-                            transcription="\n".join(lines) + trailing)
+        if op == "artifact.replace_line":
+            lines[n - 1] = p["new_text"]
+            trailing = "\n" if (art.get("transcription") or "").endswith("\n") else ""
+            store.fill_artifact(art["id"], artifact_type=art["artifact_type"], language=art["language"],
+                                transcription="\n".join(lines) + trailing)
         _resolve_verification_line(store, art["id"], n)
         changed = True
     elif op == "entity.rename":
@@ -316,13 +328,15 @@ def undo(store, correction_id) -> dict:
     op, p = c["op"], c["payload"]
     if op == "entity.merge":
         raise CorrectionError("merges can't be undone automatically — re-extract the affected files")
-    if op == "artifact.replace_line":
+    if op in ("artifact.replace_line", "artifact.confirm_line"):
         art = store.current_artifact(p["artifact"])
+        if art and p.get('_reviewed_artifact_id', (p.get('_before') or {}).get('artifact_id')) not in (None, art['id']):
+            raise CorrectionError("this file was recaptured, so the previous line correction can't be safely undone")
         lines = (art.get("transcription") or "").splitlines() if art else []
         if not art or p["line"] > len(lines) or lines[p["line"] - 1] != p["new_text"]:
             raise CorrectionError("this source line changed again, so it can't be safely undone")
     store.update_correction(correction_id, active=False)
-    if op == "artifact.replace_line":
+    if op in ("artifact.replace_line", "artifact.confirm_line"):
         lines[p["line"] - 1] = p["old_text"]
         trailing = "\n" if (art.get("transcription") or "").endswith("\n") else ""
         store.fill_artifact(art["id"], artifact_type=art["artifact_type"], language=art["language"],

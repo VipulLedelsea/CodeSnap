@@ -1,0 +1,14 @@
+DATABASE schfin
+SCREEN
+{
+  District ID: [f000   ]
+  Total aid:   [f001          ]
+}
+END
+TABLES
+district_aid
+ATTRIBUTES
+f000 = district_aid.district_id, REQUIRED;
+f001 = district_aid.total_aid, FORMAT = "###,###,##&.&&";
+INSTRUCTIONS
+DELIMITERS "[]"

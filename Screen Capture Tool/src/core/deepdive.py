@@ -19,7 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-PROMPT_VERSION = "deepdive-v1"
+PROMPT_VERSION = "deepdive-v2-screen-formats"
 MAX_TOKENS = 20000   # the SDK refuses non-streamed calls much above this
 THINKING = 8000
 CATEGORIES = ["purpose", "business_rule", "calculation", "data_read", "data_write", "interface", "control_flow",
@@ -27,7 +27,7 @@ CATEGORIES = ["purpose", "business_rule", "calculation", "data_read", "data_writ
 SEVERITIES = ["high", "medium", "low", "info"]
 
 DEEP_SYSTEM = """You are a senior software architect performing a forensic, line-by-line review of ONE source file from
-a legacy business application. An enterprise architect will rely on your findings without re-reading the code, so
+an application. An enterprise architect will rely on your findings without re-reading the code, so
 accuracy matters more than anything else.
 
 You receive the file with a line number before every line ("  12| code"). Lines marked "⚠" could not be read
@@ -215,10 +215,14 @@ def current_concerns(store, art, dd=None):
     """The reviewer's capture concerns, only while they still describe the file's current text."""
     d = ((dd if dd is not None else store.get_meta("deepdive")) or {}).get(str(art["id"])) or {}
     current_hash = _hash(art.get("transcription"))
-    if d.get("hash") == current_hash:
-        return d.get("capture_concerns")
     manual = ((store.get_meta("manual_capture_concerns") or {}).get(str(art["id"])) or {})
-    return manual.get("concerns") if manual.get("hash") == current_hash else None
+    if manual.get("hash") == current_hash:
+        if d.get("hash") == current_hash:
+            resolved = set(manual.get("resolved_lines") or [])
+            return [c for c in d.get("capture_concerns") or [] if c.get("line") not in resolved]
+        return manual.get("concerns")
+    return d.get("capture_concerns") if d.get("hash") == current_hash else None
+
 
 
 def quality_summary(q) -> dict:
@@ -295,6 +299,49 @@ def rescan_requests(store) -> list:
     return out
 
 
+NOT_REACHED = re.compile(r"\b(is|are) never (called|invoked|executed)\b|\bnever called\b|\bcannot work as written\b|"
+                         r"\bonly in theory\b|\bneither\b[^.]*\bis passed\b|\bpossible injection point, but\b", re.I)
+_DEAD = re.compile(r"\b(is|are) never (called|invoked|executed)\b|\bnever called\b", re.I)
+
+
+def review_facts(store) -> dict:
+    """{artifact_id: facts} from the line-by-line review, for files whose text has not changed since the review."""
+    dd = store.get_meta("deepdive") or {}
+    out = {}
+    for a in store.artifacts():
+        d = dd.get(str(a["id"])) or {}
+        if d.get("facts") and d.get("hash") == _hash(a.get("transcription")):
+            out[a["id"]] = d["facts"]
+    return out
+
+
+def current_reviews(store) -> dict:
+    """Only reviews that describe current, retained source versions."""
+    dd = store.get_meta('deepdive') or {}
+    return {str(a['id']): dd[str(a['id'])] for a in store.artifacts()
+            if str(a['id']) in dd and dd[str(a['id'])].get('hash') == _hash(a.get('transcription'))}
+
+
+def unreached(facts, line, window=1):
+    """The review's statement that the code on or next to this line never runs, or cannot do what it appears to."""
+    if not line:
+        return None
+    for f in facts or []:
+        a, b = f["lines"]
+        if a - window <= line <= b + window and NOT_REACHED.search(f["statement"]):
+            return f
+    return None
+
+
+def dead_lines(facts) -> set:
+    """Lines the review says are never called."""
+    out = set()
+    for f in facts or []:
+        if _DEAD.search(f["statement"]):
+            out.update(range(f["lines"][0], f["lines"][1] + 1))
+    return out
+
+
 # ── the per-file analysis ───────────────────────────────────────────────────────────────────────────────────────
 
 def _norm(s):
@@ -346,6 +393,10 @@ def _call(client, model, system, tool, content, thinking=True):
 
 def _log(store, step, artifact_id, model, msg, ms):
     from core.usage import cost as usage_cost
+    record = getattr(msg, "_codesnap_usage_record", None)
+    if record:
+        store.log_usage_record({**record, "step": step}, artifact_id=artifact_id)
+        return
     u = getattr(msg, "usage", None)
     i, o = getattr(u, "input_tokens", None), getattr(u, "output_tokens", None)
     store.log_run(step, artifact_id=artifact_id, model=model, prompt_version=PROMPT_VERSION, input_tokens=i,
@@ -432,13 +483,19 @@ def analyse_file(store, client, art, model=None, review=True) -> dict:
     model = model or MODEL
     text = art.get("transcription") or ""
     q0 = capture_quality(store, art)
+    from core.technology_support import analysis_context
+    context=analysis_context(art['name'],art.get('language') or '')
     header = (f"File: {art['name']}\nLanguage: {art.get('language') or 'unknown'}\n"
-              f"Lines: {len(text.splitlines())}\n"
+              f"Lines: {len(text.splitlines())}\n" + context
               + (f"Lines marked ⚠ are unreliable ({', '.join(_ranges(q0['bad_lines'])[:20])}).\n"
                  if q0["bad_lines"] else ""))
     msg, ms = _call(client, model, DEEP_SYSTEM, ANALYSIS_TOOL, header + "\n" + listing(text, q0["bad_lines"]))
     _log(store, "deepdive", art["id"], model, msg, ms)
-    data = _tool(msg, ANALYSIS_TOOL["name"]) or {}
+    if getattr(msg,'stop_reason',None)=='max_tokens':
+        raise ValueError('Detailed source analysis was truncated; review remains incomplete.')
+    data = _tool(msg, ANALYSIS_TOOL["name"])
+    if data is None:
+        raise ValueError('Detailed source analysis did not return its required result; review remains incomplete.')
     lines_ = text.split("\n")
     concerns = [c for c in data.get("capture_concerns") or [] if isinstance(c, dict) and isinstance(c.get("line"), int)
                 and 0 < c["line"] <= len(lines_) and lines_[c["line"] - 1].strip()]
@@ -451,6 +508,8 @@ def analyse_file(store, client, art, model=None, review=True) -> dict:
                                        f"yet: {', '.join(gaps)}. Review ONLY those lines (the rest is context) and record "
                                        f"everything they show, including defects.\n\n" + listing(text, q["bad_lines"]))
         _log(store, "deepdive_gaps", art["id"], model, more_msg, mms)
+        if getattr(more_msg,'stop_reason',None)=='max_tokens':
+            raise ValueError('Detailed source gap analysis was truncated; review remains incomplete.')
         more = _tool(more_msg, ANALYSIS_TOOL["name"]) or {}
         seen = {(f["category"], _norm(f["quote"])) for f in kept}
         k2, c2, r2, u2 = check_facts(more.get("facts"), text, q["bad_lines"])
@@ -466,8 +525,10 @@ def analyse_file(store, client, art, model=None, review=True) -> dict:
             f["id"] = i
         payload = "\n".join(f"{f['id']}. [{f['category']}] {f['statement']} (lines {f['lines'][0]}-{f['lines'][1]})" for f in kept)
         rmsg, rms = _call(client, model, REVIEW_SYSTEM, REVIEW_TOOL,
-                          f"File: {art['name']}\n\n{listing(text, q['bad_lines'])}\n\nFindings:\n{payload}")
+                          context + f"File: {art['name']}\n\n{listing(text, q['bad_lines'])}\n\nFindings:\n{payload}")
         _log(store, "deepdive_review", art["id"], model, rmsg, rms)
+        if getattr(rmsg,'stop_reason',None)=='max_tokens':
+            raise ValueError('Independent source review was truncated; review remains incomplete.')
         verdicts = {int(v["id"]): v for v in (_tool(rmsg, REVIEW_TOOL["name"]) or {}).get("verdicts") or []
                     if isinstance(v, dict) and str(v.get("id", "")).isdigit()}
         final = []
@@ -518,7 +579,7 @@ def pending(store) -> list:
 def synthesize(store, client, model=None) -> dict:
     from core.analysis import MODEL
     model = model or MODEL
-    dd = store.get_meta("deepdive") or {}
+    dd = current_reviews(store)
     facts, index = [], {}
     for aid, r in dd.items():
         for f in r.get("facts") or []:
@@ -543,7 +604,7 @@ def synthesize(store, client, model=None) -> dict:
 
 def program_basis(store) -> str:
     """What the cross-file observations were drawn from: every file's current analysis."""
-    dd = store.get_meta("deepdive") or {}
+    dd = current_reviews(store)
     return hashlib.sha1(json.dumps(sorted((k, v.get("ran_at")) for k, v in dd.items())).encode()).hexdigest()[:16]
 
 

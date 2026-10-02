@@ -35,7 +35,7 @@ AREAS = [
     ("Authentication", ("SEC-AUTH", "UIS-PWFIELD", "UIS-PW")),
     ("Authorization", ("SEC-AUTHZ", "SEC-CSRF", "SEC-PATH", "AC-")),
     ("Privileged", ()),
-    ("Secrets management", ("SEC-CRED",)),
+    ("Secrets management", ("SEC-CRED", "UIS-PREFILL")),
     ("Encryption in transit", ("SEC-TLS", "WEB-HTTPS", "WEB-TLS", "WEB-CERT", "UIS-MIXED")),
     ("Encryption at rest", ("SEC-CRYPTO",)),
     ("Input validation", ("SEC-SQLI", "SEC-SQLDYN", "SEC-XSS", "SEC-CMD", "SEC-DESER", "SEC-MEM")),
@@ -78,14 +78,15 @@ def controls(sec_f, audit_logs, sources_of, eol_techs, financial=False) -> list:
         fs = [f for f in sec_f if any((f.get("rule") or "").startswith(k) for k in rules)] if rules else []
         row = {"area": area, "findings": fs, "rating": None, "seen": "", "gap": "", "why": ""}
         if area == "Privileged":
-            creds = [f for f in sec_f if f.get("rule") == "SEC-CRED"]
+            from .evidence import db_credentials
+            creds = db_credentials(sec_f)
             users = _users(creds)
             if creds:
-                row.update(rating=4, seen=f"Database service accounts{' (' + ', '.join(users) + ')' if users else ''} "
+                row.update(rating=4, seen=f"Database accounts{' (' + ', '.join(users) + ')' if users else ''} "
                                          f"sign in with passwords held in the code ({len(creds)} place(s)).",
-                           gap="Every user of the application acts through one shared account, so access cannot be "
-                               "traced to a person or limited by role.",
-                           why="4 – Poor: shared service accounts with embedded passwords")
+                           gap="The connection uses a password embedded in the code. Confirm account privileges, individual "
+                               "user attribution and how the password is rotated.",
+                           why="4 – Poor: shared database accounts with embedded passwords")
         elif area == "Audit logging":
             logs = [e for e in audit_logs]
             local = [e for e in logs if re.search(r"^[A-Za-z]:\\|^/|\.LOG$|\.TXT$", e["name"], re.I)]
@@ -110,6 +111,10 @@ def controls(sec_f, audit_logs, sources_of, eol_techs, financial=False) -> list:
                            why=f"{r_} – {LEVEL[r_]}: " + ("the audit trail is local and failures can be silent"
                                                           if local and errs else "the audit trail is local and unmonitored"
                                                           if local else "failures can pass silently"))
+            elif logs:
+                row.update(seen='Audit-related stores are referenced: ' + ', '.join(e['name'] for e in logs[:6]) + '.',
+                           gap='Confirm which writes constitute the audit trail, user attribution, retention and tamper protection.',
+                           why='Not assessed: audit references do not establish complete or protected logging.')
         elif area == "Patch management":
             row.update(why=NOT_VISIBLE[area], seen=("Unsupported technology that can no longer be patched: "
                                                     + ", ".join(eol_techs[:4]) + " (see 8.4).") if eol_techs else "")
@@ -117,13 +122,18 @@ def controls(sec_f, audit_logs, sources_of, eol_techs, financial=False) -> list:
             r_ = _sev_rating(fs)
             kinds, whys = [], []
             for f in sorted(fs, key=lambda f: SEV.index(f["severity"])):
-                w = P.what(f.get("rule") or "", f["title"])
+                w, y, _ = P.describe(f)
                 if w not in kinds:
                     kinds.append(w)
-                y = P.why(f.get("rule") or "")
                 if y and y not in whys:
                     whys.append(y)
-            row.update(rating=r_, seen=f"{len(fs)} issue(s): " + _cap(P.sentence(kinds[:3])) + ".",
+            cves = [f for f in fs if f.get("rule") == "CVE"]
+            if len(cves) > 1:
+                sub_ = P._subject(cves[0]["title"]) or "a component"
+                kinds = [f"{len(cves)} published security weaknesses (CVEs) exist in {sub_}" if k.startswith("a published security weakness")
+                         else k for k in kinds]
+            many = f" ({len(fs)} places)" if len(fs) > 1 and not (len(cves) == len(fs)) else ""
+            row.update(rating=r_, seen=_cap(P.sentence(kinds[:3])) + many + ".",
                        gap=(_cap(P.sentence(whys[:2])) + ".") if whys else "See 8.3",
                        why=f"{r_} – {LEVEL[r_]}: the most serious issue here is "
                            f"{min((f['severity'] for f in fs), key=SEV.index)}")
@@ -150,7 +160,7 @@ def posture(rows) -> tuple:
         return None, "Insufficient evidence: no security control could be assessed from the code."
     worst, mean = max(rated), sum(rated) / len(rated)
     c = max(math.floor(mean + 0.5), worst - 1)
-    poor = [r["area"].lower() for r in rows if r["rating"] and r["rating"] >= 4]
+    poor = [{"privileged": "privileged and service accounts"}.get(r["area"].lower(), r["area"].lower()) for r in rows if r["rating"] and r["rating"] >= 4]
     na = sum(1 for r in rows if not r["rating"])
     txt = (f"{words(c)}. Derived from the {len(rated)} controls in 8.1 that the code shows (average {mean:.1f}, worst "
            f"{worst}; the posture is never rated more than one level better than the worst control)."
@@ -277,32 +287,44 @@ def scorecard(comps, AM, sec_rating, sec_text, facts) -> dict:
         return rating, txt
 
     out["Technology currency"] = from_code(["supportability"], "technology currency", [
-        (1 if facts.get("skills") and len(facts["skills"]) >= 3 else 0,
-         f"Scarce skills are needed on {len(facts.get('skills') or [])} platforms ({', '.join(facts.get('skills') or [])}).")])
+        (0,
+         f"It needs {len(facts.get('skills') or [])} required skill sets ({P.sentence(facts.get('skills') or [])}).")])
+    if facts.get('confirmed_support') is False:
+        out['Technology currency'] = (None, 'Insufficient evidence: deployed versions and vendor support entitlement are unconfirmed. Specialist maintenance skills are identified; available support cover needs confirmation.')
     out["Code quality"] = from_code(["tech_debt", "complexity"], "code quality", [
-        (1 if not facts.get("tests") else 0, "No automated tests were found, so no change can be verified automatically.")])
+        (1 if not facts.get("tests") else 0, "No test files were identified in the supplied source; existing test coverage and baseline outputs are to confirm.")])
     out["Stability and reliability"] = from_code(["health"], "stability", [
         (1 if facts.get("silent_errors") else 0,
          f"Errors are swallowed in {', '.join(facts.get('silent_errors') or [])}, so a failure can look like success.")])
+    hi = facts.get("review_high") or []
+    st, st_txt = out["Stability and reliability"]
+    if hi and st:
+        floor = 4 if len(hi) >= 3 else 3
+        if floor > st:
+            st_txt += (f" The line-by-line review found {len(hi)} high-severity defect{'s' if len(hi) > 1 else ''} "
+                       f"(3.6), for example: {hi[0]}. Rating moved from {st} to {floor}.")
+            st = floor
+        out["Stability and reliability"] = (st, st_txt)
     out["Performance and scalability"] = (None, "Insufficient evidence: needs run times, batch window and peak volumes "
                                                 "from operations (see 6.3). Not included in the overall rating.")
     out["Security posture"] = (sec_rating, sec_text)
     out["Documentation and knowledge"] = (None, "Insufficient evidence: no design documents, run books or data "
                                                 "dictionaries were provided. Indicators: " + P.sentence([x for x in (
-        "no automated tests" if not facts.get("tests") else "",
-        f"file layouts documented only in code ({facts['files']} file interface(s))" if facts.get("files") else "",
-        f"scarce skills on {len(facts.get('skills') or [])} platform(s)" if facts.get("skills") else "") if x])
+        "no automated test files identified in supplied source" if not facts.get("tests") else "",
+        f"file layouts found in supplied code ({facts['files']} file interface(s))" if facts.get("files") else "",
+        f"{len(facts.get('skills') or [])} required skill sets" if facts.get("skills") else "") if x])
                                           + ". Not included in the overall rating.")
     arch = []
     p = facts.get("platforms") or 1
     arch.append((1 if p <= 1 else 2 if p == 2 else 3 if p == 3 else 4 if p <= 5 else 5,
                  f"it runs on {p} platform(s)"))
     if facts.get("file_only"):
-        arch.append((3, "components exchange data only through files and shared databases, with no service or API layer"
-                        if not facts.get("apis") else "most exchanges are files and shared databases; APIs are few"))
+        arch.append((3, ("supplied components exchange data through files and shared databases; no service or API layer was identified"
+                         if facts.get("shared") else "no service or API layer was identified in supplied source, and no supplied component uses data another "
+                         "one writes") if not facts.get("apis") else "most exchanges are files and shared databases; APIs are few"))
     mc = facts.get("max_copies") or 0
     if mc >= 3:
-        arch.append((4 if mc >= 4 else 3, f"{facts.get('frag_entity') or 'core'} data is held in {mc} places with no named "
+        arch.append((4 if mc >= 4 else 3, f"{(facts.get('frag_entity') or 'core').lower()} data is held in {mc} places with no named "
                                            f"system of record"))
     cpl = _weakest(mat, ["coupling"])
     if cpl:
@@ -331,7 +353,7 @@ def overall_text(sc, confidence) -> str:
     overall, raw, cov, cap = sc["overall"]
     if not overall:
         return "Insufficient evidence"
-    return (f"{words(overall)}. Weighted average {raw:.1f} across the rated areas, rounded half up"
+    return (f"{words(overall)}. Weighted average {raw:.2f} across the rated areas, rounded half up"
             + f" to {math.floor(raw + 0.5)}.{cap} Evidence coverage: {round(cov * 100)}% of the scorecard weight; "
             f"assessment confidence: {confidence}.")
 

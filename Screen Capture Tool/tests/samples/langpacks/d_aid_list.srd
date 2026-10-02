@@ -1,0 +1,6 @@
+$PBExportHeader$d_aid_list.srd
+release 12;
+datawindow(units=0 processing=0 print.margin.left=110 )
+table(column=(type=char(4) updatewhereclause=yes name=district_id dbname="aid_payment.district_id" )
+ column=(type=decimal(2) updatewhereclause=yes name=amount dbname="aid_payment.amount" )
+ retrieve="PBSELECT( VERSION(400) TABLE(NAME=~"aid_payment~" ) COLUMN(NAME=~"aid_payment.district_id~") COLUMN(NAME=~"aid_payment.amount~"))" update="aid_payment" updatewhere=1 updatekeyinplace=no )

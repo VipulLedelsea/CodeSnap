@@ -370,21 +370,27 @@ function renderStatus(events) {
 }
 
 async function pollStatus() {
+  if (pollStatus.pending) return;
+  pollStatus.pending = true;
+  const request = pollStatus.sequence = (pollStatus.sequence || 0) + 1;
   try {
     const r = await fetch("/api/session/status");
     const d = await r.json();
+    if (request !== pollStatus.sequence) return;
     renderStatus(d.events || []);
     renderFlow(d.events || []);
     setRunning(d.running);
     const evs = d.events || [];
     const analyzing = d.running && evs.some(e => e.kind === "tool") && !evs.some(e => e.kind === "done" || e.kind === "end");
     if (analyzing) startAnalyzing(); else stopAnalyzing();
-    if ((d.events || []).length !== lastEventCount) {
-      lastEventCount = (d.events || []).length;
+    const revision = JSON.stringify(d.events || []);
+    if (revision !== lastEventCount) {
+      lastEventCount = revision;
       loadReports();
-      if (typeof loadProgram === "function" && _program) loadProgram();
+      if (typeof loadProgram === "function" && _program) loadProgram(true);
     }
   } catch (e) {}
+  finally { pollStatus.pending = false; }
 }
 
 function setRunning(running) {
@@ -431,7 +437,8 @@ $("startBtn").addEventListener("click", async () => {
       params.set("program", _program);
     }
     if (_view === "review" && _captureKind !== "code") params.set("capture_kind", _captureKind);
-    if (_display || (pickedRegion && _shotDisplay)) params.set("display", _display || _shotDisplay);
+    const captureDisplay = pickedRegion ? pickedRegionDisplay : _display;
+    if (captureDisplay) params.set("display", captureDisplay);
     const qs = params.toString();
     await fetch("/api/session/start" + (qs ? "?" + qs : ""), { method: "POST" });
     const manual = idle === 0;
@@ -450,6 +457,7 @@ window.downloadReport = downloadReport;
 
 
 // ── Pick code area (drag-select over a screenshot) ───────────────────────────
+let pickedRegionDisplay = "";
 let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
 
 (function () {
@@ -459,6 +467,8 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
   if (!modal) return;
 
   let box = null, active = false;   // box = selection coords; active = mouse button held
+  let marginMode = false, marginX = null, spacingReference = null;
+  const marginLine = $("sourceMarginLine"), marginBtn = $("regionMargin"), spacingHint = $("regionSpacingHint");
 
   function openModal() { modal.style.display = "flex"; }
   function closeModal() { modal.style.display = "none"; box = null; active = false; }
@@ -472,6 +482,7 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
       const res = await fetch("/api/screen.png?notify=1" + (_display ? "&display=" + _display : "") + "&t=" + Date.now());
       if (!res.ok) throw new Error("screenshot failed");
       _shotDisplay = res.headers.get("X-CodeSnap-Display") || "";
+      spacingReference = res.headers.get("X-CodeSnap-Spacing-Reference");
       const blob = await res.blob();
       shot.src = URL.createObjectURL(blob);
       shot.onload = () => { shot.style.opacity = "1"; msg.style.display = "none"; };
@@ -479,6 +490,7 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
       msg.textContent = "Couldn't grab the screen — grant Screen Recording permission and retry.";
     }
     sel.style.display = "none"; useBtn.disabled = true; box = null; active = false;
+    marginMode=false; marginX=null; if (marginLine) marginLine.style.display="none";
   }
 
   function imgRect() { return shot.getBoundingClientRect(); }
@@ -494,12 +506,34 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
     useBtn.disabled = (w < 8 || h < 8);
   }
 
+  function drawMargin(x) {
+    const sr = stage.getBoundingClientRect();
+    marginLine.style.cssText = `display:block;position:absolute;width:2px;background:#ef4444;pointer-events:none;z-index:3;left:${x-sr.left}px;top:${Math.min(box.y0,box.y1)-sr.top}px;height:${Math.abs(box.y1-box.y0)}px`;
+  }
+
   stage.addEventListener("mousedown", (e) => {
+    if (marginMode && box) {
+      const left=Math.min(box.x0,box.x1), right=Math.max(box.x0,box.x1);
+      const top=Math.min(box.y0,box.y1), bottom=Math.max(box.y0,box.y1);
+      if (e.clientX < left || e.clientX >= right || e.clientY < top || e.clientY >= bottom) { toast("Move the red line inside the selected code area, then click to lock it."); return; }
+      marginX=e.clientX; marginMode=false;
+      drawMargin(marginX);
+      spacingHint.textContent="Red line locked at the start of the code, before any spaces. Choose Use this area to save. Reset after moving, zooming or scrolling sideways.";
+      e.preventDefault(); return;
+    }
+    marginX=null; if (marginLine) marginLine.style.display="none";
     active = true;
     box = { x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY };
     drawSel(); e.preventDefault();
   });
-  window.addEventListener("mousemove", (e) => { if (active && box) { box.x1 = e.clientX; box.y1 = e.clientY; drawSel(); } });
+  window.addEventListener("mousemove", (e) => {
+    if (marginMode && box) {
+      const left=Math.min(box.x0,box.x1), right=Math.max(box.x0,box.x1);
+      const top=Math.min(box.y0,box.y1), bottom=Math.max(box.y0,box.y1);
+      if (e.clientX >= left && e.clientX < right && e.clientY >= top && e.clientY < bottom) drawMargin(e.clientX);
+      else marginLine.style.display="none";
+    } else if (active && box) { box.x1 = e.clientX; box.y1 = e.clientY; drawSel(); }
+  });
   window.addEventListener("mouseup", () => { active = false; });   // box stays put after release
 
   function fractions() {
@@ -514,18 +548,39 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
 
   $("pickAreaBtn").addEventListener("click", () => { openModal(); loadShot(3); });
   $("regionRetake").addEventListener("click", () => loadShot(3));
+  if (marginBtn) marginBtn.addEventListener("click", () => {
+    if (!box || useBtn.disabled) { toast("Draw the source area first."); return; }
+    marginMode=true;
+    drawMargin(marginX === null ? Math.min(box.x0,box.x1) : marginX);
+    spacingHint.textContent="Move your mouse over the code: the red line follows it. Line it up where each line can begin, before any spaces, then click to lock it. Keep the editor scrolled fully left.";
+  });
   $("regionCancel").addEventListener("click", closeModal);
-  $("regionUse").addEventListener("click", () => {
+  $("regionUse").addEventListener("click", async () => {
     if (!box) return;
-    const f = fractions().map(v => v.toFixed(4));
-    pickedRegion = f.join(",");
-    statusEl.textContent = "Capturing a selected area only";
+    const f = fractions();
+    const region = f.join(",");
+    const settings={region, display: _shotDisplay || _display};
+    if (marginX !== null) {
+      const r=imgRect();
+      settings.spacing_origin=(((marginX-r.left)/r.width)-Number(f[0]))/Number(f[2]);
+      settings.spacing_reference=spacingReference;
+    } else settings.clear_spacing=true;
+    try {
+      await _json("/api/session/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
+    } catch (error) { toast(error.message); return; }
+    pickedRegion = region;
+    pickedRegionDisplay = _shotDisplay || _display;
+    statusEl.textContent = marginX !== null ? "Code area and source margin set" : "Capturing a selected area only — source margin unconfirmed";
     clearBtn.style.display = "";
     closeModal();
-    toast("Code area set — burst will capture just that box.");
+    toast("Code area set — the next capture will use this box on the selected screen.");
   });
-  clearBtn.addEventListener("click", () => {
+  clearBtn.addEventListener("click", async () => {
+    try {
+      await _json("/api/session/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({region: null, display: _display}) });
+    } catch (error) { toast(error.message); return; }
     pickedRegion = null;
+    pickedRegionDisplay = "";
     statusEl.textContent = "Capturing the full screen";
     clearBtn.style.display = "none";
   });
@@ -688,6 +743,8 @@ async function setProjectMode(on) {
       const params = new URLSearchParams();
       const idle = idleStopValue(); if (idle !== null) params.set("idle_stop", String(idle));
       if (pickedRegion) params.set("region", pickedRegion);
+      const screen = pickedRegion ? pickedRegionDisplay : _display;
+      if (screen) params.set("display", screen);
       if (on) params.set("project_mode", "true");
       await fetch("/api/session/start" + (params.toString() ? "?" + params.toString() : ""), { method: "POST" });
       pollStatus();
@@ -838,14 +895,16 @@ function renderProgress(d) {
     <div class="pp-bar">${seg(p.done, "ok")}${seg(p.needs_recapture + p.failed, "bad")}${seg(p.reviewing + p.reading, "busy")}${seg(p.waiting, "wait")}</div>`;
 }
 function _fileRow(a, pendingFor) {
-  const st = pendingFor ? (pendingFor.state === "waiting" ? "waiting" : "reading") : a.state;
-  const [label, cls] = STATE[st] || [a.status, ""];
+  const st = a.rebuild ? "reading" : pendingFor ? pendingFor.state : a.state;
+  const [label, cls] = a.rebuild ? ["Processing again", "busy"] : STATE[st] || [a.status, ""];
   const rc = a.recapture;
   let note = "";
-  if (pendingFor) note = `<div class="pf-note busy">Recapture in progress${pendingFor.pending && pendingFor.pending.frames ? ` — read ${pendingFor.pending.read || 0} of ${pendingFor.pending.frames} screenshots` : ""}.</div>`;
+  if (a.rebuild) note = `<div class="pf-note busy">${escapeHtml(a.rebuild.stage)}${a.rebuild.total ? ` — ${a.rebuild.done}/${a.rebuild.total} screenshots read` : ""}.</div>`;
+  else if (pendingFor && st === "failed") note = `<div class="pf-note bad">Recapture couldn't be read: ${escapeHtml((pendingFor.pending || {}).error || "Reading failed.")} <button class="btn-link" data-act="retry" data-artifact-id="${pendingFor.id}" type="button">Retry</button></div>`;
+  else if (pendingFor) note = `<div class="pf-note busy">Recapture in progress${pendingFor.pending && pendingFor.pending.frames ? ` — read ${pendingFor.pending.read || 0} of ${pendingFor.pending.frames} screenshots` : ""}.</div>`;
   else if (rc && rc.result === "fixed") note = `<div class="pf-note ok">✓ Fixed by the recapture (now v${rc.version})${rc.fixed.length ? " — no more " + [...new Set(rc.fixed.filter(i => !(i.kind === "partial" && rc.fixed.some(j => j.kind === "cut"))).map(i => FIXED[i.kind] || "problems"))].join(" or ") : ""}.</div>`;
-  else if (rc && rc.result === "still") note = `<div class="pf-note bad">Recaptured as v${rc.version}, but it still needs work: ${_issues(rc.remaining).toLowerCase()}. <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
-  else if (st === "needs_recapture") note = `<div class="pf-note bad">${_issues(a.quality.issues)}. <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
+  else if (rc && rc.result === "still") note = `<div class="pf-note bad">Recaptured as v${rc.version}, but it still needs work: ${_issues(rc.remaining).toLowerCase()}. <button class="btn-link" data-act="review-lines" type="button">Review with screenshots</button> <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
+  else if (st === "needs_recapture") note = `<div class="pf-note bad">${_issues(a.quality.issues)}. <button class="btn-link" data-act="review-lines" type="button">Review with screenshots</button> <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
   else if (st === "failed" && a.pending && a.pending.error) note = `<div class="pf-note bad">${escapeHtml(a.pending.error)} <button class="btn-link" data-act="retry" type="button">Retry</button></div>`;
   const reading = st === "reading" && a.pending && a.pending.frames ? ` · ${a.pending.read || 0}/${a.pending.frames}` : "";
   return `
@@ -856,7 +915,9 @@ function _fileRow(a, pendingFor) {
         <span class="pf-state ${cls}">${label}${reading}</span>
         <span class="pf-menu" tabindex="0">⋯<span class="pf-acts">
           <button class="btn-link" data-act="rename" type="button">Rename</button>
+          <button class="btn-link" data-act="remove" type="button">Remove from analysis</button>
           ${a.status === "captured" ? "" : `<button class="btn-link" data-act="recapture" type="button">Recapture</button>
+          ${a.artifact_type === "ui_screen" ? "" : `<button class="btn-link" data-act="rebuild" type="button">Rebuild saved capture</button>`}
           <button class="btn-link" data-act="add" type="button">Add screenshots</button>`}
         </span></span>
         ${note}
@@ -865,19 +926,52 @@ function _fileRow(a, pendingFor) {
     </details>`;
 }
 let _progSig = "";
+const _localRebuilds = new Map();
+function _programRenderSignature(rows, recaps, d) {
+  return JSON.stringify([rows.map(a => [a.id, a.name, a.language, a.artifact_type, a.version, a.state,
+    a.recapture, a.quality, a.rebuild, a.pending]), recaps, d.recapture_target, d.session_running,
+    d.waiting, d.coverage, d.revision]);
+}
 async function loadProgram(poll) {
   const body = $("progBody");
   if (!_program) { body.style.display = "none"; $("progSub").textContent = "Pick a program, or create one."; return; }
+  const program = _program;
+  if (poll && loadProgram.pending && loadProgram.pending.program === program) return;
+  const request = loadProgram.sequence = (loadProgram.sequence || 0) + 1;
+  const pending = loadProgram.pending = {program, request};
   let d;
-  try { d = await _json("/api/programs/" + encodeURIComponent(_program)); }
-  catch (e) { if (!poll) toast(e.message); return; }
+  try { d = await _json("/api/programs/" + encodeURIComponent(program)); }
+  catch (e) {
+    if (program === _program && request === loadProgram.sequence) {
+      if (!poll) toast(e.message);
+      scheduleProgramPoll({session_running: true});
+    }
+    return;
+  }
+  finally { if (loadProgram.pending === pending) loadProgram.pending = null; }
+  if (program !== _program || request !== loadProgram.sequence) return;
+  const revision = `${program}:${d.revision || ""}`;
+  const changed = loadProgram.revision !== revision;
+  loadProgram.revision = revision;
   body.style.display = "block";
   $("progSub").textContent = d.program.description || `${d.progress.total} file${d.progress.total === 1 ? "" : "s"} in this program.`;
+  d.artifacts.forEach(a => {
+    const local = _localRebuilds.get(`${_program}:${a.name}`);
+    if (local && !a.rebuild) {
+      const p = d.progress;
+      if (p[a.state] > 0) p[a.state]--;
+      if (["done", "needs_recapture", "failed"].includes(a.state)) { p.finished--; p.to_go++; }
+      p.reading++;
+      p.pct = p.total ? Math.round(100 * p.finished / p.total) : 0;
+      a.rebuild = local;
+      a.state = "reading";
+    }
+  });
   renderProgress(d);
   const recaps = {};
   d.artifacts.forEach(a => { const t = a.pending && a.pending.recapture_of; if (t && d.artifacts.some(x => x.name === t && x.id !== a.id)) recaps[t] = a; });
   const rows = d.artifacts.filter(a => !(a.pending && recaps[a.pending.recapture_of] === a));
-  const sig = JSON.stringify([rows.map(a => [a.id, a.version, a.state, a.recapture && a.recapture.result, (a.pending || {}).read]), Object.keys(recaps), d.recapture_target]);
+  const sig = _programRenderSignature(rows, recaps, d);
   scheduleProgramPoll(d);
   if (poll && sig === _progSig) return;
   _progSig = sig;
@@ -886,9 +980,10 @@ async function loadProgram(poll) {
     : `<p class="project-hint" style="margin:0">No files yet — start a capture. Each start/stop becomes one file.</p>`;
   renderCaptureBar(d);
   document.querySelectorAll("#progFiles [data-act]").forEach(b => b.addEventListener("click", ev => {
-    ev.preventDefault(); ev.stopPropagation(); fileAction(b.closest(".prog-file"), b.dataset.act);
+    ev.preventDefault(); ev.stopPropagation(); fileAction(b.closest(".prog-file"), b.dataset.act, b.dataset.artifactId);
   }));
   document.querySelectorAll("#progFiles .prog-file").forEach(el => {
+    el.dataset.program = program;
     el.addEventListener("toggle", () => { if (el.open) loadArtifact(el); });
     if (open.has(el.dataset.id)) el.open = true;
   });
@@ -903,7 +998,7 @@ async function loadProgram(poll) {
     const by = (m.referenced_by || []).slice(0, 2).map(r => r.artifact || r.name).join(", ");
     return `<div class="pm"><span class="pm-cat ${_attr(m.category)}">${catLabel[m.category] || m.category}</span> <b>${escapeHtml(m.name)}</b> <small>${escapeHtml(m.kind)}${by ? " · used in " + escapeHtml(by) : ""}</small></div>`;
   }).join("") : "";
-  if (poll) return;
+  if (poll && !changed) return;
   if ($("progFlowsBox").open) loadProgramFlows();
   if ($("progMapBox").open) loadProgramMap();
   if ($("progSecBox").open) loadProgramFindings();
@@ -933,7 +1028,7 @@ async function loadDisplays() {
     `<option value="${d.index}">Screen ${d.index}${d.primary ? " (main)" : ""} — ${d.pixels[0]}×${d.pixels[1]}</option>`).join("");
   sel.style.display = "";
   sel.value = _display;
-  sel.onchange = () => { _display = sel.value; if (pickedRegion) $("clearAreaBtn").click(); toast(_display ? `Capturing screen ${_display}. Pick the code area again if you had one.` : "Capturing the screen under the mouse."); };
+  sel.onchange = async () => { _display = sel.value; if (pickedRegion) $("clearAreaBtn").click(); else { try { await _json("/api/session/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({region: null, display: _display}) }); } catch (error) { toast(error.message); return; } } toast(_display ? `Capturing screen ${_display}. Pick the code area again if you had one.` : "Capturing the screen under the mouse."); };
 }
 loadDisplays();
 const DEEP_GROUPS = [["What it does", ["purpose", "control_flow"]], ["Business rules and calculations", ["business_rule", "calculation", "configuration"]],
@@ -992,45 +1087,77 @@ function pickImages() {
     inp.click();
   });
 }
-async function fileAction(el, act) {
-  const id = el.dataset.id, name = el.dataset.name;
+async function fileAction(el, act, targetId) {
+  const program = el.dataset.program || _program;
+  const actionBase = `/api/programs/${encodeURIComponent(program)}`;
+  const id = targetId || el.dataset.id, name = el.dataset.name;
   try {
-    if (act === "rename") {
+    if (act === "review-lines") {
+      const base = actionBase;
+      const d = await _json(`${base}/artifacts/${id}`);
+      if (!(d.review_lines || []).length) { toast("This warning needs additional screenshots; no single source line can resolve it."); return; }
+      await openLineReview(base, id, d.review_lines);
+      return;
+    } else if (act === "remove") {
+      if (!window.confirm(`Remove ${name} and its capture history from analysis? Its findings, screenshots and old report exports will be removed. Your original source file will stay on disk.`)) return;
+      await _json(`${actionBase}/artifacts/${id}`, { method: "DELETE" });
+      _progSig = "";
+      toast("File removed. The report will rebuild from the remaining files.");
+    } else if (act === "rename") {
       el.open = true;
       const v = await inlineAsk(el, [{ name: "name", label: "File name", value: name }]);
       if (!v || !v.name.trim() || v.name.trim() === name) return;
-      await _json(`${_pbase()}/artifacts/${id}/rename`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: v.name.trim() }) });
+      await _json(`${actionBase}/artifacts/${id}/rename`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: v.name.trim() }) });
       toast("Renamed.");
+    } else if (act === "rebuild") {
+      if (!window.confirm(`Rebuild ${name} from its saved screenshots? This uses cached text with no new API calls and keeps the previous version.`)) return;
+      toast("Rebuilding from saved screenshots…");
+      const base = actionBase;
+      const key = `${program}:${name}`;
+      _localRebuilds.set(key, { stage: "Sent for processing again", done: 0, total: 0 });
+      _progSig = "";
+      await loadProgram();
+      try {
+        const r = await _json(`${base}/artifacts/${id}/rebuild`, { method: "POST" });
+        const flags = (r.verification.flags || []).length;
+        const result = r.validation.checked && !r.validation.ok ? "Source check still reports errors." : flags ? `${flags} text warning(s) still need review.` : "Source checks complete.";
+        toast(`Rebuilt ${r.lines} lines as v${r.version}. ${result} No API charge; previous version kept.`);
+      } finally {
+        _localRebuilds.delete(key);
+        _progSig = "";
+      }
     } else if (act === "recapture") {
-      await _json(`${_pbase()}/recapture`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_id: Number(id) }) });
+      await _json(`${actionBase}/recapture`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_id: Number(id) }) });
       toast(`Next capture becomes a new version of ${name}. Start a capture when ready.`);
     } else if (act === "add") {
       el.open = true;
       const v = await inlineAsk(el, [{ name: "how", label: "Add screenshots by", options: ["capturing more of it", "choosing image files"] }]);
       if (!v) return;
       if (v.how.startsWith("capturing")) {
-        await _json(`${_pbase()}/recapture`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_id: Number(id), mode: "append" }) });
+        await _json(`${actionBase}/recapture`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_id: Number(id), mode: "append" }) });
         toast(`Next capture adds to ${name} — capture the part that was missing.`);
       } else {
         const files = await pickImages();
         if (!files.length) return;
-        const r = await _json(`${_pbase()}/artifacts/${id}/screenshots`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ images: files }) });
+        const r = await _json(`${actionBase}/artifacts/${id}/screenshots`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ images: files }) });
         toast(`Added ${r.added} screenshot(s); re-reading ${name} from all ${r.frames}. ${r.note || ""}`);
       }
     } else if (act === "retry") {
-      const r = await _json(`${_pbase()}/artifacts/${id}/retry`, { method: "POST" });
+      const r = await _json(`${actionBase}/artifacts/${id}/retry`, { method: "POST" });
       toast(r.note || "Queued.");
     }
   } catch (e) { toast(e.message); }
   loadProgram();
 }
 async function loadArtifact(el) {
+  const program = el.dataset.program || _program;
+  const base = `/api/programs/${encodeURIComponent(program)}`;
   const box = el.querySelector(".pf-detail");
   box.innerHTML = `<span class="project-hint">Loading…</span>`;
   let d;
-  try { d = await _json(`/api/programs/${encodeURIComponent(_program)}/artifacts/${el.dataset.id}`); }
+  try { d = await _json(`${base}/artifacts/${el.dataset.id}`); }
   catch (e) { box.textContent = e.message; return; }
-  const base = `/api/programs/${encodeURIComponent(_program)}`;
+  if (program !== _program || !el.isConnected) return;
   const errs = d.artifact.validation_ok === 0 ? `<div class="project-hint">Compiler: ${escapeHtml((d.artifact.validation_errors || "").slice(0, 300))}</div>` : "";
   box.innerHTML = `
     <div class="pf-type">Type <select class="pf-type-select">${ARTIFACT_TYPES.map(t =>
@@ -1039,6 +1166,7 @@ async function loadArtifact(el) {
       <button class="btn-link pf-save" type="button">Rename</button>
       <button class="btn-link pf-re" type="button">Re-extract</button></div>
     ${errs}
+    ${(d.review_lines || []).length ? `<div class="line-review-start"><button class="btn-secondary pf-review-lines" type="button">Review ${d.review_lines.length} line(s) with screenshots</button><span>See the saved evidence and answer one question at a time.</span></div>` : ""}
     ${_checkHtml(d.verification)}
     ${_deepHtml(d.deep, d.deep_current, d.quality)}
     ${profileHtml(d.profile)}
@@ -1047,6 +1175,7 @@ async function loadArtifact(el) {
       <select class="pf-vof"><option value="">choose a file…</option>${[...document.querySelectorAll("#progFiles .prog-file")].filter(x => x.dataset.id !== el.dataset.id).map(x => `<option value="${_attr(x.dataset.id)}">${escapeHtml(x.dataset.name)}</option>`).join("")}</select>
       <button class="btn-link pf-vof-go" type="button">Apply</button></div>
     <div class="pf-frames">${d.evidence.map(ev => `<a href="${base}/evidence/${ev.id}" target="_blank" rel="noopener"><img src="${base}/evidence/${ev.id}" alt="frame ${ev.ord + 1}" loading="lazy"></a>`).join("")}</div>`;
+  if (box.querySelector(".pf-review-lines")) box.querySelector(".pf-review-lines").addEventListener("click", () => openLineReview(base, el.dataset.id, d.review_lines));
   box.querySelector(".pf-type-select").addEventListener("change", async (ev) => {
     try {
       const r = await _json(`${base}/artifacts/${el.dataset.id}/type`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_type: ev.target.value }) });
@@ -1090,13 +1219,16 @@ function profileHtml(p) {
   return bits.length ? `<div class="pf-profile">${escapeHtml(p.language || "")} · ${bits.join(" · ")}</div>` : "";
 }
 async function loadProgramFlows() {
+  const program = _program;
+  const request = loadProgramFlows.sequence = (loadProgramFlows.sequence || 0) + 1;
   const box = $("progFlows");
   try {
-    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/flows?limit=200`);
+    const d = await _json(`/api/programs/${encodeURIComponent(program)}/flows?limit=200`);
+    if (program !== _program || request !== loadProgramFlows.sequence) return;
     if (!d.flows.length) { box.innerHTML = `<p class="project-hint">No flows yet — capture entry points (screens, endpoints, jobs) and the code they call.</p>`; return; }
     box.innerHTML = `<p class="project-hint">${d.total} flow(s)</p>` + d.flows.map(f =>
       `<div class="pf-flow"><b>${escapeHtml(f.entry)}</b> <small>${escapeHtml(f.entry_kind)}</small> → ${f.steps.map(s => escapeHtml(s.to)).join(" → ")} <small>(${escapeHtml(f.access || "")} ${escapeHtml(f.target_kind)})</small></div>`).join("");
-  } catch (e) { box.textContent = e.message; }
+  } catch (e) { if (program !== _program) return; box.textContent = e.message; }
 }
 const _SEV = ["critical", "high", "medium", "low", "info"];
 let _findings = [];
@@ -1115,6 +1247,7 @@ function _refTags(r) {
   return out.map(t => `<span class="ref">${escapeHtml(t)}</span>`).join("");
 }
 function findingList(box, rows, onUpdate) {
+  const program = _program;
   const base = `/api/programs/${encodeURIComponent(_program)}`;
   box.innerHTML = rows.map(f => {
     const ev = (f.evidence || []).map(e => {
@@ -1131,14 +1264,14 @@ function findingList(box, rows, onUpdate) {
   box.querySelectorAll(".sec-sev").forEach(sel => sel.addEventListener("change", async () => {
     const f = rows.find(x => String(x.id) === sel.closest(".sec-f").dataset.id);
     if (!sel.value || !f) return;
-    await applyCorrections([{ op: "finding.severity", payload: { sig: `${f.rule || f.category}|${f.title}`, severity: sel.value } }], "severity corrected from findings list");
-    onUpdate({ ...f, severity: sel.value });
+    await applyCorrections([{ op: "finding.severity", payload: { sig: `${f.rule || f.category}|${f.title}`, severity: sel.value } }], "severity corrected from findings list", program);
+    if (program === _program) onUpdate({ ...f, severity: sel.value });
   }));
   box.querySelectorAll(".sec-actions button").forEach(b => b.addEventListener("click", async () => {
     const id = b.closest(".sec-f").dataset.id;
     try {
       const d = await _json(`${base}/findings/${id}/status`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: b.dataset.status }) });
-      onUpdate(d.finding);
+      if (program === _program) onUpdate(d.finding);
     } catch (e) { alert(e.message); }
   }));
 }
@@ -1173,14 +1306,19 @@ function renderUiReview() {
   findingList(list, rows, nf => { _uiFindings = _uiFindings.map(f => f.id === nf.id ? nf : f); renderUiReview(); });
 }
 async function loadUiReview() {
+  const program = _program;
+  const request = loadUiReview.sequence = (loadUiReview.sequence || 0) + 1;
   try {
-    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/ui`);
+    const d = await _json(`/api/programs/${encodeURIComponent(program)}/ui`);
+    if (program !== _program || request !== loadUiReview.sequence) return;
     _uiData = d; _uiFindings = d.findings || [];
     if (d.site && d.site.start && !$("progUiUrl").value) $("progUiUrl").value = d.site.start;
     renderUiReview();
-  } catch (e) { $("progUi").textContent = e.message; }
+  } catch (e) { if (program !== _program) return; $("progUi").textContent = e.message; }
 }
 async function runUiReview(withSite) {
+  const program = _program;
+  const request = runUiReview.sequence = (runUiReview.sequence || 0) + 1;
   const btn = withSite ? $("progUiScan") : $("progUiRun");
   const url = $("progUiUrl").value.trim();
   if (withSite && !url) { toast("Enter the site URL first."); return; }
@@ -1189,16 +1327,18 @@ async function runUiReview(withSite) {
   try {
     const qs = new URLSearchParams();
     if (withSite) { qs.set("site_url", url); qs.set("max_pages", $("progUiPages").value || "10"); }
-    await _json(`/api/programs/${encodeURIComponent(_program)}/ui/review?${qs}`, { method: "POST" });
+    await _json(`/api/programs/${encodeURIComponent(program)}/ui/review?${qs}`, { method: "POST" });
+    if (program !== _program || request !== runUiReview.sequence) { btn.disabled = false; btn.textContent = label; return; }
     await loadUiReview();
-  } catch (e) { $("progUi").textContent = e.message; }
+  } catch (e) { if (program !== _program) { btn.disabled = false; btn.textContent = label; return; } $("progUi").textContent = e.message; }
   btn.disabled = false; btn.textContent = label;
 }
 function _impactHtml(impact, warnings) {
   return `<div class="fix-impact"><b>What changed</b><ul>${(impact || []).map(t => `<li>${escapeHtml(t)}</li>`).join("")}</ul>${(warnings || []).map(w => `<p class="project-hint">${escapeHtml(w)}</p>`).join("")}</div>`;
 }
-async function applyCorrections(ops, note) {
-  const d = await _json(`/api/programs/${encodeURIComponent(_program)}/corrections`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ops, note: note || "" }) });
+async function applyCorrections(ops, note, program = _program) {
+  const d = await _json(`/api/programs/${encodeURIComponent(program)}/corrections`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ops, note: note || "" }) });
+  if (program !== _program) return d;
   $("progFixImpact").innerHTML = _impactHtml(d.impact, d.warnings);
   toast((d.impact || [])[0] || "Correction applied.");
   await loadCorrections();
@@ -1207,29 +1347,36 @@ async function applyCorrections(ops, note) {
   return d;
 }
 async function loadCorrections() {
+  const program = _program;
+  const request = loadCorrections.sequence = (loadCorrections.sequence || 0) + 1;
   try {
-    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/corrections`);
+    const d = await _json(`/api/programs/${encodeURIComponent(program)}/corrections`);
+    if (program !== _program || request !== loadCorrections.sequence) return;
     const active = d.corrections.filter(c => c.active).length;
     $("progFixSummary").innerHTML = `Corrections &amp; feedback ${active ? `<span class="sev low">${active} active</span>` : ""}`;
     $("progFixLog").innerHTML = d.corrections.length ? d.corrections.slice().reverse().map(c => `<div class="fix-row ${c.active ? "" : "undone"}"><span>${escapeHtml(c.description)}</span>${c.note ? ` <small>— ${escapeHtml(c.note)}</small>` : ""} <small>${escapeHtml((c.created || "").slice(0, 16).replace("T", " "))}</small>${c.active && c.undoable ? ` <button class="btn-link fix-undo" data-id="${c.id}" type="button">undo</button>` : c.active ? "" : " <small>(undone)</small>"}</div>`).join("") : `<p class="project-hint">No corrections yet. Corrections survive re-capture, re-scan and re-assessment.</p>`;
     $("progFixLog").querySelectorAll(".fix-undo").forEach(b => b.addEventListener("click", async () => {
       try {
-        const r = await _json(`/api/programs/${encodeURIComponent(_program)}/corrections/${b.dataset.id}/undo`, { method: "POST" });
+        const r = await _json(`/api/programs/${encodeURIComponent(program)}/corrections/${b.dataset.id}/undo`, { method: "POST" });
+    if (program !== _program || request !== loadCorrections.sequence) return;
         $("progFixImpact").innerHTML = _impactHtml(r.impact, r.warnings);
         loadCorrections();
         await loadProgram();
         if ($("progFixSearch").value.trim().length >= 2) searchEntities();
         if ($("progAssessBox").open) loadAssessment();
-      } catch (e) { toast(e.message); }
+      } catch (e) { if (program !== _program) return; toast(e.message); }
     }));
-  } catch (e) { $("progFixLog").textContent = e.message; }
+  } catch (e) { if (program !== _program) return; $("progFixLog").textContent = e.message; }
 }
 async function interpretCorrection() {
+  const program = _program;
+  const request = interpretCorrection.sequence = (interpretCorrection.sequence || 0) + 1;
   const text = $("progFixText").value.trim();
   if (!text) { toast("Describe the correction first."); return; }
   const btn = $("progFixInterpret"); btn.disabled = true; btn.textContent = "Interpreting…";
   try {
-    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/corrections/interpret`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    const d = await _json(`/api/programs/${encodeURIComponent(program)}/corrections/interpret`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    if (program !== _program || request !== interpretCorrection.sequence) { btn.disabled = false; btn.textContent = "Review correction"; return; }
     const box = $("progFixProposal");
     if (!d.changes.length) { box.innerHTML = `<p class="project-hint">${escapeHtml(d.unclear || "Couldn't map that to a change — try naming the program, table or finding.")}</p>`; }
     else {
@@ -1238,11 +1385,11 @@ async function interpretCorrection() {
         + `<button class="btn-primary" id="progFixApply" type="button">Apply selected</button>`;
       $("progFixApply").addEventListener("click", async () => {
         const ops = [...box.querySelectorAll("input[type=checkbox]:checked")].map(x => d.changes[+x.dataset.i]).map(c => ({ op: c.op, payload: c.payload }));
-        if (!ops.length) return;
-        await applyCorrections(ops, text); box.innerHTML = ""; $("progFixText").value = "";
+        if (!ops.length) { btn.disabled = false; btn.textContent = "Review correction"; return; }
+        await applyCorrections(ops, text, program); box.innerHTML = ""; $("progFixText").value = "";
       });
     }
-  } catch (e) { $("progFixProposal").textContent = e.message; }
+  } catch (e) { if (program !== _program) { btn.disabled = false; btn.textContent = "Review correction"; return; } $("progFixProposal").textContent = e.message; }
   btn.disabled = false; btn.textContent = "Review correction";
 }
 let _fixTimer = null;
@@ -1268,11 +1415,14 @@ function inlineAsk(container, fields) {
   });
 }
 async function searchEntities() {
+  const program = _program;
+  const request = searchEntities.sequence = (searchEntities.sequence || 0) + 1;
   const q = $("progFixSearch").value.trim();
   const box = $("progFixResults");
   if (q.length < 2) { box.innerHTML = ""; return; }
   try {
-    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/entities/search?q=${encodeURIComponent(q)}`);
+    const d = await _json(`/api/programs/${encodeURIComponent(program)}/entities/search?q=${encodeURIComponent(q)}`);
+    if (program !== _program || request !== searchEntities.sequence) return;
     box.innerHTML = d.entities.map((e, i) => {
       const flags = [e.attrs.no_pii ? "no student data" : "", e.attrs.pii ? "student data" : "", e.attrs.hardcoded_secret === false ? "not a secret" : ""].filter(Boolean);
       const acts = [`<button class="btn-link" data-act="rename" type="button">rename</button>`,
@@ -1311,24 +1461,30 @@ async function searchEntities() {
         try { await applyCorrections([{ op: "relation.delete", payload: { kind: r.kind, from_key: r.from_key, to_key: r.to_key } }], ""); searchEntities(); } catch (err) { toast(err.message); }
       }));
     });
-  } catch (e) { box.textContent = e.message; }
+  } catch (e) { if (program !== _program) return; box.textContent = e.message; }
 }
 async function loadProgramFindings() {
+  const program = _program;
+  const request = loadProgramFindings.sequence = (loadProgramFindings.sequence || 0) + 1;
   try {
-    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/findings`);
+    const d = await _json(`/api/programs/${encodeURIComponent(program)}/findings`);
+    if (program !== _program || request !== loadProgramFindings.sequence) return;
     _findings = d.findings.filter(f => ["security", "eol", "vulnerability", "privacy"].includes(f.category));
     $("progSecSummary").innerHTML = `Security &amp; end-of-life ${_secSummary(d.summary)}`;
     renderFindings();
-  } catch (e) { $("progSec").textContent = e.message; }
+  } catch (e) { if (program !== _program) return; $("progSec").textContent = e.message; }
 }
 async function runSecurityScan() {
+  const program = _program;
+  const request = runSecurityScan.sequence = (runSecurityScan.sequence || 0) + 1;
   const btn = $("progSecScan");
   btn.disabled = true; btn.textContent = "Scanning…";
   try {
     const online = $("progSecOnline").checked ? "true" : "false";
-    await _json(`/api/programs/${encodeURIComponent(_program)}/security/scan?online=${online}`, { method: "POST" });
+    await _json(`/api/programs/${encodeURIComponent(program)}/security/scan?online=${online}`, { method: "POST" });
+    if (program !== _program || request !== runSecurityScan.sequence) { btn.disabled = false; btn.textContent = "Run scan"; return; }
     await loadProgramFindings();
-  } catch (e) { $("progSec").textContent = e.message; }
+  } catch (e) { if (program !== _program) { btn.disabled = false; btn.textContent = "Run scan"; return; } $("progSec").textContent = e.message; }
   btn.disabled = false; btn.textContent = "Run scan";
 }
 let _assess = null, _assessInputs = {};
@@ -1374,28 +1530,37 @@ function renderAssessment() {
   }));
 }
 async function saveAssessInput(name, vals) {
+  const program = _program;
+  const request = saveAssessInput.sequence = (saveAssessInput.sequence || 0) + 1;
   const cur = { ...((_assessInputs.components || {})[name] || {}) };
   if ("cots" in vals || "retire" in vals) { delete cur.cots; delete cur.retire; }
   const payload = { components: { [name]: { ...cur, ...vals } } };
   try {
-    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/assessment/inputs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const d = await _json(`/api/programs/${encodeURIComponent(program)}/assessment/inputs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    if (program !== _program || request !== saveAssessInput.sequence) return;
     _assess = d.assessment; _assessInputs = d.inputs; renderAssessment();
-  } catch (e) { alert(e.message); }
+  } catch (e) { if (program !== _program) return; alert(e.message); }
 }
 async function loadAssessment() {
+  const program = _program;
+  const request = loadAssessment.sequence = (loadAssessment.sequence || 0) + 1;
   try {
-    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/assessment`);
+    const d = await _json(`/api/programs/${encodeURIComponent(program)}/assessment`);
+    if (program !== _program || request !== loadAssessment.sequence) return;
     _assess = d.assessment; _assessInputs = d.inputs || {}; renderAssessment();
-  } catch (e) { $("progAssess").textContent = e.message; }
+  } catch (e) { if (program !== _program) return; $("progAssess").textContent = e.message; }
 }
 async function runAssessment() {
+  const program = _program;
+  const request = runAssessment.sequence = (runAssessment.sequence || 0) + 1;
   const btn = $("progAssessRun");
   btn.disabled = true; btn.textContent = "Assessing…";
   try {
-    const d = await _json(`/api/programs/${encodeURIComponent(_program)}/assessment?online=${$("progSecOnline").checked}`, { method: "POST" });
+    const d = await _json(`/api/programs/${encodeURIComponent(program)}/assessment?online=${$("progSecOnline").checked}`, { method: "POST" });
+    if (program !== _program || request !== runAssessment.sequence) { btn.disabled = false; btn.textContent = "Run assessment"; return; }
     _assess = d.assessment; _assessInputs = d.inputs || {}; renderAssessment();
     if ($("progSecBox").open) loadProgramFindings();
-  } catch (e) { $("progAssess").textContent = e.message; }
+  } catch (e) { if (program !== _program) { btn.disabled = false; btn.textContent = "Run assessment"; return; } $("progAssess").textContent = e.message; }
   btn.disabled = false; btn.textContent = "Run assessment";
 }
 function showDiagram() {
@@ -1404,12 +1569,15 @@ function showDiagram() {
   $("progDiag").innerHTML = id ? `<a href="${base}/${encodeURIComponent(id)}.svg" target="_blank" rel="noopener"><img src="${base}/${encodeURIComponent(id)}.svg?t=${Date.now()}" alt="diagram"></a>` : "";
 }
 async function loadDiagrams() {
-  const base = `/api/programs/${encodeURIComponent(_program)}/diagrams`;
+  const program = _program;
+  const request = loadDiagrams.sequence = (loadDiagrams.sequence || 0) + 1;
+  const base = `/api/programs/${encodeURIComponent(program)}/diagrams`;
   $("progDiagVsdx").href = `${base}/export/vsdx`;
   $("progDiagDrawio").href = `${base}/export/drawio`;
   $("progDiagZip").href = `${base}/export/zip`;
   try {
     const d = await _json(base);
+    if (program !== _program || request !== loadDiagrams.sequence) return;
     const keep = $("progDiagSelect").value;
     const label = { context: "Context", component: "Components", class: "Class", data: "Data model", sequence: "Interaction" };
     $("progDiagSelect").innerHTML = d.diagrams.map(x => `<option value="${_attr(x.id)}">${escapeHtml((label[x.kind] || x.kind) + " — " + x.title.split(" — ").slice(1).join(" — "))} (${x.nodes})</option>`).join("");
@@ -1417,18 +1585,24 @@ async function loadDiagrams() {
     const c = d.coverage;
     $("progDiagSummary").innerHTML = `Diagrams <small class="project-hint">${d.diagrams.length} · ${c.shown}/${c.entities} entities shown</small>`;
     showDiagram();
-  } catch (e) { $("progDiag").textContent = e.message; }
+  } catch (e) { if (program !== _program) return; $("progDiag").textContent = e.message; }
 }
 async function loadProgramMap() {
+  const program = _program;
+  const request = loadProgramMap.sequence = (loadProgramMap.sequence || 0) + 1;
   const box = $("progMap");
   try {
-    const g = await _json(`/api/programs/${encodeURIComponent(_program)}/graph`);
+    const g = await _json(`/api/programs/${encodeURIComponent(program)}/graph`);
+    if (program !== _program || request !== loadProgramMap.sequence) return;
     box.innerHTML = g.edges.length ? `<pre class="mermaid">${escapeHtml(g.mermaid)}</pre>` : `<p class="project-hint">No dependencies yet.</p>`;
     renderMermaid();
-  } catch (e) { box.textContent = e.message; }
+  } catch (e) { if (program !== _program) return; box.textContent = e.message; }
 }
 $("progSelect").addEventListener("change", async (e) => {
-  _program = e.target.value; _progStore(_program);
+  _program = e.target.value; _progSig = ""; _progStore(_program);
+  _assess = null; _assessInputs = {}; _findings = []; _uiFindings = [];
+  ["progFiles", "progFlows", "progMap", "progSec", "progUi", "progAssess", "progDiag",
+   "progFixLog", "progFixProposal", "progFixImpact", "progReportForm"].forEach(id => { $(id).innerHTML = ""; });
   if (_projMode) setProjectMode(false);
   await loadProgram();
   toast(_program ? "Captures will be added to this program." : "No program selected.");
@@ -1483,17 +1657,21 @@ document.querySelectorAll("#kindSeg .seg-opt").forEach(b => b.addEventListener("
 $("progFixBox").addEventListener("toggle", () => { if ($("progFixBox").open) loadCorrections(); });
 $("progReportBox").addEventListener("toggle", () => { if ($("progReportBox").open) loadReportSettings(); });
 async function loadReportSettings() {
+  const program = _program;
+  const request = loadReportSettings.sequence = (loadReportSettings.sequence || 0) + 1;
   const box = $("progReportForm");
   let d;
-  try { d = await _json(`${_pbase()}/report-settings`); } catch (e) { box.textContent = e.message; return; }
+  try { d = await _json(`/api/programs/${encodeURIComponent(program)}/report-settings`);
+    if (program !== _program || request !== loadReportSettings.sequence) return; } catch (e) { if (program !== _program) return; box.textContent = e.message; return; }
   box.innerHTML = `<p class="project-hint" style="margin:4px 0 8px">Shown in the Word/PDF report. Anything left empty is written as "Unknown" and listed as an open item.</p>
     <div class="rs-grid">${d.fields.map(f => `<label>${escapeHtml(f.label)}<input type="text" data-k="${_attr(f.key)}" value="${_attr(d.values[f.key] || "")}" spellcheck="false"></label>`).join("")}</div>
     <button class="btn-secondary" id="rsSave" type="button">Save report details</button>`;
   $("rsSave").addEventListener("click", async () => {
     const body = {};
     box.querySelectorAll("input[data-k]").forEach(i => { body[i.dataset.k] = i.value; });
-    try { await _json(`${_pbase()}/report-settings`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); toast("Report details saved — the report will be rebuilt."); }
-    catch (e) { toast(e.message); }
+    try { await _json(`/api/programs/${encodeURIComponent(program)}/report-settings`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (program !== _program || request !== loadReportSettings.sequence) return; toast("Report details saved — the report will be rebuilt."); }
+    catch (e) { if (program !== _program) return; toast(e.message); }
   });
 }
 $("progFixInterpret").addEventListener("click", interpretCorrection);
@@ -1541,3 +1719,139 @@ document.querySelectorAll(".sidebar .nav-item[data-view]").forEach(n => n.addEve
 }));
 $("progSelect").addEventListener("change", () => { if (_view === "review") setView("review"); });
 setView(location.hash === "#review" ? "review" : location.hash === "#codesnap" ? "codesnap" : _viewStore());
+
+
+function _lineEditLabel(original, replacement) {
+  if (original === replacement) return "Keep the current text";
+  if (original.trim() === replacement.trim()) return "Use the spacing from the saved capture";
+  let left = 0, right = 0;
+  while (left < original.length && left < replacement.length && original[left] === replacement[left]) left++;
+  while (right < original.length - left && right < replacement.length - left && original[original.length - 1 - right] === replacement[replacement.length - 1 - right]) right++;
+  const before = original.slice(left, original.length - right);
+  const after = replacement.slice(left, replacement.length - right);
+  const short = text => text.length > 36 ? text.slice(0, 36) + "…" : text;
+  if (!before) return `Add “${short(after)}”`;
+  if (!after) return `Remove “${short(before)}”`;
+  return `Change “${short(before)}” to “${short(after)}”`;
+}
+
+// Screenshot-led review stays open while program polling refreshes the file list.
+async function openLineReview(base, artifactId, queue) {
+  let dialog = document.getElementById("lineReviewDialog");
+  if (dialog) dialog.remove();
+  dialog = document.createElement("dialog");
+  dialog.id = "lineReviewDialog";
+  dialog.className = "line-review-dialog";
+  document.body.appendChild(dialog);
+  dialog.showModal();
+  dialog.addEventListener("close", () => dialog.remove());
+  let index = 0, generation = 0;
+  const advance = async (resolved) => {
+    if (resolved) queue.splice(index, 1);
+    else index++;
+    if (index >= queue.length) {
+      dialog.innerHTML = `<div class="lr-head"><b>Review complete</b><button class="btn-secondary lr-close" type="button">Close</button></div><p>${queue.length ? "Unanswered lines remain flagged. You can review them again or add clearer screenshots." : "All questions in this review have been answered. Any remaining source or completeness errors stay visible on the file."}</p>`;
+      dialog.querySelector(".lr-close").onclick = () => dialog.close();
+      return;
+    }
+    await show();
+  };
+  const show = async () => {
+    const token = ++generation;
+    dialog.innerHTML = `<div class="lr-head"><b>Loading saved evidence…</b><button class="btn-secondary lr-close" type="button">Close</button></div>`;
+    dialog.querySelector(".lr-close").onclick = () => dialog.close();
+    let d;
+    try { d = await _json(`${base}/artifacts/${artifactId}/review/${queue[index].line}`); }
+    catch (error) {
+      if (dialog.isConnected) dialog.insertAdjacentHTML("beforeend", `<p class="pf-note bad">${escapeHtml(error.message)}</p>`);
+      return;
+    }
+    if (!dialog.isConnected || token !== generation) return;
+    const choices = [...new Set([d.old_text, ...(d.readings || [])])];
+    dialog.innerHTML = `<div class="lr-head"><b>${escapeHtml(d.name)} · line ${d.line}</b><button class="btn-secondary lr-close" type="button">Close</button></div>
+      <p class="lr-count">Question ${index + 1} of ${queue.length} remaining</p>
+      <p>${d.reasons.map(escapeHtml).join(" · ")}</p>
+      <div class="lr-evidence"></div>
+      <h3>${escapeHtml(d.question)}</h3>
+      <p class="project-hint">Compare with the highlighted pixels. Saved readings are suggestions, not confirmed answers.</p>
+      <div class="lr-choices" role="group" aria-label="Choose a correction">${choices.map((text, i) => `<button class="btn-secondary" data-choice="${i}" aria-pressed="${i === 0}" type="button">${escapeHtml(_lineEditLabel(d.old_text, text))}${i ? `<small>Alternate saved reading ${i}</small>` : ""}</button>`).join("")}<button class="btn-secondary lr-own" aria-pressed="false" type="button">Enter my own correction</button></div>
+      <div class="lr-context-label">Edit line ${d.line} below · the neighbouring lines stay read-only</div>
+      <div class="lr-code-block" role="group" aria-label="Edit source line with previous and following lines"><div class="lr-code-lines">${(d.context || [{line:d.line, text:d.old_text, focus:true}]).map(row => `<div class="lr-code-row${row.focus ? " focus" : ""}"><span class="lr-line-number">${row.line}</span>${row.focus ? `<textarea class="lr-text" aria-label="Complete source line" rows="1" wrap="off" spellcheck="false"></textarea>` : `<code>${escapeHtml(row.text) || " "}</code>`}</div>`).join("")}</div></div>
+      <p class="project-hint">Selecting an option only previews it. Apply saves your answer; it can be undone.</p>
+      <div class="lr-actions"><button class="btn-primary lr-save" type="button">Confirm selected text</button><button class="btn-link lr-skip" type="button">Can't tell — next</button></div>
+      <div class="lr-result" role="status" aria-live="polite"></div>`;
+    dialog.querySelector(".lr-close").onclick = () => dialog.close();
+    const input = dialog.querySelector(".lr-text"); input.value = d.old_text;
+    const codeLines = dialog.querySelector(".lr-code-lines");
+    const fitLines = () => {
+      const columns = text => [...text].reduce((column, char) => char === "\t" ? column + 4 - column % 4 : column + 1, 0);
+      const width = Math.max(50, columns(input.value), ...(d.context || []).map(row => columns(row.text)));
+      codeLines.style.width = `${width + 14}ch`;
+    };
+    fitLines();
+    const updatePreview = (choice) => {
+      fitLines();
+      dialog.querySelectorAll("[data-choice]").forEach(button => button.setAttribute("aria-pressed", String(+button.dataset.choice === choice)));
+      dialog.querySelector(".lr-own").setAttribute("aria-pressed", String(choice === -1));
+      dialog.querySelector(".lr-save").textContent = input.value === d.old_text ? "Confirm selected text" : "Apply selected correction";
+    };
+    dialog.querySelectorAll("[data-choice]").forEach(button => button.onclick = () => {
+      input.value = choices[+button.dataset.choice]; updatePreview(+button.dataset.choice);
+    });
+    dialog.querySelector(".lr-own").onclick = () => { updatePreview(-1); input.focus(); };
+    input.addEventListener("beforeinput", event => { if (event.inputType === "insertLineBreak" || event.inputType === "insertParagraph") event.preventDefault(); });
+    input.addEventListener("input", () => updatePreview(-1));
+    const evidenceBox = dialog.querySelector(".lr-evidence");
+    const screenshots = d.screenshots || [];
+    const display = (selected) => {
+      const ev = screenshots[selected];
+      if (!ev) { evidenceBox.innerHTML = `<p class="pf-note bad">No saved screenshot could be reliably matched to this line. The warning stays unresolved unless you supply the exact text. Add a clearer screenshot if needed.</p>`; return; }
+      const url = `${base}/evidence/${ev.id}`;
+      const band = ev.band;
+      const y = band ? Math.max(0, band[0] - 40) : 0;
+      const h = band ? Math.min(ev.height - y, band[1] - band[0] + 80) : ev.height;
+      const rect = band ? `<rect x="1" y="${band[0] - 3}" width="${ev.width - 2}" height="${band[1] - band[0] + 6}" fill="#facc1526" stroke="#facc15" stroke-width="2"/>` : "";
+      evidenceBox.innerHTML = `<div class="lr-frames">${screenshots.map((shot, i) => `<button class="btn-secondary" data-frame="${i}" type="button" aria-pressed="${i === selected}">Screenshot ${shot.frame}</button>`).join("")}</div>
+        ${band ? `<svg class="lr-zoom" viewBox="0 ${y} ${ev.width} ${h}" role="img" aria-label="Saved screenshot with line ${d.line} highlighted"><image href="${url}" width="${ev.width}" height="${ev.height}"/>${rect}</svg>` : `<p class="pf-note bad">The screenshot matches the source context, but its exact row could not be measured. No guessed highlight is shown.</p>`}
+        <details ${band ? "" : "open"}><summary>Full saved screenshot</summary><svg class="lr-full" viewBox="0 0 ${ev.width} ${ev.height}" role="img" aria-label="Full saved screenshot"><image href="${url}" width="${ev.width}" height="${ev.height}"/>${rect}</svg><a href="${url}" target="_blank" rel="noopener">Open original screenshot</a></details>`;
+      evidenceBox.querySelectorAll("[data-frame]").forEach(button => button.onclick = () => display(+button.dataset.frame));
+    };
+    display(0);
+    dialog.querySelector(".lr-skip").onclick = () => advance(false);
+    const save = async (text) => {
+      const buttons = dialog.querySelectorAll(".lr-actions button"); buttons.forEach(button => button.disabled = true);
+      const result = dialog.querySelector(".lr-result"); result.textContent = "Saving your answer and checking the file…";
+      try {
+        const answer = await _json(`${base}/artifacts/${artifactId}/review/${d.line}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ old_text: d.old_text, new_text: text, text_hash: d.text_hash }) });
+        _progSig = "";
+        await loadProgram();
+        if (!dialog.isConnected) return;
+        const remaining = answer.review_lines || [];
+        const issues = answer.remaining_issues || remaining.filter(item => item.line === d.line);
+        if (issues.length || (answer.warnings || []).length) {
+          const reasons = [...new Set(issues.flatMap(item => item.reasons || []))];
+          result.textContent = `Review completed. Your ${text === d.old_text ? "confirmation" : "correction"} was saved and the file was checked again. ${reasons.length ? `Remaining file issue: ${reasons.join(" ")} ` : ""}${(answer.warnings || []).join(" ")}`;
+          dialog.querySelector(".lr-skip").textContent = "Next question";
+          dialog.querySelector(".lr-skip").disabled = false;
+          dialog.querySelector(".lr-skip").onclick = () => advance(true);
+          dialog.querySelector(".lr-save").textContent = "Completed";
+          input.disabled = true;
+          dialog.querySelectorAll("[data-choice], .lr-own").forEach(button => button.disabled = true);
+        } else {
+          toast("Review completed. This line’s text warning is resolved.");
+          await advance(true);
+        }
+      } catch (error) {
+        result.textContent = error.message;
+        buttons.forEach(button => button.disabled = false);
+      }
+    };
+    dialog.querySelector(".lr-save").onclick = () => save(input.value);
+  };
+  await show();
+}
+
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && _view === "review" && _program) loadProgram(true);
+});

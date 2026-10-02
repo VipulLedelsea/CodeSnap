@@ -425,12 +425,31 @@ def pii_class(name: str):
     return None
 
 
-def text_has_student_data(lines) -> bool:
-    for line in lines:
-        for token in re.findall(r"[A-Za-z][\w-]{1,40}", line):
+_QUOTED = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'")
+_SQLISH = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|JOIN|INTO|VALUES)\b", re.I)
+_NAMES_ATTR = re.compile(r"\b(name|id|for|field|column|DataField|Bind)\s*=\s*$", re.I)
+
+
+def _names_only(line: str) -> str:
+    """The line with display text removed: a quoted string is kept only when it holds SQL or names a field."""
+    def keep(m):
+        return m.group(0) if _SQLISH.search(m.group(0)) or _NAMES_ATTR.search(line[:m.start()]) else " "
+    return _QUOTED.sub(keep, line)
+
+
+def student_data_lines(lines) -> set:
+    """Line numbers that name a sensitive personal-data field (a string shown to users does not count)."""
+    out = set()
+    for n, line in enumerate(lines, 1):
+        for token in re.findall(r"[A-Za-z][\w-]{1,40}", _names_only(line)):
             if token.islower():
                 continue
             hit = pii_class(token)
             if hit and hit[1] in ("critical", "high"):
-                return True
-    return False
+                out.add(n)
+                break
+    return out
+
+
+def text_has_student_data(lines) -> bool:
+    return bool(student_data_lines(lines))

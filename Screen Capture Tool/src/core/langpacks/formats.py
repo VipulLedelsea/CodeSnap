@@ -8,6 +8,7 @@ FORMATS = {
     "pli": "PL/I (source margins 2-72)",
     "fortran": "Fortran fixed-form",
     "ispf_panel": "ISPF panel definition",
+    "informix_form": "Informix screen form (box characters and field columns)",
 }
 _RPG_SPEC = re.compile(r"^.{5}[HFDICOP][ A-Z*]", re.I)
 _RPG_OPS = re.compile(r"\b(BEGSR|ENDSR|EXSR|CHAIN|SETLL|READE?|WRITE|UPDATE|EVAL|IFEQ|DOWEQ|MOVEL?|Z-ADD|CALLB?)\b", re.I)
@@ -18,9 +19,10 @@ _ASM_OP = re.compile(r"^(?:[A-Z@#$][A-Z0-9@#$]{0,7})?\s+(CSECT|DSECT|USING|DROP|
 _NATURAL = re.compile(r"^\d{4}\s+(DEFINE|END-DEFINE|READ|FIND|IF|END-IF|WRITE|DISPLAY|INPUT|CALLNAT|FETCH|PERFORM|"
                       r"MOVE|COMPUTE|ASSIGN|FOR|END-FOR|DECIDE|END-DECIDE|ESCAPE|END|REPEAT|END-REPEAT|STORE|UPDATE|"
                       r"DELETE|INCLUDE|LOCAL|PARAMETER|GLOBAL|1|2|3|\*)", re.I)
-_BASIC = re.compile(r"^\s*\d{1,5}\s+(PRINT|LET|IF|GOTO|GOSUB|RETURN|INPUT|DIM|FOR|NEXT|REM|OPEN|CLOSE|END|ON)\b", re.I)
+_BASIC = re.compile(r"^\s*\d{1,5}\s+(?:(PRINT|LET|IF|GOTO|GOSUB|RETURN|INPUT|DIM|FOR|NEXT|REM|OPEN|CLOSE|END|ON|DATA|READ|RESTORE|DEF\s+FN|POKE|WHILE|WEND|DO|LOOP|ELSE|ERROR|RESUME|CALL)\b|[A-Z_][\w$%]*(?:\([^)]*\))?\s*=)", re.I)
 _PLI = re.compile(r"\b(PROC(EDURE)?\s+OPTIONS\s*\(\s*MAIN|DCL\s+\w+\s+(FIXED|CHAR|BIN|DEC)|%INCLUDE)\b", re.I)
 _FORTRAN = re.compile(r"^(C|\*|\s{5}[^ 0]|\s{6})\s*(PROGRAM|SUBROUTINE|FUNCTION|DIMENSION|COMMON|FORMAT|CALL|DO\s+\d+)\b", re.I)
+_FORTRAN_LABEL = re.compile(r"^ {0,4}\d{1,5}\s+(CONTINUE|GO\s*TO|STOP|RETURN|FORMAT|END)\b", re.I)
 _ISPF = re.compile(r"^\)(ATTR|BODY|INIT|PROC|MODEL|END|REINIT|HELP)\b", re.I)
 EXT_FORMATS = {"rpg": "rpg_fixed", "rpg38": "rpg_fixed", "rpg36": "rpg_fixed", "asm": "asm", "mac": "asm", "mlc": "asm",
                "hlasm": "asm", "dbd": "asm", "psb": "asm", "mfs": "asm", "nsp": "natural", "nsn": "natural",
@@ -55,20 +57,24 @@ def detect_format(text: str = "", language: str = "", extension: str = "") -> st
         return "basic"
     if sum(1 for l in lines if _ISPF.match(l)) >= 2:
         return "ispf_panel"
-    if sum(1 for l in lines if _FORTRAN.match(l)) >= max(2, 0.3 * n) and "fortran" in (lang or "fortran"):
+    if (re.search(r'^\s*SCREEN\s*(?:\{|$)', text or '', re.M | re.I)
+            and re.search(r'^\s*ATTRIBUTES\b', text or '', re.M | re.I)):
+        return 'informix_form'
+    if sum(1 for l in lines if _FORTRAN.match(l) or _FORTRAN_LABEL.match(l)) >= max(2, 0.3 * n) and "fortran" in (lang or "fortran"):
         return "fortran"
     if "pl/i" in lang or "pli" in lang or _PLI.search("\n".join(lines)):
         return "pli"
     return None
 
 
+from core.transcription_formats import PROMPT_CLAUSE as _MULTIFORMAT_CLAUSE
+
 PROMPT_CLAUSE = (
-    "OTHER COLUMN- OR LINE-NUMBER-SENSITIVE SOURCE: in RPG fixed-form keep every character in its column (the form type "
-    "letter H/F/D/I/C/O/P sits in column 6, comments have * in column 7); in assembler and IMS/MFS macros keep the label "
-    "in column 1, the operation from column 10, operands from column 16 and any continuation character in column 72; in "
+    "OTHER COLUMN- OR LINE-NUMBER-SENSITIVE SOURCE: in RPG, assembler and IMS/MFS macros copy the actually visible "
+    "columns, including unusual or invalid spacing. Never place text in conventional compiler columns by assumption. In "
     "Natural and line-numbered BASIC the line numbers at the start of each line (e.g. 0010, 0020 or 10, 20) are PART OF "
-    "THE SOURCE — keep them, they are not an editor gutter; PL/I source starts in column 2; ISPF panels keep their "
-    ")ATTR/)BODY sections and column layout exactly. ")
+    "THE SOURCE — keep them, they are not an editor gutter; PL/I source preserves its observed margin; ISPF panels keep their "
+    ")ATTR/)BODY sections and column layout exactly. ") + _MULTIFORMAT_CLAUSE
 
 
 _MACRO_OPS = ("DBD|DATASET|SEGM|FIELD|LCHILD|XDFLD|PCB|SENSEG|SENFLD|PSBGEN|DBDGEN|FINISH|PRINT|FMT|DEV|DIV|DPAGE|DFLD|"

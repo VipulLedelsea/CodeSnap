@@ -7,18 +7,32 @@ from core.diagrams import all_diagrams, drawio, vsdx
 from . import docx_report, html
 from .content import build
 
+REPORT_REVISION = "2026-10-02-concise-report-v13"
+
+
+def _redactor(store):
+    from .redact import Redactor
+    from .settings import get
+    return Redactor(get(store), [a["name"] for a in store.artifacts()] + [e["name"] for e in store.entities("screen")])
+
 
 def generate(store, *, rescan=True, client=None, today=None, pdf=None) -> dict:
     kwargs = {"client": client} if client else {}
     from .wording import scrub
-    report = scrub(build(store, rescan=rescan, today=today, **kwargs))
-    diagrams = {d["id"]: scrub(d) for d in all_diagrams(store)}
-    return {"report": report, "diagrams": diagrams}
+    verbatim = [a["name"] for a in store.artifacts()]
+    report = scrub(build(store, rescan=rescan, today=today, **kwargs), verbatim=verbatim)
+    diagrams = {d["id"]: scrub(d, verbatim=verbatim) for d in all_diagrams(store)}
+    from .redact import Redactor
+    from .settings import get
+    redactor = Redactor(get(store), verbatim + [e["name"] for e in store.entities("screen")])
+    return {"report": redactor.map(report), "diagrams": redactor.map(diagrams)}
 
 
 def html_report(store, **kw) -> str:
     g = generate(store, **kw)
-    return html.render(g["report"], g["diagrams"])
+    from . import template_docx
+    document = template_docx.render(store, g["report"], g["diagrams"])
+    return html.render_document(document, g["diagrams"])
 
 
 def docx_bytes(store, **kw) -> bytes:
@@ -66,11 +80,12 @@ def package(store, **kw) -> dict:
     slug = store.info["slug"]
     ds = list(g["diagrams"].values())
     from . import template_docx
-    docx = template_docx.render(store, g["report"], g["diagrams"])
+    metadata = {}
+    docx = template_docx.render(store, g["report"], g["diagrams"], metadata=metadata)
     files = {
-        f"{slug}_assessment_report.html": html.render(g["report"], g["diagrams"]).encode(),
+        f"{slug}_assessment_report.html": html.render_document(docx, g["diagrams"]).encode(),
         f"{slug}_assessment_report.docx": docx,
-        f"{slug}_diagrams.vsdx": vsdx(ds, f"{store.info['name']} diagrams"),
+        f"{slug}_diagrams.vsdx": vsdx(ds, _redactor(store)(f"{store.info['name']} diagrams")),
         f"{slug}_diagrams.drawio": drawio(ds).encode(),
     }
     pdf = pdf_from_docx(docx) if kw.get("pdf", True) else None
@@ -78,13 +93,15 @@ def package(store, **kw) -> dict:
         files[f"{slug}_assessment_report.pdf"] = pdf
     out = store.exports_dir / "report"
     out.mkdir(parents=True, exist_ok=True)
+    if not pdf:
+        (out / f"{slug}_assessment_report.pdf").unlink(missing_ok=True)
     for name, data in files.items():
         robust.write_bytes(out / name, data)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for name, data in files.items():
             z.writestr(name, data)
-    return {"dir": str(out), "files": sorted(files), "zip": buf.getvalue(), "verdict": g["report"]["verdict"]}
+    return {"dir": str(out), "files": sorted(files), "zip": buf.getvalue(), "verdict": metadata["verdict"]}
 
 
 def waiting(store) -> int:
@@ -97,15 +114,23 @@ def cached_package(store, force: bool = False) -> dict:
     out = store.exports_dir / "report"
     names = [f"{slug}_assessment_report.html", f"{slug}_assessment_report.docx", f"{slug}_diagrams.vsdx",
              f"{slug}_diagrams.drawio", f"{slug}_assessment_report_package.zip"]
-    fresh = store.get_meta("report_stamp") == store.model_stamp() and all((out / n).exists() for n in names)
+    fresh = (store.get_meta("report_stamp") == store.model_stamp()
+             and store.get_meta("report_revision") == REPORT_REVISION
+             and all((out / n).exists() for n in names))
     if fresh and not force:
         return {"dir": str(out), "files": names, "built": False}
     pdf = out / f"{slug}_assessment_report.pdf"
     if pdf.exists():
         pdf.unlink()        # never serve a PDF of an older report
+    basis = store.model_stamp()
     pkg = package(store, rescan=True)
+    if store.model_stamp() != basis:
+        for name in pkg["files"]:
+            (out / name).unlink(missing_ok=True)
+        raise RuntimeError("The analysis changed while the report was building. Please generate the report again.")
     robust.write_bytes(out / names[-1], pkg["zip"])
-    store.set_meta("report_stamp", store.model_stamp())
+    store.set_meta("report_stamp", basis)
+    store.set_meta("report_revision", REPORT_REVISION)
     store.set_meta("report_built_at", __import__("datetime").datetime.now().isoformat(timespec="seconds"))
     return {"dir": str(out), "files": names, "built": True, "verdict": pkg["verdict"]}
 

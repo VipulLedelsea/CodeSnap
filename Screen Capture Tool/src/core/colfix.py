@@ -126,6 +126,19 @@ def _align(measured, lines):
     for i in range(n - 1, -1, -1):
         for j in range(k - 1, -1, -1):
             L[i][j] = L[i + 1][j + 1] + 1 if ok[i][j] else max(L[i + 1][j], L[i][j + 1])
+    # Word widths alone cannot distinguish adjacent similarly shaped statements.
+    # Accept a chosen pair only if every optimal alignment gives it the same
+    # measured columns. Otherwise a shifted OCR row could inherit its neighbour.
+    prefix = [[0] * (k + 1) for _ in range(n + 1)]
+    for i in range(n):
+        for j in range(k):
+            prefix[i + 1][j + 1] = (prefix[i][j] + 1 if ok[i][j]
+                                    else max(prefix[i][j + 1], prefix[i + 1][j]))
+    options = [set() for _ in range(k)]
+    for i in range(n):
+        for j in range(k):
+            if ok[i][j] and prefix[i][j] + 1 + L[i + 1][j + 1] == L[0][0]:
+                options[j].add(tuple(measured[i]))
     pairs, i, j = [], 0, 0
     while i < n and j < k:
         if ok[i][j] and L[i][j] == L[i + 1][j + 1] + 1:
@@ -145,7 +158,7 @@ def _align(measured, lines):
                 break
         if len(run) == 3:
             kept.update(run)
-    return sorted(kept)
+    return sorted((i, j) for i, j in kept if len(options[j]) == 1)
 
 
 _RULE = re.compile(r"^(\S{0,8}?)(-|=|\*|_|#|\.)\2{7,}$")
@@ -178,7 +191,7 @@ def _rebuild(line, cols, widths=None):
     return out
 
 
-def _measure(image_path, text: str):
+def _measure(image_path, text: str, *, source_x=None):
     """Match the screenshot's text rows to the transcribed lines. Returns None when the screenshot has no usable
     fixed-width character grid (proportional font, a photo, too little text); every check then says "unchecked"."""
     lines = text.split("\n")
@@ -205,8 +218,11 @@ def _measure(image_path, text: str):
     if multi:
         ends = [m[0][0] + m[0][1] for m in multi]
         g_end = max(set(ends), key=ends.count)
-        keep = [i for i, m in enumerate(measured) if not (len(m) == 1 and m[0][0] + m[0][1] == g_end)]
-        variants.append(([measured[i][1:] if len(measured[i]) > 1 else measured[i] for i in keep], keep))
+        gutter = (ends.count(g_end) >= 0.7 * len(ends) and
+                  all(m[0][1] <= 6 and m[1][0] > g_end for m in multi))
+        if gutter:
+            keep = [i for i, m in enumerate(measured) if not (len(m) == 1 and m[0][0] + m[0][1] == g_end)]
+            variants.append(([measured[i][1:] if len(measured[i]) > 1 else measured[i] for i in keep], keep))
     best = max(((_align(m, plain), m, idx) for m, idx in variants), key=lambda v: len(v[0]))
     pairs, measured, idx = best
     if len(pairs) < max(3, min(len(plain), len(measured)) // 3):
@@ -216,26 +232,43 @@ def _measure(image_path, text: str):
         d = _starts(plain[li])[0] - measured[ri][0][0]
         votes[d] = votes.get(d, 0) + 1
     base = max(votes, key=votes.get)
+    # Relative word geometry alone cannot identify source column one. A whole
+    # frame shifted by four spaces casts the same unanimous but wrong vote.
+    # Only an independently reviewed, fully visible column-one pixel position
+    # may replace this estimate; never infer it from the first visible word.
+    if source_x is not None:
+        if not isinstance(source_x, (int, float)) or not np.isfinite(source_x) or not 0 <= source_x < ink.shape[1]:
+            raise ValueError("source_x must be the visible source column-one position inside the image")
+        base = -int(round(source_x / pitch - offset))
     return {"lines": lines, "body": body, "plain": plain, "measured": measured, "pairs": pairs, "base": base,
+            "absolute_columns": source_x is not None,
             "bands": [bands[i] for i in idx], "deco": [deco[i] for i in idx], "pitch": pitch, "offset": offset,
             "x0": int(max(0, (min(m[0][0] for m in measured) + offset - 1) * pitch))}
 
 
-def respace(image_path, text: str) -> tuple:
-    """Return (text with measured spacing, number of lines changed) for one screenshot's transcription."""
-    m = _measure(image_path, text)
+def respace(image_path, text: str, *, source_x=None) -> tuple:
+    """Return measured spacing and changed count. Optional source_x is a reviewed
+    column-one pixel position, valid only with no horizontal source clipping.
+    Without it, whole-frame indentation remains relative to the transcription.
+    """
+    m = _measure(image_path, text, source_x=source_x) if source_x is not None else _measure(image_path, text)
     if m is None:
         return text, 0
     lines, body, plain, measured, base = m["lines"], m["body"], m["plain"], m["measured"], m["base"]
     changed = 0
+    from core.text import literal_continuations
+    protected = literal_continuations(text)
     pairset = set(m["pairs"])
     for ri, li in m["pairs"]:
-        if m["deco"][ri] or not _anchored(plain, pairset, ri, li):
+        if body[li][0] in protected or '\t' in plain[li] or m["deco"][ri] or not _anchored(plain, pairset, ri, li):
             continue
         cols = [c + base for c, _ in measured[ri]]
         if any(abs(a - b) > MAX_SHIFT for a, b in zip(_starts(plain[li]), cols)):
             continue
         new = _rebuild(plain[li], cols, [w for _, w in measured[ri]])
+        from core.text import normalized_line
+        if any(quote in plain[li] for quote in ("'", '"', '`')) and normalized_line(new) != normalized_line(plain[li]):
+            continue  # Word geometry cannot justify silently changing a literal value.
         same_words = all(a == b or _RULE.match(a) for a, b in zip(new.split(), plain[li].split()))
         if new != plain[li] and same_words and len(new.split()) == len(plain[li].split()):
             lines[body[li][0]] = new
@@ -262,16 +295,16 @@ def _plausible(meas, line, base) -> bool:
     return hits >= max(1, (max(len(meas), len(line.split())) + 1) // 2)
 
 
-def check(image_path, text: str) -> dict:
+def check(image_path, text: str, *, source_x=None) -> dict:
     """Per line of `text`: "verified" (every word's length and column agree with the pixels), "mismatch" (the matching
     screen row shows a different character count: a character was dropped or added), "cut" (cut off at the screen
     edge) or "unchecked" (no fixed-width grid, or the row couldn't be matched). Blank lines get "".
     Also returns the screen rows of the mismatched lines, for a zoomed re-read."""
     lines = text.split("\n")
     status = ["" if not l.strip() else CUT if "[CUT OFF]" in l else UNCHECKED for l in lines]
-    m = _measure(image_path, text)
+    m = _measure(image_path, text, source_x=source_x) if source_x is not None else _measure(image_path, text)
     if m is None:
-        return {"grid": False, "status": status, "rows": {}}
+        return {"grid": False, "status": status, "rows": {}, "absolute_columns": False}
     body, plain, measured, base, pairs = m["body"], m["plain"], m["measured"], m["base"], m["pairs"]
     mapping, paired, between = {}, set(), set()
     for ri, li in pairs:
@@ -335,7 +368,8 @@ def check(image_path, text: str) -> dict:
                        and len(measured[r]) >= 2 and measured[r][0][0] + base <= left_max)
             if real > l2 - l1 - 1:
                 status[body[l2][0]] = ROWS
-    return {"grid": True, "status": status, "rows": rows, "x0": m["x0"], "pitch": m["pitch"]}
+    return {"grid": True, "status": status, "rows": rows, "x0": m["x0"], "pitch": m["pitch"],
+            "absolute_columns": m["absolute_columns"]}
 
 
 def accept_reread(line: str, row: dict):
@@ -344,7 +378,12 @@ def accept_reread(line: str, row: dict):
     words = line.replace("[CUT OFF]", "").split()
     if len(words) != len(row["widths"]) or any(len(w) != n for w, n in zip(words, row["widths"])):
         return None
-    return _rebuild(" ".join(words), row["cols"])
+    observed = line.replace("[CUT OFF]", "")
+    rebuilt = _rebuild(observed, row["cols"])
+    from core.text import normalized_line
+    if normalized_line(rebuilt) != normalized_line(observed):
+        return None
+    return rebuilt
 
 
 def crop_rows(image_path, rows: dict, x0: int = 0, pad: float = 0.35, min_char: int = 14, pitch: float = 10.0):

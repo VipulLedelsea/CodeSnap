@@ -4,22 +4,70 @@ core.status (a shared file the web polls)."""
 
 import subprocess
 import sys
+import json
+import math
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent.parent
+_UNSET = object()
+
+
+def capture_settings(region=None, display=None):
+    values = None
+    if region not in (None, ''):
+        values = [float(x) for x in region.split(',')] if isinstance(region, str) else list(region)
+        if (len(values) != 4 or not all(isinstance(x, (int, float)) and math.isfinite(x) for x in values)
+                or min(values[:2]) < 0 or min(values[2:]) <= 0
+                or values[0]+values[2] > 1 or values[1]+values[3] > 1):
+            raise ValueError('Pick a valid area inside the selected screen.')
+    if display not in (None, '', 'auto'):
+        display = int(display)
+        if display < 1:
+            raise ValueError('Pick a valid screen.')
+    else:
+        display = None
+    return {'region': values, 'display': display}
 
 
 class SessionManager:
     def __init__(self):
         self._proc = None
         self._pending = None
+        self.program = None
+        self._mode = (False, False, None)
+        self._settings = capture_settings()
+
+    def configure(self, region=None, display=None, spacing=_UNSET):
+        settings = capture_settings(region, display)
+        same = all(settings[k] == self._settings.get(k) for k in ('region','display'))
+        if spacing is _UNSET:
+            spacing = self._settings.get('spacing') if same else None
+        if spacing is not None:
+            if not settings['region']:
+                raise ValueError('Select the source-only area before confirming the margin.')
+            from core.spacing import validate_profile
+            settings['spacing']=validate_profile(spacing)
+        self._settings = settings
+        if self.running():
+            directory = PROJECT / 'captures'
+            directory.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode='w', dir=directory, delete=False) as file:
+                json.dump({'pid': self._proc.pid, **self._settings}, file)
+                temporary = Path(file.name)
+            temporary.replace(directory / '.capture_settings.json')
+        return self._settings
 
     def running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
     def start(self, single: bool = False, idle_stop=None, region=None, project_mode=False, program=None, capture_kind="code",
               display=None) -> bool:
+        mode = (bool(single), bool(project_mode), idle_stop)
+        if self.running() and (self.program != program or self._mode != mode):
+            raise RuntimeError("Stop the current capture session before switching programs or capture modes.")
+        self.configure(region, display)
         if self.running():
             return False
         from core import status
@@ -47,6 +95,8 @@ class SessionManager:
         if single:
             argv.append("--single")   # backup: single agent instead of the default team
         self._proc = subprocess.Popen(argv, cwd=str(PROJECT))
+        self.program, self._mode = program, mode
+        self.configure(region, display)
         return True
 
     def process_pending(self, program: str) -> bool:

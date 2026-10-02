@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wsdl:definitions name="StudentService" xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/">
+  <wsdl:portType name="IStudentService">
+    <wsdl:operation name="GetEnrollment"><wsdl:documentation>Enrollment count by district</wsdl:documentation></wsdl:operation>
+    <wsdl:operation name="GetStudentCount"/>
+  </wsdl:portType>
+  <wsdl:service name="StudentService">
+    <wsdl:port name="BasicHttp" binding="tns:BasicHttp">
+      <soap:address location="http://mnit-esb01:8080/StudentService.svc"/>
+    </wsdl:port>
+  </wsdl:service>
+</wsdl:definitions>

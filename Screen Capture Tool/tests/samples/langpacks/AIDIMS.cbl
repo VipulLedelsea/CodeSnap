@@ -1,0 +1,19 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. AIDIMS.
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01  DLI-GU            PIC X(4) VALUE 'GU  '.
+       01  DLI-REPL          PIC X(4) VALUE 'REPL'.
+       01  DIST-SSA          PIC X(9) VALUE 'DISTRICT '.
+       01  IO-AREA           PIC X(120).
+       LINKAGE SECTION.
+       01  AID-PCB           PIC X(40).
+       PROCEDURE DIVISION.
+       0000-MAIN.
+           ENTRY 'DLITCBL' USING AID-PCB.
+           PERFORM 1000-GET.
+           GOBACK.
+       1000-GET.
+           CALL 'CBLTDLI' USING DLI-GU AID-PCB IO-AREA DIST-SSA.
+           CALL 'CBLTDLI' USING DLI-REPL AID-PCB IO-AREA.
+           EXEC DLI GU SEGMENT(PAYMENT) INTO(IO-AREA) END-EXEC.

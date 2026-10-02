@@ -1,0 +1,491 @@
+{
+ "_note": "Hand-labelled from the source (not from parser output). entities: 'kind name'; relations: 'kind target'. Case-insensitive.",
+ "cobol/AIDCALC.cbl": {
+  "entities": [
+   "program AIDCALC",
+   "section 0000-MAIN",
+   "paragraph 0000-START",
+   "paragraph 1000-READ-DISTRICT",
+   "paragraph 2000-CALC-AID",
+   "data_store DISTRICT-FILE",
+   "data_store PAYMENT-FILE"
+  ],
+  "relations": [
+   "calls 1000-READ-DISTRICT",
+   "calls 2000-CALC-AID",
+   "calls AIDAUDIT",
+   "includes AIDREC",
+   "reads DISTRICT-FILE",
+   "writes PAYMENT-FILE"
+  ]
+ },
+ "cobol/AIDINQ.cbl": {
+  "entities": [
+   "program AIDINQ",
+   "paragraph MAIN-PARA",
+   "paragraph LOOKUP-AID"
+  ],
+  "relations": [
+   "displays AIDMAP1",
+   "reads AIDMAP1",
+   "calls AIDERR",
+   "calls AIDAUDIT",
+   "calls LOOKUP-AID",
+   "invokes_transaction AIDQ",
+   "reads MDE.DISTRICT_AID"
+  ]
+ },
+ "cobol/AIDJOB.jcl": {
+  "entities": [
+   "job AIDJOB"
+  ],
+  "relations": [
+   "calls AIDCALC",
+   "calls AIDRPT",
+   "reads MDE.FIN.DISTRICT.INPUT",
+   "writes MDE.FIN.AID.PAYMENTS",
+   "reads MDE.FIN.AID.PAYMENTS"
+  ]
+ },
+ "legacy/AIDRPT.CPP": {
+  "entities": [
+   "class AidReport",
+   "function AidReport",
+   "function Print",
+   "function main"
+  ],
+  "relations": [
+   "includes iostream.h",
+   "includes fstream.h",
+   "includes string.h",
+   "includes aidrec.h",
+   "inherits ReportBase",
+   "uses AidRecord",
+   "calls FormatLine",
+   "calls Load",
+   "uses AidReport",
+   "calls Print",
+   "writes AIDRPT.TXT"
+  ]
+ },
+ "legacy/AidPaymentController.cs": {
+  "entities": [
+   "class AidPaymentController",
+   "function District",
+   "function Approve",
+   "function LoadHistory",
+   "data_store SchoolFinance",
+   "api_endpoint GET /aid/district/{id}",
+   "api_endpoint POST /aid/approve",
+   "module MDE.Finance.Web"
+  ],
+  "relations": [
+   "imports System",
+   "imports System.Collections",
+   "imports System.Data.SqlClient",
+   "imports System.Web.Mvc",
+   "inherits Controller",
+   "implements IAuditable",
+   "uses PaymentService",
+   "calls TotalFor",
+   "calls LoadHistory",
+   "writes dbo.PaymentBatch",
+   "reads dbo.PaymentHistory",
+   "reads dbo.District",
+   "connects_to SchoolFinance",
+   "uses AuditTrail",
+   "calls District"
+  ]
+ },
+ "legacy/AidLookupServlet.java": {
+  "entities": [
+   "class AidLookupServlet",
+   "function doGet",
+   "function loadAid",
+   "function sourceName",
+   "data_store AIDPROD",
+   "api_endpoint GET servlet:AidLookupServlet",
+   "module mn.mde.finance.aid"
+  ],
+  "relations": [
+   "imports java.io.IOException",
+   "imports java.sql.Connection",
+   "imports java.sql.DriverManager",
+   "imports java.sql.PreparedStatement",
+   "imports java.sql.ResultSet",
+   "imports java.util.Vector",
+   "imports javax.servlet.ServletException",
+   "imports javax.servlet.http.HttpServlet",
+   "imports javax.servlet.http.HttpServletRequest",
+   "imports javax.servlet.http.HttpServletResponse",
+   "inherits HttpServlet",
+   "implements AuditSource",
+   "uses AidCalculator",
+   "calls total",
+   "calls loadAid",
+   "uses AuditLog",
+   "reads MDE.DISTRICT_AID",
+   "connects_to AIDPROD"
+  ]
+ },
+ "legacy/AIDSCHEMA.sql": {
+  "entities": [
+   "table MDE.DISTRICT",
+   "table MDE.DISTRICT_AID",
+   "table MDE.V_AID_SUMMARY"
+  ],
+  "relations": [
+   "depends_on MDE.DISTRICT",
+   "reads MDE.DISTRICT_AID",
+   "reads MDE.DISTRICT"
+  ]
+ },
+ "legacy/AidLookup.jsp": {
+  "entities": [
+   "screen AidLookup",
+   "api_endpoint GET /aid/lookup"
+  ],
+  "relations": [
+   "includes header.jsp",
+   "imports mn.mde.finance.aid.AidCalculator",
+   "imports java.util.Vector",
+   "calls GET /aid/lookup"
+  ]
+ },
+ "legacy/DistrictAid.aspx": {
+  "entities": [
+   "screen DistrictAid",
+   "api_endpoint POST DistrictAid.aspx"
+  ],
+  "relations": [
+   "uses MDE.Finance.Web.DistrictAidPage",
+   "navigates_to PaymentHistory",
+   "calls POST DistrictAid.aspx",
+   "depends_on DistrictAid.aspx.cs",
+   "calls DistrictAidPage.btnLookup_Click",
+   "connects_to education.mn.gov"
+  ]
+ },
+ "langpacks/AIDCALC.frm": {
+  "entities": [
+   "program AIDCALC",
+   "screen frmAidCalc",
+   "function Form_Load",
+   "function cmdCalc_Click",
+   "function ComputeAid",
+   "data_store SCHOOLFIN",
+   "data_store C:\\AID\\AUDIT.LOG"
+  ],
+  "relations": [
+   "connects_to SCHOOLFIN",
+   "reads DISTRICT_ADM",
+   "calls ComputeAid",
+   "navigates_to frmResults",
+   "writes C:\\AID\\AUDIT.LOG"
+  ]
+ },
+ "langpacks/aidlookup.asp": {
+  "entities": [
+   "program aidlookup",
+   "function ShowRow",
+   "screen aidlookup",
+   "data_store SCHOOLFIN"
+  ],
+  "relations": [
+   "includes inc/dbconn.asp",
+   "connects_to SCHOOLFIN",
+   "reads DISTRICT",
+   "calls ShowRow",
+   "navigates_to login",
+   "uses ADODB.Connection"
+  ]
+ },
+ "langpacks/AIDPOST.rpgle": {
+  "entities": [
+   "program AIDPOST",
+   "paragraph CALCAID",
+   "data_store DISTMST",
+   "data_store AIDPAY",
+   "data_store AIDDSP"
+  ],
+  "relations": [
+   "uses DISTMST",
+   "uses AIDPAY",
+   "uses AIDDSP",
+   "reads DISTMST",
+   "reads AIDPAY",
+   "writes AIDPAY",
+   "calls CALCAID",
+   "calls AIDRPT",
+   "displays AIDSCR"
+  ]
+ },
+ "langpacks/AIDNIGHT.clle": {
+  "entities": [
+   "program AIDNIGHT",
+   "paragraph LOOP",
+   "paragraph END",
+   "data_store DISTMST",
+   "data_store AIDPAY",
+   "data_store AIDHIST"
+  ],
+  "relations": [
+   "uses DISTMST",
+   "uses AIDPAY",
+   "calls AIDPOST",
+   "calls AIDRPT",
+   "reads AIDPAY",
+   "writes AIDHIST",
+   "calls LOOP",
+   "calls END"
+  ]
+ },
+ "langpacks/AIDCALC.nsp": {
+  "entities": [
+   "program AIDCALC",
+   "paragraph COMPUTE-AID",
+   "data_store DISTRICT-FILE",
+   "data_store AID-HISTORY"
+  ],
+  "relations": [
+   "includes AIDLDA01",
+   "reads DISTRICT-FILE",
+   "calls COMPUTE-AID",
+   "calls AIDPOST1",
+   "displays AIDMAP01",
+   "writes AID-HISTORY"
+  ]
+ },
+ "langpacks/AIDRPT.pli": {
+  "entities": [
+   "program AIDRPT",
+   "function ACCUM",
+   "data_store DISTFILE",
+   "data_store RPTFILE"
+  ],
+  "relations": [
+   "reads DISTFILE",
+   "writes RPTFILE",
+   "includes AIDCOMM",
+   "calls ACCUM",
+   "writes AID_SUMMARY",
+   "uses DISTFILE",
+   "uses RPTFILE"
+  ]
+ },
+ "langpacks/aid_pkg.pkb": {
+  "entities": [
+   "module AID_PKG",
+   "function POST_PAYMENTS"
+  ],
+  "relations": [
+   "reads DISTRICT_ADM",
+   "writes AID_PAYMENT",
+   "writes AID_STAGING",
+   "writes AID_RUN",
+   "calls AUDIT_PKG.LOG_EVENT"
+  ]
+ },
+ "langpacks/usp_AidReport.sql": {
+  "entities": [
+   "function DBO.USP_AIDREPORT"
+  ],
+  "relations": [
+   "reads DBO.AIDPAYMENT",
+   "reads DBO.DISTRICT",
+   "writes DBO.AUDITLOG",
+   "calls DBO.USP_LOGRUN",
+   "calls xp_cmdshell"
+  ]
+ },
+ "langpacks/aid_upload.php": {
+  "entities": [
+   "program aid_upload",
+   "function saveUpload",
+   "screen aid_upload",
+   "data_store mdedb01"
+  ],
+  "relations": [
+   "includes config.php",
+   "connects_to mdedb01",
+   "reads DISTRICT_AID",
+   "calls saveUpload",
+   "navigates_to done",
+   "calls gzip"
+  ]
+ },
+ "langpacks/aid_forecast.sas": {
+  "entities": [
+   "program aid_forecast",
+   "function forecast",
+   "data_store SCHOOLFIN",
+   "data_store fin.district_adm",
+   "data_store out.forecast_"
+  ],
+  "relations": [
+   "connects_to SCHOOLFIN",
+   "reads fin.district_adm",
+   "writes out.forecast_",
+   "writes out.summary",
+   "reads out.forecast_2027",
+   "calls forecast"
+  ]
+ },
+ "langpacks/w_aid_entry.srw": {
+  "entities": [
+   "class w_aid_entry",
+   "function open",
+   "function clicked",
+   "screen w_aid_entry"
+  ],
+  "relations": [
+   "inherits window",
+   "reads AID_PAYMENT",
+   "navigates_to w_aid_detail"
+  ]
+ },
+ "langpacks/AidMain.pas": {
+  "entities": [
+   "module AidMain",
+   "class TfrmAidMain",
+   "function TfrmAidMain.btnFindClick"
+  ],
+  "relations": [
+   "includes Windows",
+   "includes SysUtils",
+   "includes Forms",
+   "includes DBTables",
+   "includes DB",
+   "reads AID_PAYMENT",
+   "navigates_to frmNotFound"
+  ]
+ },
+ "langpacks/AIDPOST.prg": {
+  "entities": [
+   "program AIDPOST",
+   "function CALCADJ",
+   "data_store LEVYADJ"
+  ],
+  "relations": [
+   "includes aidlib",
+   "reads LEVYADJ",
+   "writes LEVYADJ",
+   "calls CALCADJ",
+   "writes AID_PAYMENT",
+   "navigates_to LEVYREVIEW",
+   "connects_to SCHOOLFIN"
+  ]
+ },
+ "langpacks/aidmaint.4gl": {
+  "entities": [
+   "program aidmaint",
+   "function MAIN",
+   "function LOAD_DISTRICT",
+   "function AID_RPT",
+   "data_store SCHFIN"
+  ],
+  "relations": [
+   "connects_to SCHFIN",
+   "displays AIDFORM",
+   "calls LOAD_DISTRICT",
+   "calls AID_RPT",
+   "reads DISTRICT_AID",
+   "writes DISTRICT_AID"
+  ]
+ },
+ "langpacks/aidpost.p": {
+  "entities": [
+   "program aidpost",
+   "function logRun"
+  ],
+  "relations": [
+   "includes aidcommon.i",
+   "reads district",
+   "reads aidpay",
+   "writes aidpay",
+   "calls calcaid"
+  ]
+ },
+ "langpacks/aid_feed.pl": {
+  "entities": [
+   "program aid_feed",
+   "function build_file",
+   "data_store Oracle:SCHFINP",
+   "data_store /data/aid/feed_$p.txt"
+  ],
+  "relations": [
+   "includes DBI",
+   "includes Net::FTP",
+   "connects_to Oracle:SCHFINP",
+   "reads AID_PAYMENT",
+   "writes /data/aid/feed_$p.txt",
+   "calls gzip",
+   "calls build_file"
+  ]
+ },
+ "langpacks/aid_nightly.ksh": {
+  "entities": [
+   "program aid_nightly",
+   "function run_extract"
+  ],
+  "relations": [
+   "connects_to sqlplus",
+   "connects_to ftp",
+   "calls /opt/aid/bin/common.ksh",
+   "calls run_extract"
+  ]
+ },
+ "langpacks/LoadAid.dtsx": {
+  "entities": [
+   "job LoadAid",
+   "function Truncate staging",
+   "function Load levy",
+   "function Post levy",
+   "data_store SCHOOLFIN",
+   "data_store LEVY.CSV"
+  ],
+  "relations": [
+   "connects_to SCHOOLFIN",
+   "connects_to LEVY.CSV",
+   "writes DBO.LEVYSTAGING",
+   "reads DBO.LEVYSTAGING",
+   "writes DBO.LEVY",
+   "calls Load levy",
+   "calls Post levy"
+  ]
+ },
+ "langpacks/AIDDBD.dbd": {
+  "entities": [
+   "data_store AIDDBD",
+   "table DISTRICT",
+   "table PAYMENT",
+   "table ADJUST"
+  ],
+  "relations": [
+   "uses AIDDB01",
+   "contains DISTRICT",
+   "contains PAYMENT",
+   "contains ADJUST",
+   "depends_on DISTRICT",
+   "depends_on PAYMENT"
+  ]
+ },
+ "langpacks/AIDIDMS.cbl": {
+  "entities": [
+   "program AIDIDMS",
+   "paragraph 0000-MAIN",
+   "paragraph 1000-POST",
+   "paragraph 1000-EXIT",
+   "table DISTRICT-REC",
+   "table PAYMENT-REC",
+   "table AUDIT-REC"
+  ],
+  "relations": [
+   "calls 1000-POST",
+   "reads DISTRICT-REC",
+   "reads PAYMENT-REC",
+   "writes DISTRICT-REC",
+   "writes AUDIT-REC"
+  ]
+ }
+}

@@ -1,0 +1,11 @@
+<UserControl x:Class="Mde.Aid.Views.AidDashboard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:sdk="http://schemas.microsoft.com/winfx/2006/xaml/presentation/sdk"
+    xmlns:navigation="clr-namespace:System.Windows.Controls;assembly=System.Windows.Controls.Navigation">
+  <Grid x:Name="LayoutRoot">
+    <sdk:DataGrid x:Name="AidGrid" ItemsSource="{Binding Payments}"/>
+    <TextBox x:Name="DistrictBox" Text="{Binding Path=DistrictId, Mode=TwoWay}"/>
+    <HyperlinkButton NavigateUri="/Views/LevyDetail.xaml" Content="Levy"/>
+  </Grid>
+</UserControl>

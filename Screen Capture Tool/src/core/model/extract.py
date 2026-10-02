@@ -3,13 +3,13 @@ import time
 
 from .kinds import ENTITY_KINDS, RELATION_KINDS
 
-PROMPT_VERSION = "structure-v1"
+PROMPT_VERSION = "structure-v2-screen-formats"
 CHUNK_LINES = 600
 CHUNK_OVERLAP = 20
 MAX_TOKENS = 16000
 _NO_FORCED_TOOL = set()
 
-STRUCTURE_SYSTEM = f"""You map the structure of ONE source file from a legacy program so it can be stored in a program model.
+STRUCTURE_SYSTEM = f"""You map the structure of ONE visible source artifact from an application so it can be stored in a program model.
 
 You receive the file with line numbers ("  12| code"). Record, using the record_structure tool:
 
@@ -129,7 +129,8 @@ def extract_structure(client, code: str, *, filename: str = "", language: str = 
     entities, relations, calls = [], [], []
     parts = list(chunks(code))
     for index, (start, lines) in enumerate(parts, 1):
-        header = f"File: {filename or 'unknown'}\nLanguage: {language or 'unknown'}\n"
+        from core.technology_support import analysis_context
+        header = f"File: {filename or 'unknown'}\nLanguage: {language or 'unknown'}\n" + analysis_context(filename, language)
         if len(parts) > 1:
             header += f"Part {index} of {len(parts)} (lines {start}-{start + len(lines) - 1}).\n"
         began = time.monotonic()

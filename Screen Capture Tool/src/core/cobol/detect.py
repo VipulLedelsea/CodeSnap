@@ -12,7 +12,7 @@ EXTENSIONS = {"cbl": "cobol", "cob": "cobol", "cobol": "cobol", "cpy": "copybook
 
 _DIVISION = re.compile(r"\b(IDENTIFICATION|ID|ENVIRONMENT|DATA|PROCEDURE)\s+DIVISION\b", re.I)
 _PROGRAM_ID = re.compile(r"\bPROGRAM-ID\s*\.", re.I)
-_LEVEL = re.compile(r"^.{0,11}?\b(0[1-9]|[1-4][0-9]|66|77|88)\s+[A-Z0-9][A-Z0-9-]*\b", re.I)
+_LEVEL = re.compile(r"^(?:\d{6}[ */Dd-])?\s*(0[1-9]|[1-4][0-9]|66|77|88)\s+[A-Z0-9][A-Z0-9-]*\b", re.I)
 _PIC = re.compile(r"\bPIC(TURE)?\s+(IS\s+)?[SX9AVZ(]", re.I)
 _BMS = re.compile(r"\bDFHM(SD|DI|DF)\b", re.I)
 _JCL_CARD = re.compile(r"^//[A-Z0-9#@$]*\s+(JOB|EXEC|DD|PROC|PEND|SET|INCLUDE|JCLLIB|IF|ENDIF)\b", re.I)
@@ -27,11 +27,11 @@ def _lines(text: str) -> list:
 
 def detect_kind(text: str, language: str = "", extension: str = "") -> str | None:
     ext = (extension or "").strip().lstrip(".").lower()
-    if ext in EXTENSIONS:
+    if ext in EXTENSIONS and EXTENSIONS[ext] != "cobol":
         return EXTENSIONS[ext]
     lines = _lines(text)
     if not lines:
-        return None
+        return EXTENSIONS.get(ext)
     body = "\n".join(lines)
     jcl = sum(1 for l in lines if _JCL_ANY.match(l))
     if jcl >= max(2, 0.6 * len(lines)) and any(_JCL_CARD.match(l) for l in lines):
@@ -43,6 +43,8 @@ def detect_kind(text: str, language: str = "", extension: str = "") -> str | Non
     levels = sum(1 for l in lines if _LEVEL.match(l))
     if levels >= max(2, 0.4 * len(lines)) and _PIC.search(body):
         return "copybook"
+    if ext in EXTENSIONS:
+        return EXTENSIONS[ext]
     lang = (language or "").strip().lower()
     if "cobol" in lang:
         return "copybook" if "copy" in lang else "cobol"

@@ -14,11 +14,11 @@ _DECISION = {
 }
 _DECISION["legacy"] = (r"\b(IF|ELSEIF|ELSIF|ELSE\s+IF|WHEN|CASE|SELECT\s+CASE|DECIDE|FOR|FOREACH|WHILE|UNTIL|DOW|DOU|"
                        r"DO\s+WHILE|DO\s+UNTIL|CATCH|ON\s+ERROR|SCAN|IFEQ|IFNE|IFGT|IFLT|IFGE|IFLE|DOWEQ|DOWNE|CABEQ|CABNE)\b")
-_GOTO = {"cobol": r"\bGO\s+TO\b", "default": r"\bgoto\s+\w+",
-         "legacy": r"\bGO\s*TO\b|\bGOSUB\b|\bSIGNAL\s+(?!ON\b|OFF\b)\w+|\bCABEQ\b|\bCABNE\b|\bESCAPE\s+(TOP|BOTTOM)\b"}
+_GOTO = {"cobol": r"\bGO\s+TO\b", "default": r"(?<!Error )\bgoto\s+\w+",
+         "legacy": r"(?<!Error )\bGO\s*TO\b|\bGOSUB\b|\bSIGNAL\s+(?!ON\b|OFF\b)\w+|\bCABEQ\b|\bCABNE\b|\bESCAPE\s+(TOP|BOTTOM)\b"}
 SKILL_SCARCE = ("COBOL", "COBOL copybook", "CICS BMS map", "JCL")
 SCARCE_FAMILIES = {
-    "cobol": "COBOL/CICS", "rpg": "RPG / IBM i", "cl": "IBM i CL", "natural": "Natural/Adabas", "pli": "PL/I",
+    "cobol": "COBOL", "rpg": "RPG / IBM i", "cl": "IBM i CL", "natural": "Natural/Adabas", "pli": "PL/I",
     "asm": "mainframe assembler", "easytrieve": "Easytrieve", "rexx": "REXX / TSO", "clist": "TSO CLIST",
     "powerbuilder": "PowerBuilder", "foxpro": "Visual FoxPro", "informix4gl": "Informix 4GL", "progress": "Progress ABL",
     "delphi": "Delphi", "vb6": "Visual Basic 6", "basic": "DOS-era BASIC", "fortran": "Fortran",
@@ -65,6 +65,26 @@ def _profile(file_entity):
     return ((file_entity or {}).get("attrs") or {}).get("profile") or {}
 
 
+def _legacy_rules():
+    from core.langpacks.specs import PACKS
+    return {label: rx for p in PACKS for label, rx in p.get("legacy", [])}
+
+
+RENAMED = {"RPG cycle / indicators (*INxx)": ("numbered indicators (*INxx)", "indicator operations (SETON/SETOF)")}
+
+
+def _markers(markers, text):
+    """Legacy markers that the file's current text still shows (profiles stored before a rule changed are rechecked)."""
+    rules, out = _legacy_rules(), []
+    for m in markers:
+        for label in RENAMED.get(m, (m,)):
+            rx = rules.get(label)
+            if (rx is None and label == m) or (rx and any(re.search(rx, l, re.I) for l in text.splitlines())):
+                if label not in out:
+                    out.append(label)
+    return out
+
+
 def score_component(c: dict) -> dict:
     s = {d: Score(d) for d in DIMENSIONS}
     art, prof, m = c["artifact"], _profile(c.get("file")), c["metrics"]
@@ -85,7 +105,7 @@ def score_component(c: dict) -> dict:
             h.deduct(3, "HLT-FRAGILE", f"{f['title']}", {"finding": f["id"]}, cap=3)
 
     d = s["tech_debt"]
-    legacy = prof.get("legacy_markers") or []
+    legacy = _markers(prof.get("legacy_markers") or [], art.get("transcription") or "")
     for marker in legacy[:6]:
         d.deduct(7, "DEBT-LEGACY", f"legacy construct: {marker}", {"evidence": (prof.get("evidence") or {}).get(marker)})
     if str(prof.get("dialect") or "").startswith("pre-standard"):
@@ -117,15 +137,21 @@ def score_component(c: dict) -> dict:
         if f["category"] == "eol" or f.get("rule") == "WEB-EOL":
             status = (f.get("refs") or {}).get("eol_status")
             pts = EOL_POINTS.get(status, 0) * (0.5 if "not confirmed" in (f.get("detail") or "") else 1)
-            sup.deduct(pts, "SUP-EOL", f["title"], {"finding": f["id"]})
+            if pts and status not in (None, 'unknown', 'unconfirmed'):
+                sup.deduct(pts, "SUP-EOL", f["title"], {"finding": f["id"]})
     lang = art.get("language") or prof.get("language") or ""
     scarce = SCARCE_FAMILIES.get(c["metrics"]["family"]) or SCARCE_FAMILIES.get(prof.get("pack") or "")
     if lang in SKILL_SCARCE:
+        scarce = "COBOL"
+    if (prof.get("language") or "").upper().startswith("IMS"):
+        scarce = "IMS"
+    if scarce == "COBOL" and ("CICS" in (prof.get("frameworks") or []) or re.search(r"\bEXEC\s+CICS\b|DFHCOMMAREA|\bEIBCALEN\b",
+                                                                                  art.get("transcription") or "", re.I)):
         scarce = "COBOL/CICS"
     if prof.get("pack") == "cobol" and set(prof.get("frameworks") or []) & {"IDMS", "IMS DB/DC"}:
         scarce = "COBOL + " + "/".join(sorted(set(prof["frameworks"]) & {"IDMS", "IMS DB/DC"}))
     if scarce:
-        sup.deduct(10, "SUP-SKILLS", f"{scarce} skills are scarce — support depends on a shrinking in-house/vendor pool")
+        sup.deduct(10, "SUP-SKILLS", f"{scarce} specialist skills required — support availability to confirm; provisional supportability deduction")
 
     cx = s["complexity"]
     units = max(1, len(c["units"]))
@@ -161,7 +187,7 @@ def score_component(c: dict) -> dict:
     for f in c["findings"]:
         pts = UX_POINTS.get(f["category"], {}).get(f["severity"], 0)
         if f.get("rule") == "ACC-TERMINAL":
-            pts = 20
+            pts = 0  # terminal interface type alone establishes no accessibility failure
         ux.deduct(pts, f.get("rule") or f["category"], f["title"], {"finding": f["id"]})
     return {dim: sc.out() for dim, sc in s.items()}
 

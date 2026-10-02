@@ -38,6 +38,8 @@ def _is_library(name: str) -> bool:
 
 def classify(entity: dict, referrers=()) -> str:
     kind, name = entity["kind"], entity["name"]
+    if kind == 'program' and name.upper() in ('IEFBR14', 'IEBGENER'):
+        return 'library'
     if kind in EXTERNAL_KINDS:
         return "external"
     if kind == "module":

@@ -1,0 +1,68 @@
+# File changes for Claude
+
+Paths are relative to `Screen Capture Tool/`. Baseline: `2530c6d` (the pre-handoff local HEAD).
+
+- `src/agent.py` — Use tracked provider requests and prompt caching.
+- `src/core/analysis.py` — Harden capture, recapture, verification, stitching and progress handling.
+- `src/core/assess/scores.py` — Qualify ratings using current evidence and assessed coverage.
+- `src/core/capture.py` — Persist source-margin calibration and capture geometry.
+- `src/core/cobol/detect.py` — Improve fixed/free-format source detection.
+- `src/core/cobol/parser.py` — Preserve a separator between continued JCL operands.
+- `src/core/colfix.py` — Preserve observed columns and protected literal/data spacing.
+- `src/core/deepdive.py` — Bind detailed reviews to current source, technology guidance and complete responses.
+- `src/core/diagrams/build.py` — Improve component/platform grouping and inferred relationships.
+- `src/core/diagrams/export.py` — Apply export safeguards to diagram output.
+- `src/core/diagrams/layout.py` — Size diagram lanes for their titles.
+- `src/core/feedback.py` — Refresh analysis after both corrected and confirmed source lines.
+- `src/core/langpacks/formats.py` — Recognize source labels and column-sensitive formats without assuming compiler columns.
+- `src/core/langpacks/specs.py` — Extend language-pack format handling.
+- `src/core/model/corrections.py` — Rebase accepted corrections while preserving literal spacing.
+- `src/core/model/extract.py` — Apply screen-only technology guidance and tracked model extraction.
+- `src/core/model/ingest.py` — Make ingestion, replacement and cache publication safer.
+- `src/core/model/line_review.py` — Expose uncertain source lines with screenshot evidence for review.
+- `src/core/model/linker.py` — Classify standard JCL utilities as libraries.
+- `src/core/model/removal.py` — Remove files with related model state handled consistently.
+- `src/core/model/restitch.py` — Rebuild saved captures without undoing accepted corrections or publishing partial source.
+- `src/core/model/store.py` — Add durable usage, atomic metadata, source stamps and transactional updates.
+- `src/core/report/__init__.py` — Unify exports, enforce release gates and invalidate stale reports (v13).
+- `src/core/report/architecture.py` — Qualify architecture claims and component responsibilities.
+- `src/core/report/content.py` — Include visible-source analysis coverage and evidence qualifications.
+- `src/core/report/controls.py` — Ground control conclusions and final-release blockers in evidence.
+- `src/core/report/dataarch.py` — Qualify data ownership, stores and lineage.
+- `src/core/report/editorial.py` — Cap main explanations, add two-page brief, use plain styling/amber status and natural wrapping.
+- `src/core/report/evidence.py` — Collect source-cited control, screen, data and review evidence.
+- `src/core/report/figures.py` — Keep unknown platforms visible and labels readable.
+- `src/core/report/html.py` — Render the issued Word content with matching table/risk colours.
+- `src/core/report/options.py` — Qualify modernization choices, prerequisites and estimates.
+- `src/core/report/plain.py` — Simplify presentation while retaining source evidence.
+- `src/core/report/quality.py` — Measure current-source fidelity and reject stale benchmarks.
+- `src/core/report/ratings.py` — Make rating modes and evidence qualifications consistent.
+- `src/core/report/rationale.py` — Ground recommendation explanations in findings.
+- `src/core/report/sections.py` — Align section content, inventories and evidence qualifications.
+- `src/core/report/settings.py` — Bind sign-off to the current source/model stamp.
+- `src/core/report/template_docx.py` — Follow report subject areas, preserve appendix evidence and apply concise presentation.
+- `src/core/report/wording.py` — Protect quotations, source lines and file names from rewriting.
+- `src/core/security/cves.py` — Add the curated older jQuery selector-XSS finding.
+- `src/core/security/eol.py` — Retain mainstream-support information in curated results.
+- `src/core/security/eol_data.json` — Update curated support evidence.
+- `src/core/security/rules.py` — Distinguish sensitive field identifiers from ordinary displayed text.
+- `src/core/security/scan.py` — Qualify privacy/security findings using reviewed usage evidence.
+- `src/core/spacing.py` — Measure source columns from screenshot pixels with uncertainty safeguards.
+- `src/core/technology_support.py` — Route 218 requested technology labels through screen-only analysis/report guidance.
+- `src/core/text.py` — Protect multiline literals, embedded data and whitespace-sensitive source.
+- `src/core/transcription_formats.py` — Catalog requested formats and shared verbatim-capture instructions.
+- `src/core/uireview/page.py` — Qualify page-review evidence and source findings.
+- `src/core/uireview/review.py` — Keep UI review aligned with current inputs.
+- `src/core/uireview/screens.py` — Handle captured-screen evidence consistently.
+- `src/core/usage.py` — Track durable usage/budgets and enable provider prompt caching.
+- `src/core/verify.py` — Carry measured spacing and uncertainty through source verification.
+- `src/hotkey_capture.py` — Add red source-column guide and validate capture/session ownership.
+- `src/webapp/server.py` — Guard program-bound actions, retries, release gates, privacy and usage.
+- `src/webapp/session.py` — Track worker/session state and safe pending ownership.
+- `src/webapp/static/app.js` — Fix stale polling, recapture errors/counters and program-bound UI actions.
+- `src/webapp/static/index.html` — Expose capture/source-column and review controls.
+- `src/webapp/static/styles.css` — Style source-column and capture/review controls.
+- `docs/README.md` — Document calibration, caching and screen-only coverage.
+- `docs/transcription-coverage.md` — Describe supported visible formats and verification limits.
+- `tests/` — Publish local regression code and synthetic sample/evaluation inputs; private captured fixtures remain local.
+- `tests/offline_runner.py` — Add a portable test entry point that blocks provider/network calls.

@@ -18,11 +18,38 @@ def price_for(model: str):
     return None
 
 
-def cost(model: str, input_tokens, output_tokens):
+def cost(model: str, input_tokens, output_tokens, *, cache_write_tokens=0, cache_read_tokens=0, cache_write_1h_tokens=0):
     price = price_for(model)
     if price is None or input_tokens is None or output_tokens is None:
         return None
-    return round((input_tokens * price[0] + output_tokens * price[1]) / 1_000_000, 6)
+    read_rate = 0.05 if model.startswith('claude-opus-5-5') else 0.025 if model.startswith('claude-fable-5-1') else 0.1
+    weighted = input_tokens + cache_write_tokens * 1.25 + cache_write_1h_tokens * 2 + cache_read_tokens * read_rate
+    return round((weighted * price[0] + output_tokens * price[1]) / 1_000_000, 6)
+
+
+def cached_request(kwargs):
+    """Cache stable tools/system prefix, leaving changing screenshot content uncached."""
+    import os
+    import copy
+    if os.environ.get('CODESNAP_PROMPT_CACHE', '1').lower() in ('0', 'false', 'off'):
+        return kwargs
+    if not str(kwargs.get('model', '')).startswith('claude-'):
+        return kwargs
+    def marked(value):
+        if isinstance(value, dict):
+            return 'cache_control' in value or any(marked(v) for v in value.values())
+        return isinstance(value, list) and any(marked(v) for v in value)
+    if marked(kwargs):
+        return kwargs  # preserve caller breakpoints and TTLs, including the four-point limit
+    system = kwargs.get('system')
+    if isinstance(system, str) and system:
+        system = [{'type': 'text', 'text': system}]
+    elif isinstance(system, list) and system and system[-1].get('type') == 'text':
+        system = copy.deepcopy(system)
+    else:
+        return kwargs
+    system[-1]['cache_control'] = {'type': 'ephemeral'}
+    return {**kwargs, 'system': system}
 
 
 _STEPS = None
@@ -111,6 +138,7 @@ class UsageTracker:
         self.budget = None
         self._local = threading.local()
         self.default_bucket = None
+        self.on_record = None
 
     def bucket(self):
         return getattr(self._local, "bucket", None) or self.default_bucket
@@ -121,16 +149,27 @@ class UsageTracker:
     def record(self, step, model, usage, ms, ok=True, error=None):
         input_tokens = getattr(usage, "input_tokens", None) if usage is not None else None
         output_tokens = getattr(usage, "output_tokens", None) if usage is not None else None
-        extra = sum(getattr(usage, k, 0) or 0 for k in ("cache_creation_input_tokens", "cache_read_input_tokens")) \
-            if usage is not None else 0
+        created = getattr(usage, 'cache_creation_input_tokens', 0) or 0
+        read = getattr(usage, 'cache_read_input_tokens', 0) or 0
+        details = getattr(usage, 'cache_creation', None)
+        hour = (details.get('ephemeral_1h_input_tokens', 0) if isinstance(details, dict)
+                else getattr(details, 'ephemeral_1h_input_tokens', 0)) or 0
+        hour = min(hour, created)
+        billed_cost = cost(model, input_tokens, output_tokens, cache_write_tokens=created-hour,
+                           cache_write_1h_tokens=hour, cache_read_tokens=read)
         if input_tokens is not None:
-            input_tokens += extra
-        rec = {"bucket": self.bucket(), "step": step, "model": model, "input_tokens": input_tokens,
-               "output_tokens": output_tokens, "cost": cost(model, input_tokens, output_tokens), "ms": ms,
+            input_tokens += created + read
+        import uuid
+        rec = {"call_id": uuid.uuid4().hex, "bucket": self.bucket(), "step": step, "model": model, "input_tokens": input_tokens,
+               "output_tokens": output_tokens, "cost": billed_cost, "ms": ms,
+               "cache_creation_input_tokens": created, "cache_read_input_tokens": read,
+               "cache_creation_1h_input_tokens": hour,
                "ok": ok, "error": error}
         with self._lock:
             self._records.append(rec)
             self.total_cost += rec["cost"] or 0
+        if self.on_record:
+            self.on_record(rec)
         return rec
 
     def take(self, bucket=None, everything=False):
@@ -146,12 +185,15 @@ class UsageTracker:
 
 
 def summarize(records) -> dict:
-    out = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost": 0.0, "by_step": {}}
+    out = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost": 0.0, "by_step": {},
+           "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
     for r in records:
         out["calls"] += 1
         out["input_tokens"] += r.get("input_tokens") or 0
         out["output_tokens"] += r.get("output_tokens") or 0
         out["cost"] += r.get("cost") or 0
+        for key in ('cache_creation_input_tokens', 'cache_read_input_tokens'):
+            out[key] += r.get(key) or 0
         step = out["by_step"].setdefault(r["step"], {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost": 0.0})
         step["calls"] += 1
         step["input_tokens"] += r.get("input_tokens") or 0
@@ -173,16 +215,20 @@ class _TrackedMessages:
             self._tracker.budget.check(self._tracker)
         began = time.monotonic()
         step = step_for(kwargs.get("system"))
+        kwargs = cached_request(kwargs)
         try:
             msg = self._messages.create(**kwargs)
         except Exception as exc:
             self._tracker.record(step, kwargs.get("model"), None, int((time.monotonic() - began) * 1000),
                                  ok=False, error=f"{type(exc).__name__}: {exc}")
             raise
-        self._tracker.record(step, getattr(msg, "model", None) or kwargs.get("model"), getattr(msg, "usage", None),
+        record = self._tracker.record(step, getattr(msg, "model", None) or kwargs.get("model"), getattr(msg, "usage", None),
                              int((time.monotonic() - began) * 1000),
                              ok=getattr(msg, "stop_reason", None) != "max_tokens",
                              error="output truncated (max_tokens)" if getattr(msg, "stop_reason", None) == "max_tokens" else None)
+        if self._tracker.on_record:
+            # Pydantic provider models accept private attributes via object assignment.
+            object.__setattr__(msg, "_codesnap_usage_record", record)
         return msg
 
     def __getattr__(self, name):
@@ -197,3 +243,31 @@ class TrackedClient:
 
     def __getattr__(self, name):
         return getattr(self._client, name)
+
+
+class SavedBudget:
+    """Check durable spending before every call, including calls made by another worker."""
+    def __init__(self, program):
+        self.program = program
+
+    def check(self, tracker):
+        from core.model import ProgramStore
+        with ProgramStore.open(self.program) as store:
+            limit = program_budget(store)
+            spent = store.usage()["cost"]
+        if limit and spent >= limit:
+            raise BudgetExceeded(f"API budget reached: ${spent:.2f} of ${limit:.2f} spent on this program.")
+
+
+def persist_record(program, record, artifact_id=None):
+    from core.model import ProgramStore
+    with ProgramStore.open(program) as store:
+        store.log_usage_record(record, artifact_id=artifact_id)
+
+
+def program_client(program, client):
+    tracker = UsageTracker()
+    tracker.budget = SavedBudget(program)
+    tracker.budget.check(tracker)
+    tracker.on_record = lambda record: persist_record(program, record)
+    return tracker.wrap(client)

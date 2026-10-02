@@ -1,0 +1,21 @@
+AIDEDIT  CSECT
+         STM   14,12,12(13)       SAVE CALLER REGISTERS
+         BALR  12,0
+         USING *,12
+         OPEN  (DISTIN,(INPUT))
+LOOP     GET   DISTIN,DISTREC
+         CLC   DISTID,=C'0000'
+         BE    DONE
+         BAL   14,EDITREC
+         B     LOOP
+EDITREC  DS    0H
+         CALL  AIDVAL,(DISTREC)
+         BR    14
+DONE     CLOSE (DISTIN)
+         LM    14,12,12(13)
+         BR    14
+DISTIN   DCB   DDNAME=DISTIN,DSORG=PS,MACRF=GM,EODAD=DONE
+DISTREC  DS    0CL80
+DISTID   DS    CL4
+         AMODE 24
+         END   AIDEDIT

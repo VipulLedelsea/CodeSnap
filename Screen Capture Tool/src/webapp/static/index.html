@@ -177,14 +177,17 @@
           <div class="region-stage" id="regionStage">
             <img id="regionShot" alt="screen" draggable="false">
             <div class="region-sel" id="regionSel" style="display:none"></div>
+            <div id="sourceMarginLine" style="display:none;position:absolute;width:2px;background:#ef4444;pointer-events:none"></div>
             <div class="region-overlay-msg" id="regionOverlayMsg"></div>
           </div>
           <div class="region-modal-actions">
             <button class="btn-link" id="regionRetake" type="button">Re-take screenshot (3s delay)</button>
+            <button class="btn-secondary" id="regionMargin" type="button">Align red line with code start</button>
             <span style="flex:1"></span>
             <button class="btn-link" id="regionCancel" type="button">Cancel</button>
             <button class="btn-primary" id="regionUse" type="button" disabled>Use this area</button>
           </div>
+          <p id="regionSpacingHint" style="margin:8px 16px;font-size:13px">Select the code pane, then choose Align red line with code start. Move the red line to the start before any indentation and click to lock it. Reset after moving, zooming or scrolling sideways.</p>
         </div>
       </div>
 

@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<DTS:Executable xmlns:DTS="www.microsoft.com/SqlServer/Dts" DTS:ExecutableType="Microsoft.Package" DTS:ObjectName="LoadAid">
+  <DTS:Property DTS:Name="PackageFormatVersion">6</DTS:Property>
+  <DTS:ConnectionManagers>
+    <DTS:ConnectionManager DTS:ObjectName="SCHOOLFIN" DTS:CreationName="OLEDB">
+      <DTS:ObjectData><DTS:ConnectionManager DTS:ConnectionString="Data Source=MDESQL01;Initial Catalog=SCHOOLFIN;User ID=ssis;Password=Ssis2012;Provider=SQLNCLI11.1;" /></DTS:ObjectData>
+    </DTS:ConnectionManager>
+    <DTS:ConnectionManager DTS:ObjectName="LevyFile" DTS:CreationName="FLATFILE">
+      <DTS:ObjectData><DTS:ConnectionManager DTS:ConnectionString="\\mdefs01\levy\levy.csv" /></DTS:ObjectData>
+    </DTS:ConnectionManager>
+  </DTS:ConnectionManagers>
+  <DTS:Executables>
+    <DTS:Executable DTS:ObjectName="Truncate staging" DTS:ExecutableType="Microsoft.ExecuteSQLTask">
+      <DTS:ObjectData><SQLTask:SqlTaskData SQLTask:SqlStatementSource="TRUNCATE TABLE dbo.LevyStaging" xmlns:SQLTask="www.microsoft.com/sqlserver/dts/tasks/sqltask" /></DTS:ObjectData>
+    </DTS:Executable>
+    <DTS:Executable DTS:ObjectName="Load levy" DTS:ExecutableType="Microsoft.Pipeline">
+      <DTS:ObjectData><pipeline><components><component name="Dest"><properties><property name="OpenRowset">[dbo].[LevyStaging]</property></properties></component></components></pipeline></DTS:ObjectData>
+    </DTS:Executable>
+    <DTS:Executable DTS:ObjectName="Post levy" DTS:ExecutableType="Microsoft.ExecuteSQLTask">
+      <DTS:ObjectData><SQLTask:SqlTaskData SQLTask:SqlStatementSource="INSERT INTO dbo.Levy SELECT * FROM dbo.LevyStaging" xmlns:SQLTask="www.microsoft.com/sqlserver/dts/tasks/sqltask" /></DTS:ObjectData>
+    </DTS:Executable>
+  </DTS:Executables>
+  <DTS:PrecedenceConstraints>
+    <DTS:PrecedenceConstraint DTS:From="Package\Truncate staging" DTS:To="Package\Load levy" />
+    <DTS:PrecedenceConstraint DTS:From="Package\Load levy" DTS:To="Package\Post levy" />
+  </DTS:PrecedenceConstraints>
+</DTS:Executable>

@@ -279,7 +279,7 @@ def lanes(lane_specs: list, edges: list, bars: list, title_h=30) -> dict:
     top = MARGIN + title_h + 26
     for lane in lane_specs:
         y = top + 28
-        lane_w = 160
+        lane_w = max(160,text_w(lane["title"],True)+20)
         placed = []
         for g in lane["groups"]:
             items = g["nodes"]
@@ -294,7 +294,7 @@ def lanes(lane_specs: list, edges: list, bars: list, title_h=30) -> dict:
             gh = GTITLE + rows * (nh + CELL_GAP) - CELL_GAP + GPAD + (0 if items else 10)
             placed.append((g, items, nw, nh, cols, gw, gh, y))
             y += gh + GROUP_GAP
-            lane_w = max(lane_w, gw)
+            lane_w = max(lane_w, gw, text_w(g["title"],True)+20)
         for g, items, nw, nh, cols, gw, gh, gy in placed:
             gx = x + GPAD
             groups.append({"id": g["id"], "x": gx, "y": gy, "w": lane_w, "h": gh, "title": g["title"], "style": "group",

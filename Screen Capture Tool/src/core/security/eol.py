@@ -223,7 +223,7 @@ def assess(tech: dict, data: dict, today: date | None = None) -> dict:
     if tech.get("curated"):
         entry = data["curated"][tech["curated"]]
         return {**tech, "name": entry["label"], "product": entry.get("product") or tech.get("product"),
-                **curated_status(entry, data, today),
+                **curated_status(entry, data, today), **({"mainstream": entry["mainstream"]} if entry.get("mainstream") else {}),
                 "source": "curated vendor notice" if not entry.get("product") else
                 f"endoflife.date snapshot {data['snapshot']}"}
     product = data["products"][tech["product"]]

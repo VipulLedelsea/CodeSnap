@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns="http://java.sun.com/xml/ns/j2ee" version="2.4">
+  <context-param>
+    <param-name>aid.db.url</param-name>
+    <param-value>jdbc:db2://mdedb01:50000/AIDPROD</param-value>
+  </context-param>
+  <servlet>
+    <servlet-name>AidLookup</servlet-name>
+    <servlet-class>mn.mde.finance.aid.AidLookupServlet</servlet-class>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>AidLookup</servlet-name>
+    <url-pattern>/aid/lookup</url-pattern>
+  </servlet-mapping>
+</web-app>

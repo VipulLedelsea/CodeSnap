@@ -1,0 +1,13 @@
+)ATTR
+  % TYPE(TEXT) INTENS(HIGH)
+  + TYPE(TEXT) INTENS(LOW)
+  _ TYPE(INPUT) INTENS(HIGH)
+)BODY
+%------------------------  DISTRICT AID MENU  ------------------------
+%COMMAND ===>_ZCMD                                                    +
++  District ID  ===>_DISTID  +
++  Period       ===>_PERIOD+
+)PROC
+  VER (&DISTID,NB)
+  &ZSEL = TRANS(&ZCMD 1,'PGM(AIDINQ)' 2,'CMD(%AIDEXTR)' *,'?')
+)END

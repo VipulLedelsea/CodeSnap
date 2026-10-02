@@ -62,7 +62,7 @@ def role_of(name, prefix=None):
 
 
 def _engine(art, store_ent):
-    """Where a component keeps this store: IMS, mainframe files or Db2, IBM i, Oracle, SQL Server or a local file."""
+    """Identify the storage technology from explicit source indicators."""
     at = store_ent.get("attrs") or {}
     lang = (art.get("language") or "").lower()
     text = art.get("transcription") or ""
@@ -75,10 +75,12 @@ def _engine(art, store_ent):
         if "cobol" in lang or "jcl" in lang:
             return "IBM mainframe (files)"
         return "File"
+    if re.search(r"jdbc:db2:|IBM\.Data\.DB2", text, re.I):
+        return "IBM Db2 (host to confirm)"
     if "cobol" in lang and re.search(r"EXEC\s+SQL", text, re.I):
-        return "IBM mainframe (Db2)"
+        return "Database (engine not identified)"
     if "rpg" in lang or lang in ("cl", "ibm i"):
-        return "IBM i (Db2 for i)"
+        return "IBM i (database engine to confirm)"
     if "pl/sql" in lang or "plsql" in lang or re.search(r"CREATE\s+OR\s+REPLACE\s+PACKAGE", text, re.I):
         return "Oracle Database"
     cat = catalog(text)
@@ -226,15 +228,25 @@ def lineage(occ) -> list:
 
 
 def reconciliation(arts) -> list:
-    """Code that compares or totals records between stores: control totals, record counts, hash totals."""
+    """(component, [what it keeps]) for code that compares or totals records: what is kept and whether it is output."""
+    from .evidence import batch_totals
+    arts = list(arts)
+    bt = batch_totals(arts)
     hits = []
     for a in arts:
         t = a.get("transcription") or ""
-        if re.search(r"RECONCIL|CONTROL[-_ ]?TOTAL|HASH[-_ ]?TOTAL|TRAILER|WS-TOTAL-|TOTAL-(GROSS|NET|AMOUNT)|RECORD[-_ ]COUNT|READ-COUNT|PAID-COUNT", t, re.I):
-            kinds = sorted({k for k, rx in (("reconciliation", r"RECONCIL"), ("control totals", r"CONTROL[-_ ]?TOTAL|WS-TOTAL-|TOTAL-(GROSS|NET|AMOUNT)"),
-                                             ("hash totals", r"HASH[-_ ]?TOTAL"), ("trailer record", r"TRAILER"),
-                                             ("record counts", r"RECORD[-_ ]COUNT|READ-COUNT|PAID-COUNT"))
-                            if re.search(rx, t, re.I)})
+        kinds = []
+        r = bt.get(a["name"]) or {}
+        if r.get("counts"):
+            kinds.append("record counts displayed")
+        if r.get("totals"):
+            kinds.append("control totals output")
+        if r.get("unused"):
+            kinds.append("totals accumulated but not output")
+        for k, rx in (("reconciliation", r"RECONCIL"), ("hash totals", r"HASH[-_ ]?TOTAL"), ("trailer record", r"TRAILER")):
+            if re.search(rx, t, re.I):
+                kinds.append(f"{k} identifier found; implementation to confirm")
+        if kinds:
             hits.append((a["name"], kinds))
     return hits
 
@@ -274,16 +286,19 @@ def sor_rows(m) -> list:
         writers = g["writers"]
         plats = len(g["platforms"])
         if n <= 1:
-            sor = f"{g['copies'][0]['store']} ({g['copies'][0]['engine']}) is the only copy found; confirm it is authoritative"
+            sor = f"{g['copies'][0]['store']}, on {g['copies'][0]['engine']}, is the only copy found; confirm it is authoritative"
         elif len(writers) == 1 and plats == 1:
             sor = f"Candidate: the copy written by {writers[0]}; not confirmed"
         elif writers:
             sor = (f"Not established: written by {len(writers)} components on {plats} platform(s); the IT and business "
                    f"owners must name one")
         else:
-            sor = (f"Not established: no component provided writes it, so the master copy is maintained elsewhere; "
-                   f"{n} copies are read on {plats} platform(s)")
-        recon = "; ".join(f"{a} ({', '.join(k)})" for a, k in rec if a in {o["component"] for o in g["occ"]}) or \
+            rd = sum(1 for c in g["copies"] if "R" in c["access"])
+            df = n - rd
+            where = " and ".join(x for x in (f"{rd} read" if rd else "", f"{df} only defined" if df else "") if x)
+            sor = (f"Not established: no writer was identified in the supplied code; ownership is to confirm; "
+                   f"of its {n} copies, {where}, on {plats} platform{'s' if plats != 1 else ''}")
+        recon = "; ".join(f"{a} ({', '.join(k)})" for a, k in rec if a in {o["component"] for o in g["occ"] if "W" in o["access"]}) or \
             "None visible in the code"
         out.append([g["name"], str(n), ", ".join(g["platforms"]), ", ".join(writers) or "None in the code provided", sor, recon])
     return out

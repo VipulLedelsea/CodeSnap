@@ -138,3 +138,59 @@ def render(report: dict, diagrams: dict) -> str:
             f'{escape(report["date"])}</div></div><nav class="toc">{toc}</nav>{"".join(body)}'
             f'<footer><span>Ledelsea · Application Assessment Report</span><span>{escape(report["date"])} · '
             f'confidential — prepared for {escape(report["client"])}</span></footer></div></body></html>')
+
+
+def render_document(data: bytes, diagrams: dict) -> str:
+    """Render the issued Word document's content so export formats share one assessment."""
+    import io
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+    from core.diagrams import svg
+    document = Document(io.BytesIO(data))
+
+    def paragraph(element, parent):
+        p = Paragraph(element, parent)
+        text = escape(p.text).replace("\n", "<br>")
+        style = (p.style.name if p.style is not None else "").lower()
+        tag = "h2" if style.startswith("heading 1") else "h3" if style.startswith("heading") else "p"
+        images = []
+        for blip in element.iter(qn("a:blip")):
+            rid = blip.get(qn("r:embed"))
+            if rid in document.part.related_parts:
+                part = document.part.related_parts[rid]
+                images.append(f'<img alt="Assessment figure" style="max-width:100%" src="data:{part.content_type};base64,{base64.b64encode(part.blob).decode()}">')
+        ink = "996300" if p.text.startswith("Needs changes —") else {"RED": "B42318", "YELLOW": "996300", "GREEN": "176B3A"}.get(p.text.split(" ", 1)[0])
+        status_style = f' style="color:#{ink};font-weight:700"' if ink else ''
+        return f'<{tag}{status_style}>{text}</{tag}>' + ''.join(images) if text or images else ""
+
+    def table(element, parent):
+        t = Table(element, parent)
+        rows = []
+        for index, row in enumerate(t.rows):
+            cells, seen = [], set()
+            for cell in row.cells:
+                if cell._tc in seen:
+                    continue
+                seen.add(cell._tc)
+                span = cell._tc.grid_span
+                shade = cell._tc.xpath('./w:tcPr/w:shd')
+                fill = shade[0].get(qn('w:fill')) if shade else None
+                cell_style = f' style="background:#{fill}"' if fill and re.fullmatch(r'[0-9A-Fa-f]{6}', fill) else ''
+                tag = 'th' if index == 0 else 'td'
+                cells.append(f'<{tag} colspan="{span}"{cell_style}>{blocks(cell._tc, cell)}</{tag}>')
+            rows.append('<tr>' + ''.join(cells) + '</tr>')
+        return '<div class="tw"><table>' + ''.join(rows) + '</table></div>'
+
+    def blocks(element, parent):
+        return ''.join(paragraph(child, parent) if child.tag == qn('w:p') else
+                       table(child, parent) if child.tag == qn('w:tbl') else '' for child in element)
+
+    figures = ''.join(f'<figure>{svg(d)}<figcaption>{escape(d["title"])}</figcaption></figure>' for d in diagrams.values())
+    title = escape(document.core_properties.title or 'Application Assessment Report')
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>{title}</title><style>{CSS} .page p{{white-space:pre-wrap;overflow-wrap:anywhere}} '
+            f'th{{text-transform:none;letter-spacing:normal;background:#ECEFF1;color:#111}} '
+            f'h2{{border:0}} td p,th p{{margin:0}}</style></head><body><main class="page">'
+            f'{blocks(document.element.body, document)}<section><h2>Source-derived diagrams</h2>{figures}</section></main></body></html>')

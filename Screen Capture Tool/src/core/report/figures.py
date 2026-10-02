@@ -4,8 +4,8 @@ as not identified)."""
 from core.diagrams.layout import lanes
 
 PLATFORM_ORDER = ["IBM mainframe (z/OS)", "IBM i (AS/400)", "Oracle Database", "Database server",
-                  "Microsoft .NET (Windows server)", "Windows desktop (VB6)", "Java", "Desktop"]
-DOWN_HINT = {"PAY": "accounting, bank / EFT or recipient notification (to confirm)", "REPORT": "report distribution (to confirm)"}
+                  "Microsoft .NET (host to confirm)", "Windows desktop (VB6)", "Java", "Desktop"]
+DOWN_HINT = {"PAY": "to be named", "REPORT": "to be named"}
 
 
 def _short(s, n=34):
@@ -20,10 +20,14 @@ def _node(i, title, sub="", dashed=False, kind="component"):
 def _step(c, DM):
     ins = [o["store"] for o in DM["occurrences"] if o["component"] == c["name"] and "R" in o["access"] and "W" not in o["access"]]
     outs = [o["store"] for o in DM["occurrences"] if o["component"] == c["name"] and "W" in o["access"]]
-    verb = ("calculates payments" if "Batch" in c["role"] else "approves and looks up payments"
-            if "Controller" in c["name"] or "api" in c["role"].lower()
-            else "posts payments" if c["writes"] and "PAY" in " ".join(outs).upper()
-            else "calculates aid (desktop)" if "VB6" in c["platform"] else "inquiry" if "Interactive" in c["role"]
+    approves = any("approv" in r.lower() for r in c.get("routines") or [])
+    pay = "PAY" in " ".join(outs).upper()
+    verb = ("approves and looks up payments" if approves else
+            ("calculates and writes payments" if pay else "batch processing") if "Batch" in c["role"] else
+            "serves web requests" if "Controller" in c["name"] or "api" in c["role"].lower() else
+            "posts payments" if c["writes"] and pay else
+            "calculates (desktop)" if "VB6" in c["platform"] else "screen entry and inquiry"
+            if "Interactive" in c["role"] or c["layer"] == "Presentation"
             else "defines the database" if c["role"] == "Database definition" else c["role"].lower())
     return verb, ins, outs
 
@@ -110,8 +114,9 @@ def context(AM, DM, name):
             _node(f"up_{i}", f"Producer of {s}", "APP ID to confirm", True, "external_system") for i, s in enumerate(src[:6])]},
         {"id": "g_up_db", "title": "Own shared tables", "nodes": [
             _node(f"db_{i}", f"Owner of {s}", "system of record?", True, "external_system") for i, s in enumerate(ext_db[:6])]}]}]
-    plats = [p for p in PLATFORM_ORDER if any(c["platform"] == p for c in AM["components"])]
-    specs.append({"id": "l_app", "title": f"{name} (this application)", "groups": [
+    supplied_platforms={c["platform"] for c in AM["components"]}
+    plats = [p for p in PLATFORM_ORDER if p in supplied_platforms] + sorted(supplied_platforms-set(PLATFORM_ORDER))
+    specs.append({"id": "l_app", "title": "This application", "groups": [
         {"id": f"ga_{p}", "title": p, "dashed": False, "nodes": [
             _node(f"a_{c['name']}", c["name"], c["role"]) for c in AM["components"]
             if c["platform"] == p and c["layer"] != "Presentation"]} for p in plats]})

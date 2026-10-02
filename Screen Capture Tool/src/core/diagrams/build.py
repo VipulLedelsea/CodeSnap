@@ -241,6 +241,27 @@ def classes(store, artifact_id=None) -> dict:
     return {"id": f"class-{artifact_id}" if artifact_id else "class", "kind": "class", "title": title, **scene}
 
 
+
+def _data_relationship_label(attrs):
+    if attrs.get("trigger_on"):
+        return "trigger"
+    if attrs.get("hierarchy"):
+        return str(attrs["hierarchy"])
+    if attrs.get("logical"):
+        return "logical relationship"
+    if attrs.get("foreign_key"):
+        return "FK"
+    return "dependency"
+
+
+def _data_stereotype(table):
+    attrs = table.get("attrs") or {}
+    if attrs.get("ims_segment"):
+        return "IMS segment"
+    if table["origin"] == "placeholder":
+        return "table · definition not provided"
+    return "view" if attrs.get("view") else "table"
+
 def data_model(store) -> dict:
     m = _model(store)
     tables = [e for e in m.ents.values() if e["kind"] == "table"]
@@ -253,7 +274,7 @@ def data_model(store) -> dict:
             flag = " PK" if at.get("primary_key") else ""
             null = "" if at.get("nullable", True) else " NOT NULL"
             lines.append(_short(f"{c['name']}{': ' + str(at['type']) if at.get('type') else ''}{flag}{null}", 56))
-        stereo = "table · no DDL captured" if t["origin"] == "placeholder" else ("view" if (t.get("attrs") or {}).get("view") else "table")
+        stereo = _data_stereotype(t)
         nodes.append({"id": f"t{t['id']}", "title": _short(t["name"], 44), "stereotype": stereo, "kind": "table",
                       "sections": [lines] if lines else [], "dashed": t["origin"] == "placeholder"})
     ids = {t["id"] for t in tables}
@@ -263,7 +284,7 @@ def data_model(store) -> dict:
             if key not in seen:
                 seen.add(key)
                 edges.append({"from": f"t{r['from_id']}", "to": f"t{r['to_id']}",
-                              "label": "trigger" if (r.get("attrs") or {}).get("trigger_on") else "FK",
+                              "label": _data_relationship_label(r.get("attrs") or {}),
                               "style": "solid", "head": "open"})
     scene = layered(nodes, edges, "TB", straight=len(edges) > 12)
     return {"id": "data", "kind": "data", "title": f"Data model — {store.info['name']}", **scene}

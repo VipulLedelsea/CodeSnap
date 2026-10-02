@@ -22,7 +22,6 @@ DIAGRAM_NOTES = {
 }
 
 
-_PRIVACY = ["Privacy"]     # the client's data privacy obligation, from the report settings
 
 
 def _pct(v):
@@ -36,11 +35,11 @@ def _loc(ev):
     return f"{ev.get('file') or ''}{':' + str(ev['line']) if ev.get('line') else ''}"
 
 
-def _refs(r):
+def _refs(r, privacy="Privacy"):
     r = r or {}
     out = [r.get("cve"), r.get("cwe")] + [f"NIST {n}" for n in (r.get("nist") or [])[:2]]
     if r.get("ferpa"):
-        out.append(_PRIVACY[0])
+        out.append(privacy)
     return ", ".join(x for x in out if x)
 
 
@@ -63,8 +62,8 @@ def summary_text(a, sec, eol_count, name):
         parts.append(f"{len(top)} of {len(a['components'])} components carry high or critical risk; "
                      f"the highest is {top[0]['name']}.")
     t = a["roadmap"]["total"]
-    parts.append(f"The recommended roadmap is estimated at {t['low']}–{t['high']} person-weeks "
-                 f"(about {t['months_one_dev'][0]}–{t['months_one_dev'][1]} months for one developer).")
+    parts.append(f"The unvalidated roadmap scenario is {t['low']}–{t['high']} person-weeks "
+                 f"(about {t['months_one_dev'][0]}–{t['months_one_dev'][1]} modelled months for one developer); this is not a forecast or budget.")
     return " ".join(p for p in parts if p)
 
 
@@ -73,7 +72,7 @@ def build(store, *, rescan=True, client=None, prepared_by=None, today=None) -> d
     _s = _settings(store)
     client = client or _s["client"] or "the client"
     prepared_by = prepared_by or _s["firm"] or _s["prepared_by"]
-    _PRIVACY[0] = _s["privacy_obligations"] or "Privacy"
+    privacy = _s["privacy_obligations"] or "Privacy"
     a = store.get_meta("assessment")
     if rescan or not a:
         a = run_assessment(store, scan=True, today=today)
@@ -128,8 +127,8 @@ def build(store, *, rescan=True, client=None, prepared_by=None, today=None) -> d
     kinds = cov.get("entities_by_kind") or {}
     sections.append({"id": "current", "title": "Current state", "blocks": [
         {"type": "p", "text": f"{len(arts)} files were reviewed, covering {cov.get('entities', 0)} program elements "
-                              f"(programs, classes, routines, screens, jobs, tables and interfaces). Every finding in this "
-                              f"report names the file and line it comes from."},
+                              f"(programs, classes, routines, screens, jobs, tables and interfaces). Source-based findings cite supplied file and line evidence when available. "
+                              f"Lifecycle, policy and deployment questions have separate evidence limitations."},
         {"type": "table", "head": ["Language / type", "Files", "Examples"],
          "rows": [[k, str(len(v_)), ", ".join(sorted(v_)[:4]) + (" …" if len(v_) > 4 else "")]
                   for k, v_ in sorted(by_type.items(), key=lambda kv: -len(kv[1]))]},
@@ -182,7 +181,7 @@ def build(store, *, rescan=True, client=None, prepared_by=None, today=None) -> d
                     key=lambda f: (SEV_ORDER.index(f["severity"]), f["title"])):
         ev = (f.get("evidence") or [{}])[0] if f.get("evidence") else {}
         sec_rows.append([f["severity"].title(), f["title"].split(":")[0] if f["category"] == "security" else f["title"],
-                         _loc(f.get("evidence")), (ev.get("snippet") or "")[:90], _refs(f.get("refs"))])
+                         _loc(f.get("evidence")), (ev.get("snippet") or "")[:90], _refs(f.get("refs"), privacy)])
     pii = [f for f in findings if f["category"] == "privacy"]
     sections.append({"id": "security", "title": "Security analysis & vulnerabilities", "blocks": [
         {"type": "kv", "items": [(k.title(), str(sec["by_severity"].get(k, 0))) for k in SEV_ORDER]},
@@ -209,7 +208,7 @@ def build(store, *, rescan=True, client=None, prepared_by=None, today=None) -> d
             r = f.get("refs") or {}
             std = r.get("wcag") and f"WCAG {r['wcag']}" or ", ".join(x for x in [r.get("cve"), r.get("cwe")] if x)
             if r.get("ferpa"):
-                std += ", " + _PRIVACY[0]
+                std += ", " + privacy
             rows.append([f["severity"].title(), f["title"].split(":")[0], _loc(f.get("evidence")), f["detail"][:110], std,
                          "Screen" if "vision" in (f.get("source") or "") or "(screens)" in (f.get("source") or "")
                          else ("Website" if (f.get("source") or "").startswith("live") else "Source")])
@@ -315,14 +314,29 @@ def build(store, *, rescan=True, client=None, prepared_by=None, today=None) -> d
         {"type": "h", "text": "Approach"},
         {"type": "bullets", "items": [
             "The review covered the application source code, screens, database schemas, job control and configuration "
-            "provided for the program; each file was checked to compile or parse in its own language.",
+            "provided for the program; available compiler or structural checks supplement source review. Their availability and results vary by file.",
             "Structure, security, end-of-life status, scoring, the verdict and the diagrams are derived from that source, so "
-            "the same inputs always give the same result.",
+            "deterministic checks are reproducible; model interpretations require evidence checks and technical review.",
             f"Support dates reflect published vendor lifecycle information as of {eol_snapshot}; vulnerabilities reflect "
             "public CVE records.",
             "Nothing was executed against production systems; findings should be confirmed with the IT owner before remediation.",
         ]},
     ]})
+    from core.technology_support import program_coverage
+    analysis_rows=program_coverage(store)
+    coverage_section=next(section for section in sections if section['id']=='coverage')
+    coverage_section['blocks'].extend([
+        {'type':'h','text':'Source analysis coverage'},
+        {'type':'table','head':['Component','Source format','Analysis method','Status','Scope'],
+         'rows':[[row['file'],row['technology'],row['method'],row['status'],
+                  ('Limited inventory; further source analysis required. ' if row['limited'] else '')+row['scope']]
+                 for row in analysis_rows],'small':True},
+        {'type':'p','text':'Language and product labels guide source analysis. They do not confirm installed frameworks, complete native projects, deployed versions, compiler acceptance or runtime behavior.'},
+    ])
+    from . import quality as Q
+    sections.insert(0, {"id": "evidence_basis", "title": "Evidence basis and limitations", "blocks": [{"type": "p", "text": Q.QUALIFICATION}]})
+    sections.append({"id": "transcription_validation", "title": "Transcription validation and software improvements", "blocks": Q.blocks(store)})
+
     return {"program": name, "slug": store.info["slug"], "client": client, "prepared_by": prepared_by,
             "date": (today or date.today()).strftime("%B %d, %Y"), "verdict": v, "assessment": a, "sections": sections}
 
@@ -364,8 +378,8 @@ def _verification_blocks(store) -> list:
     pct = round(100 * tot["ok"] / tot["lines"], 1) if tot["lines"] else 0
     return [
         {"type": "h", "text": "Transcription check"},
-        {"type": "p", "text": f"**{tot['ok']} of {tot['lines']} lines ({pct}%)** were verified against the screenshots: "
-                              "every word has the length and column the pixels show. Lines where the pixels disagreed "
+        {"type": "p", "text": f"**{tot['ok']} of {tot['lines']} lines ({pct}%)** matched screenshot column and character-length checks. "
+                              "These checks do not prove exact character identity or that every original row was captured. Lines where the pixels disagreed "
                               f"were zoomed and read again ({tot['reread']} fixed that way). {tot['flagged']} line(s) are "
                               f"listed to check, and {tot['unchecked']} could not be checked because the text isn't on a "
                               "fixed-width grid (proportional fonts, UI screens). "

@@ -158,10 +158,11 @@ def apply(store, ops: list, note: str = "", today=None, client=None) -> dict:
         done.append(r)
         if r.get("warning"):
             warnings.append(f"{r['description']}: {r['warning']}")
-        elif item["op"] == "artifact.replace_line":
+        elif item["op"] in ("artifact.replace_line", "artifact.confirm_line"):
             refresh.add(payload["artifact"])
             _carry_quality_concerns(store, store.correction(r["id"]))
-            source_changes.append(f"Corrected {payload['artifact']} line {payload['line']} and refreshed its analysis.")
+            action = "Confirmed" if item["op"] == "artifact.confirm_line" else "Corrected"
+            source_changes.append(f"{action} {payload['artifact']} line {payload['line']} and refreshed its analysis.")
     for artifact_name in sorted(refresh):
         warnings.extend(_refresh_source(store, artifact_name, client))
     run_assessment(store, today=today)

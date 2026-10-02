@@ -29,6 +29,20 @@ def rating_words(score) -> str:
     return f"{c} – {label}" if c else "Not rated"
 
 
+from contextvars import ContextVar
+from contextlib import contextmanager
+_word_mode = ContextVar("report_word_ratings", default=False)
+
+
+@contextmanager
+def word_ratings():
+    token = _word_mode.set(True)
+    try:
+        yield
+    finally:
+        _word_mode.reset(token)
+
+
 WORDS = False     # True for the Word report: ratings in words (1-5, 1 best), no 0-100 figures
 
 
@@ -37,7 +51,7 @@ def explain(score, factors, n=3, none_text="No problems were found in the files 
     from .plain import reasons, reasons_words, sentence
     if score is None:
         return "Insufficient evidence: the material reviewed gives no evidence for this."
-    if WORDS:
+    if WORDS or _word_mode.get():
         rs = reasons_words(factors, n)
         return f"{rating_words(score)}" + (f", mainly because {sentence(rs)}." if rs else f". {none_text}")
     rs = reasons(factors, n)
@@ -62,12 +76,16 @@ def explain_program(a, dim, n=3) -> str:
     if score is None:
         return explain(None, [])
     name = DIM_NAMES.get(dim, dim)
-    if WORDS:
+    fs = [f for f in program_factors(a.get("components") or [], dim, 0) if f["points"] < 0]
+    if not fs:
+        return explain(score, [], none_text="No problems were found.")
+    if WORDS or _word_mode.get():
         w = s.get("worst") or {}
         worst_c = condition(w.get("score"))[0] if w.get("score") is not None else None
         head = rating_words(w["score"]) if worst_c else rating_words(score)
         out = f"{head}, going by the weakest file" + (f" ({w.get('component')})" if w.get("component") else "")
-        rs = reasons_words(program_factors(a.get("components") or [], dim, 0), n)
+        mine = [f for f in fs if f.get("component") == w.get("component")] if worst_c and w.get("component") else fs
+        rs = reasons_words(mine or fs, n)
         out += f", mainly because {sentence(rs)}." if rs else ". No problems were found."
         if worst_c and condition(score)[0] != worst_c:
             out += f" Averaged across all files it would be {rating_words(score)}."
@@ -76,7 +94,7 @@ def explain_program(a, dim, n=3) -> str:
     w = s.get("worst") or {}
     if w and w.get("score") is not None and w["score"] < score:
         out += f" (weakest file: {w.get('component')}, {w.get('score')})"
-    rs = reasons(program_factors(a.get("components") or [], dim, 0), n)
+    rs = reasons(fs, n)
     return out + (f". Points were taken off because {sentence(rs)}." if rs else ". No problems were found.")
 
 

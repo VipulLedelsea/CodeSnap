@@ -50,7 +50,7 @@ for pat, rep in _RULES:
         _COMPILED.append((re.compile(pre + p + post), r))
 
 _SKIP_KEYS = {"id", "kind", "type", "from", "to", "source", "target", "slug", "group", "parent", "ref", "src", "dst",
-              "href", "status", "level", "bucket", "sev", "category", "rule"}
+              "href", "status", "level", "bucket", "sev", "category", "rule", "snippet", "quote", "source_line"}
 
 
 _VERBATIM_COLS = {"Evidence", "Location", "Text", "Files", "File", "Component"}   # quoted code and file names
@@ -84,25 +84,29 @@ def humanize(text: str) -> str:
     return re.sub(r"(?<=\S)  +(?=\S)", " ", text)
 
 
-def clean(text: str) -> str:
+def clean(text: str, verbatim=()) -> str:
+    protected = sorted({value for value in verbatim if value}, key=len, reverse=True)
+    if protected:
+        pattern = "(" + "|".join(re.escape(value) for value in protected) + ")"
+        return "".join(part if part in protected else clean(part) for part in re.split(pattern, text))
     for rx, rep in _COMPILED:
         text = rx.sub(rep, text)
     return humanize(text)
 
 
-def scrub(obj, key=None):
+def scrub(obj, key=None, verbatim=()):
     """Rewrite every human-readable string in a report or diagram structure (ids and codes are left alone)."""
     if isinstance(obj, str):
-        return obj if key in _SKIP_KEYS else clean(obj)
+        return obj if key in _SKIP_KEYS else clean(obj, verbatim=verbatim)
     if isinstance(obj, dict):
         if obj.get("type") == "table" and isinstance(obj.get("rows"), list):
             keep = {i for i, h in enumerate(obj.get("head") or []) if h in _VERBATIM_COLS}
-            rows = [[c if i in keep else scrub(c) for i, c in enumerate(r)] if isinstance(r, list) else scrub(r)
+            rows = [[c if i in keep else scrub(c, verbatim=verbatim) for i, c in enumerate(r)] if isinstance(r, list) else scrub(r, verbatim=verbatim)
                     for r in obj["rows"]]
-            return {**{k: scrub(v, k) for k, v in obj.items() if k != "rows"}, "rows": rows}
-        return {k: scrub(v, k) for k, v in obj.items()}
+            return {**{k: scrub(v, k, verbatim) for k, v in obj.items() if k != "rows"}, "rows": rows}
+        return {k: scrub(v, k, verbatim) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [scrub(v, key) for v in obj]
+        return [scrub(v, key, verbatim) for v in obj]
     if isinstance(obj, tuple):
-        return tuple(scrub(v, key) for v in obj)
+        return tuple(scrub(v, key, verbatim) for v in obj)
     return obj

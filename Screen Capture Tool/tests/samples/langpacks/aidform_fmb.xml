@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Module version="101020002" xmlns="http://xmlns.oracle.com/Forms">
+  <FormModule Name="AIDFORM" Title="District Aid Maintenance">
+    <Block Name="DISTRICT" QueryDataSourceName="DISTRICT_AID" DatabaseBlock="true">
+      <Item Name="DISTRICT_ID" ItemType="Text Item" ColumnName="DISTRICT_ID"/>
+      <Item Name="TOTAL_AID" ItemType="Text Item" ColumnName="TOTAL_AID"/>
+      <Trigger Name="POST-QUERY" TriggerText="SELECT NAME INTO :DISTRICT.NAME FROM DISTRICT WHERE ID = :DISTRICT.DISTRICT_ID;"/>
+    </Block>
+    <Block Name="CONTROL" DatabaseBlock="false">
+      <Item Name="BTN_REPORT" ItemType="Push Button"/>
+      <Trigger Name="WHEN-BUTTON-PRESSED" TriggerText="RUN_PRODUCT(REPORTS, 'aidrpt', SYNCHRONOUS, RUNTIME, FILESYSTEM, pl_id, NULL);&#xA;CALL_FORM('levyform');&#xA;HOST('lpr /tmp/aid.lis');"/>
+    </Block>
+  </FormModule>
+</Module>
