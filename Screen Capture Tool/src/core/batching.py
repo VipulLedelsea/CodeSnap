@@ -77,6 +77,10 @@ class BatchRequestError(RuntimeError):
     pass
 
 
+class BatchBadRequest(BatchRequestError):
+    """The API rejected the request itself (a 400 in a live call): retrying it unchanged cannot succeed."""
+
+
 class _Item:
     def __init__(self, params):
         self.params = params
@@ -209,6 +213,9 @@ class BatchMessages:
             kind = getattr(res, "type", None)
             if kind == "succeeded":
                 item.message = res.message
+                item.event.set()
+            elif kind == "errored" and "invalid_request" in str(getattr(res, "error", "")):
+                item.error = BatchBadRequest(f"batch request errored: {getattr(res, 'error', '')}")
                 item.event.set()
             elif kind in ("errored", "expired") and item.tries < 1:
                 item.tries += 1

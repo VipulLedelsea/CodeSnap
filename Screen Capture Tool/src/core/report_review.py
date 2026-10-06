@@ -8,6 +8,7 @@ import time
 
 from core import deepdive as D
 
+CHUNK = 40
 MODEL_ENV = "CODESNAP_FINAL_MODEL"
 TOOL = {
     "name": "record_report_review",
@@ -27,7 +28,8 @@ For each numbered claim decide:
 - unsupported: the code contradicts it, or the behaviour it describes is not in the file. Quote the contradicting code if there is any.
 - cannot_check: the claim is about something outside the code (staff, owners, tests that were not supplied, run schedules, deployed versions, data volumes). Never mark these unsupported.
 Lines marked with a warning sign were not read reliably; do not rest a verdict on them.
-Judge only what the code shows. Do not invent behaviour."""
+Judge only what the code shows. Do not invent behaviour.
+Claims can be any statement the report makes about the program: what a file does, counts, dependencies, data flow, risks, recommendations that rest on code facts. Statements that are generic advice or about the people and process around the code are cannot_check."""
 TABLES = (("Risk ID", "risk"), ("Debt ID", "debt"), ("Vuln ID", "vuln"))
 
 
@@ -39,30 +41,63 @@ def risk_text(title, comps):
     return title + (f" ({', '.join(comps[:3])})" if comps else "")
 
 
+SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(])")
+SKIP = re.compile(r"^(?:DRAFT:|Figure |Table |The draft report's|Source:|Note:)")
+MAX_TEXT = 500
+
+
+def sentences(text):
+    return [x.strip() for x in SENT.split((text or "").strip()) if x.strip()]
+
+
+def _keep(sentence):
+    return len(sentence.split()) >= 7 and not SKIP.match(sentence)
+
+
+def _named(text, names):
+    return [n for n in names if n.lower() in text.lower()]
+
+
 def extract_claims(docx_bytes, file_names):
     from docx import Document
     doc = Document(io.BytesIO(docx_bytes))
     names = sorted(file_names, key=len, reverse=True)
-    out = []
+    out, seen = [], set()
+
+    def add(kind, cid, text, files):
+        k = claim_key(text)
+        if k in seen or not text:
+            return
+        seen.add(k)
+        out.append({"key": k, "kind": kind, "id": cid, "text": text, "files": files[:1]})
+
+    plain = []
     for table in doc.tables:
         if not table.rows:
             continue
         head = [c.text.strip() for c in table.rows[0].cells]
         kind = next((k for h, k in TABLES if head and head[0] == h), None)
         if not kind:
+            plain.append(table)
             continue
         for row in table.rows[1:]:
             cells = [c.text.strip() for c in row.cells]
-            if kind == "risk":
-                text = cells[1]
-            elif kind == "debt":
-                text = cells[1]
-            else:
-                text = f"{cells[1]}|{cells[7] if len(cells) > 7 else ''}"
-            if not text or text.lower().startswith("none"):
-                continue
-            files = [n for n in names if n.lower() in text.lower()]
-            out.append({"key": claim_key(text), "kind": kind, "id": cells[0], "text": text, "files": files[:1]})
+            text = f"{cells[1]}|{cells[7] if len(cells) > 7 else ''}" if kind == "vuln" else cells[1]
+            if text and not text.lower().startswith("none"):
+                add(kind, cells[0], text, _named(text, names))
+    texts = []
+    for p in doc.paragraphs:
+        style = p.style.name if p.style is not None else ""
+        if not style.startswith(("Heading", "Title", "Caption", "TOC")):
+            texts.append(p.text)
+    for table in plain:
+        for row in table.rows[1:]:
+            for cell in row.cells:
+                texts.append(cell.text)
+    for t in texts:
+        for sent in sentences(t):
+            if _keep(sent):
+                add("text", "", sent[:MAX_TEXT], _named(sent, names))
     return out
 
 
@@ -129,10 +164,10 @@ def run(store, client, report_docx, model=None) -> dict:
     for c in claims:
         (by_file.setdefault(c["files"][0], []) if c["files"] else spanning).append(c)
     verdicts, errors = {}, []
-    with ThreadPoolExecutor(max_workers=max(1, min(12, len(by_file) + 1))) as pool:
-        jobs = [pool.submit(_ask, store, client, model, arts[n], cs) for n, cs in by_file.items()]
-        if spanning:
-            jobs.append(pool.submit(_ask_program, store, client, model, spanning))
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        jobs = [pool.submit(_ask, store, client, model, arts[n], cs[i:i + CHUNK])
+                for n, cs in by_file.items() for i in range(0, len(cs), CHUNK)]
+        jobs += [pool.submit(_ask_program, store, client, model, spanning[i:i + CHUNK]) for i in range(0, len(spanning), CHUNK)]
         for j in as_completed(jobs):
             try:
                 verdicts.update(j.result())
@@ -157,6 +192,48 @@ def summary_line(store):
     c = {}
     for x in v.values():
         c[x["verdict"]] = c.get(x["verdict"], 0) + 1
-    return (f"The draft report's risk, debt and security statements were re-read against the code: {c.get('supported', 0)} confirmed, "
+    return (f"Every statement in the draft report was re-read against the code: {c.get('supported', 0)} confirmed, "
             f"{c.get('partly', 0)} partly right (corrected), {c.get('unsupported', 0)} not shown by the code (removed), "
             f"{c.get('cannot_check', 0)} cannot be checked from code alone.")
+
+
+def apply_to_docx(document, store):
+    v = verdicts(store)
+    if not v:
+        return {"removed": 0, "corrected": 0}
+    changed = {"removed": 0, "corrected": 0}
+
+    def fix(par):
+        text = par.text
+        if not text.strip() or not par.runs:
+            return
+        parts, edited = [], False
+        for sent in sentences(text):
+            r = v.get(claim_key(sent[:MAX_TEXT])) if _keep(sent) else None
+            if r and r.get("verdict") == "unsupported":
+                changed["removed"] += 1
+                edited = True
+                continue
+            if r and r.get("verdict") == "partly" and r.get("correction"):
+                sent = f"{sent} Code check: {r['correction'].strip()}"
+                changed["corrected"] += 1
+                edited = True
+            parts.append(sent)
+        if edited:
+            par.runs[0].text = " ".join(parts) if parts else "Removed after the code check: not shown by the code."
+            for r_ in par.runs[1:]:
+                r_.text = ""
+
+    for p in document.paragraphs:
+        style = p.style.name if p.style is not None else ""
+        if not style.startswith(("Heading", "Title", "Caption", "TOC")):
+            fix(p)
+    for table in document.tables:
+        head = table.rows[0].cells[0].text.strip() if table.rows else ""
+        if any(head == h for h, _ in TABLES):
+            continue
+        for row in table.rows[1:]:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    fix(p)
+    return changed

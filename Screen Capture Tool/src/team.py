@@ -58,6 +58,11 @@ def agent_extract(ctx) -> dict:
     # clean + collapse dups + stitch (by editor line number when every screenshot shows them), with the line check
     code, parts, notes, statuses = analysis.merge_verified(raws, metas)
     try:
+        from core import neighbor
+        code, _fixed = neighbor.repair(ctx.client, sorted(ctx.images), raws, code, notes, statuses)
+    except Exception:  # noqa: BLE001 - a failed neighbour check leaves the stitched text as it was
+        pass
+    try:
         ctx.verify_info = (statuses, notes, code)
     except Exception:  # noqa: BLE001 - a context without the field (older callers)
         pass

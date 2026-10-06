@@ -1681,6 +1681,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     editorial.apply(doc, a, evidence_quality, s, metadata=metadata, analysis_stage=store.get_meta("analysis_stage"),
                     security_counts={severity: sum(f["severity"] == severity for f in sec_f) for severity in SEV},
                     priority_reasons=[r_["title"] for r_ in BR[:2]])
+    RRV.apply_to_docx(doc.d, store)
     _fill_toc(doc)
     buf = io.BytesIO()
     doc.d.save(buf)

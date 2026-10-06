@@ -382,7 +382,8 @@ def _tool(message, name):
 def _bad_request_types():
     try:
         import anthropic
-        return (anthropic.BadRequestError, TypeError)   # TypeError: an SDK too old to know `thinking`
+        from core.batching import BatchBadRequest
+        return (anthropic.BadRequestError, BatchBadRequest, TypeError)   # TypeError: an SDK too old to know `thinking`
     except Exception:  # noqa: BLE001
         return (TypeError,)
 
