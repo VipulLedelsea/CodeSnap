@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import need_fixture
+
 docx = pytest.importorskip("docx")
 
 from core.model import ProgramStore
@@ -39,6 +41,7 @@ def build(store):
 @pytest.fixture(scope="module")
 def run1(tmp_path_factory):
     root = tmp_path_factory.mktemp("run1")
+    need_fixture(RUN1)
     shutil.copytree(RUN1, root / "live-test-09-29")
     st = ProgramStore.open("live-test-09-29", root=root)
     yield build(st)

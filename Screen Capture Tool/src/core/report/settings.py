@@ -1,6 +1,8 @@
 """Per-program report details (client, engagement, IDs, reviewers). Nothing client-specific is built in: anything not
 entered is reported as "Unknown" and listed as an open item."""
 
+from core.diagrams.xmlsafe import xml_safe
+
 FIELDS = [
     ("client", "Client organization"),
     ("engagement", "Engagement name"),
@@ -40,7 +42,7 @@ def save(store, values: dict) -> dict:
     cur = store.get_meta("report_settings") or {}
     for k, _ in FIELDS:
         if k in (values or {}):
-            cur[k] = str(values[k] or "").strip()
+            cur[k] = xml_safe(str(values[k] or "")).strip()
     store.set_meta("report_settings", cur)
     if "signed_off" in (values or {}):
         cur["signed_off_basis"] = store.model_stamp() if cur.get("signed_off", "").lower() in ("yes", "y", "true", "1") else ""

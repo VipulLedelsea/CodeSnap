@@ -16,6 +16,7 @@ import hashlib
 import itertools
 import json
 import sys
+import re as _re
 import threading
 import os as _os
 import time
@@ -25,7 +26,7 @@ from core import robust as _robust
 from core.langpacks.formats import PROMPT_CLAUSE as _LEGACY_FORMAT_CLAUSE
 
 MODEL = _os.environ.get("CODESNAP_MODEL", "claude-opus-5-5")
-TEXT_MODEL = _os.environ.get("CODESNAP_TEXT_MODEL", "claude-sonnet-5")
+TEXT_MODEL = _os.environ.get("CODESNAP_TEXT_MODEL", "claude-sonnet-5-5")
 # Per-image extraction is an OCR-like task — use a cheaper/faster model to cut cost.
 # Reasoning steps (classify, fix) keep MODEL. Change if this model isn't available.
 EXTRACT_MODEL = MODEL  # Sonnet for extraction: follows the verbatim/no-correct rule far better than Haiku (higher cost)
@@ -248,7 +249,6 @@ EXTRACT_JSON_SYSTEM_PROMPT = (
 )
 
 
-_numbers_note = {}
 
 
 def _recover_transcription_array(text: str):
@@ -297,6 +297,7 @@ def _normalize_extract(text: str) -> dict:
     corr = data.get("corrections_applied", [])
     corr = [c for c in corr if isinstance(c, dict)] if isinstance(corr, list) else []
     nums = data.get("line_numbers") or []
+    rejected = 0
     if isinstance(rt, list) and isinstance(nums, list) and len(nums) == len(rt):
         # keep the numbers aligned with raw after the blank lines at either end are trimmed
         lines = [str(x) for x in rt]
@@ -310,11 +311,11 @@ def _normalize_extract(text: str) -> dict:
         raw_n = len([n for n in nums if n is not None])
         nums = valid_numbers(nums, lines)
         if raw_n and not nums:
-            _numbers_note["rejected"] = raw_n
+            rejected = raw_n
     else:
         nums = []
     out = {"raw": raw.strip("\n"), "corrections": corr, "numbers": nums,
-           "numbers_seen": "line_numbers" in data, "numbers_rejected": _numbers_note.pop("rejected", 0)}
+           "numbers_seen": "line_numbers" in data, "numbers_rejected": rejected}
     return out
 
 
@@ -382,6 +383,11 @@ def extract_structured_indent(client, path: Path) -> dict:
     return _normalize_extract_indent(text)
 
 
+def _accepts_temperature(model: str) -> bool:
+    """Opus 5.5 rejects `temperature` with a 400; everything else keeps the A/B switch."""
+    return not str(model or "").startswith("claude-opus-5-5")
+
+
 def extract_structured(client, path: Path, *, calibration=None) -> dict:
     """Send ONE image; return {'raw': verbatim text, 'corrections': [ {line, saw, suggested} ]}.
 
@@ -392,6 +398,8 @@ def extract_structured(client, path: Path, *, calibration=None) -> dict:
     """
     b64 = base64.standard_b64encode(_robust.read_bytes(path)).decode()
     temp = _os.environ.get("CODESNAP_EXTRACT_TEMPERATURE")   # A/B switch for the fidelity evals; unset = API default
+    if temp and not _accepts_temperature(EXTRACT_MODEL):
+        temp = None   # newer models reject sampling parameters outright
     msg = client.messages.create(
         model=EXTRACT_MODEL,
         max_tokens=4096,
@@ -452,6 +460,15 @@ KIND_PROMPT = (
     "Answer code or screen.")
 
 
+def is_fatal_api_error(exc) -> bool:
+    """True for errors a retry cannot fix (bad key, bad request, no permission) so callers surface them."""
+    try:
+        import anthropic
+        return isinstance(exc, (anthropic.AuthenticationError, anthropic.BadRequestError, anthropic.PermissionDeniedError))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def detect_kind(client, path: Path) -> str:
     """Whether a capture shows code or an application screen, from its first frame ("code" when unsure)."""
     try:
@@ -461,7 +478,9 @@ def detect_kind(client, path: Path) -> str:
             {"type": "text", "text": KIND_PROMPT}]}])
         word = "".join(getattr(b, "text", "") for b in msg.content).strip().lower()
         return "screen" if word.startswith("screen") else "code"
-    except Exception:  # noqa: BLE001 - a failed guess falls back to reading it as code
+    except Exception as exc:  # noqa: BLE001 - a failed guess falls back to reading it as code
+        if is_fatal_api_error(exc):
+            print(f"(auto-detect failed, reading as code: {type(exc).__name__}: {exc})", file=sys.stderr)
         return "code"
 
 
@@ -576,8 +595,8 @@ def synthesize_final(client, full_text: str) -> dict:
     )
     raw = "".join(getattr(b, "text", "") for b in msg.content).strip()
     data = _parse_json(raw)
-    if data is None:
-        # Couldn't parse — keep the raw text as the overview, treat as non-code.
+    if not isinstance(data, dict):
+        # Couldn't parse (or not an object) — keep the raw text as the overview, treat as non-code.
         return {**fallback, "overview": raw}
     return {
         "overview": str(data.get("overview", "")).strip(),
@@ -589,8 +608,6 @@ def synthesize_final(client, full_text: str) -> dict:
 
 import difflib as _difflib
 
-
-import re as _re
 
 _SEQNO = _re.compile(r"^\s*(\d{6})")
 _SOURCE_LABEL = _re.compile(r"(?:\d{2,}-[\w-]+\.|[A-Za-z_][\w]*:)")
@@ -620,20 +637,6 @@ def _sim(x: str, y: str) -> float:
     return _difflib.SequenceMatcher(None, x, y).ratio()
 
 
-def _overlap_len(a: list, b: list, min_overlap: int = 2, max_check: int = 400,
-                 thresh: float = 0.82) -> int:
-    """Largest k such that the last k lines of a match the first k lines of b —
-    FUZZILY, so minor OCR differences between two scrolled captures still line up.
-    Returns 0 if no run of >= min_overlap lines is similar enough."""
-    limit = min(len(a), len(b), max_check)
-    for k in range(limit, min_overlap - 1, -1):
-        atail, bhead = a[-k:], b[:k]
-        sims = [_sim(x, y) for x, y in zip(atail, bhead)]
-        if sims and sum(sims) / len(sims) >= thresh:
-            return k
-    return 0
-
-
 def _mostly_contained(b: list, merged: list) -> bool:
     """True if every non-blank line of b already appears exactly in merged —
     i.e. b is a re-capture of content we already have, so it adds nothing."""
@@ -653,8 +656,6 @@ def _mostly_contained(b: list, merged: list) -> bool:
             return True
     return False
 
-
-import re as _re
 
 _FENCE_RE = _re.compile(r"```[^\n`]*\n(.*?)```", _re.S)
 # leading line-number gutter: digits, an optional gutter glyph (Eclipse fold marker,
@@ -1250,7 +1251,7 @@ def stitch_parts(parts: list) -> str:
 
 
 def _stitch(parts: list, prefer, notes: dict) -> str:
-    from core.verify import sideways_merge, sideways_views
+    from core.verify import sideways_merge_ex, sideways_views
     frames = []
     for part in parts:
         lines = part.split("\n")
@@ -1273,22 +1274,22 @@ def _stitch(parts: list, prefer, notes: dict) -> str:
             merged = lines
             continue
         if id(lines) in side_ids:
-            got = sideways_merge(merged, lines, force=True)
+            got = sideways_merge_ex(merged, lines, force=True)
             if got is not None:
                 merged = got[0]
                 notes["sideways"] = notes.get("sideways", 0) + got[1]
-                notes.setdefault("joined", []).extend(getattr(sideways_merge, "joined", []))
+                notes.setdefault("joined", []).extend(got[2])
             else:
                 notes["sideways_unmatched"] = notes.get("sideways_unmatched", 0) + 1
             continue
         if _mostly_contained(lines, merged):
             merged = _upgrade_cut(merged, lines)  # a re-capture adds nothing new, but may show cut lines whole
             continue
-        side = sideways_merge(merged, lines)      # scrolled right: the rest of long lines, not new lines
+        side = sideways_merge_ex(merged, lines)      # scrolled right: the rest of long lines, not new lines
         if side is not None:
             merged = side[0]
             notes["sideways"] = notes.get("sideways", 0) + side[1]
-            notes.setdefault("joined", []).extend(getattr(sideways_merge, "joined", []))
+            notes.setdefault("joined", []).extend(side[2])
             continue
         stitched = _rpg_section_frame(merged, lines)
         if stitched is None:
@@ -1345,8 +1346,30 @@ def analyse_incremental(client, image_paths: list, cache_dir: Path = None) -> di
 
 def cache_path_for(path: Path, cache_dir: Path) -> Path:
     """Content-addressed cache location for an image's extracted text."""
+    return cache_dir / f"{_content_digest(path)}.md"
+
+
+_digest_memo: dict = {}
+_digest_lock = threading.Lock()
+
+
+def _content_digest(path: Path) -> str:
+    """sha256 of the file, memoized by (path, mtime, size) so unchanged PNGs are hashed once."""
+    try:
+        st = Path(path).stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return hashlib.sha256(_robust.read_bytes(path)).hexdigest()
+    with _digest_lock:
+        hit = _digest_memo.get(key)
+    if hit:
+        return hit
     digest = hashlib.sha256(_robust.read_bytes(path)).hexdigest()
-    return cache_dir / f"{digest}.md"
+    with _digest_lock:
+        if len(_digest_memo) > 4096:
+            _digest_memo.clear()
+        _digest_memo[key] = digest
+    return digest
 
 
 import threading as _cache_threading
@@ -1452,11 +1475,22 @@ FIX_SYSTEM_PROMPT = (
 )
 
 
+FIX_MAX_TOKENS = 64000   # a whole source file comes back, so the output must not be capped at a few thousand tokens
+
+
+class FixRejected(ValueError):
+    """The model's fix cannot be trusted (truncated, refused, or drastically shorter than the original)."""
+
+
 def fix_source(client, code: str, language: str, errors: str) -> str:
-    """One API call: return a corrected version of the code given compiler errors."""
-    msg = client.messages.create(
+    """One API call: return a corrected version of the code given compiler errors.
+
+    Streams (large output). Raises FixRejected when the reply was cut off or refused, so a
+    truncated file is never mistaken for a fix.
+    """
+    kwargs = dict(
         model=MODEL,
-        max_tokens=4096,
+        max_tokens=FIX_MAX_TOKENS,
         system=FIX_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": (
             f"Language: {language or 'unknown'}\n\n"
@@ -1464,7 +1498,29 @@ def fix_source(client, code: str, language: str, errors: str) -> str:
             f"Current code:\n{code}"
         )}],
     )
+    stream = getattr(getattr(client, "messages", None), "stream", None)
+    if callable(stream):
+        with stream(**kwargs) as s:
+            msg = s.get_final_message()
+    else:
+        msg = client.messages.create(**kwargs)
+    reason = getattr(msg, "stop_reason", None)
+    if reason == "max_tokens":
+        raise FixRejected("the fix was cut off at the output limit; the original was kept")
+    if reason == "refusal":
+        raise FixRejected("the model declined to produce a fix; the original was kept")
     return "".join(getattr(b, "text", "") for b in msg.content).strip()
+
+
+def fix_looks_complete(original: str, fixed: str, min_ratio: float = 0.7):
+    """None when `fixed` is plausibly a whole corrected file, else the reason it must not replace the original."""
+    if not fixed.strip():
+        return "the fix was empty"
+    before = len([l for l in original.splitlines() if l.strip()])
+    after = len([l for l in fixed.splitlines() if l.strip()])
+    if before and after < before * min_ratio:
+        return f"the fix has {after} lines against {before} in the original (looks truncated)"
+    return None
 
 
 # ── Document builder ───────────────────────────────────────────────────────────

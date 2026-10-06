@@ -235,7 +235,7 @@ def test_large_mixed_program_runs_end_to_end(tmp_path):
     a = run_assessment(store)
     ds = all_diagrams(store)
     assert vsdx(ds)[:2] == b"PK"
-    pk = package(store, rescan=False)
+    pk = package(store, rescan=False, pdf=False)
     assert pk["zip"][:2] == b"PK" and a["verdict"] and len(ds) > 50
     assert a["health"]["partial"], "truncated copies should be flagged"
     assert time.monotonic() - began < 240

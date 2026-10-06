@@ -6,6 +6,7 @@ user counts, licensing, calendars, interviews) come from the report settings; an
 instruction text and bracketed placeholders are removed so the document can be issued as-is.
 """
 import io
+import logging
 import re
 from copy import deepcopy
 from datetime import date, datetime, timedelta
@@ -19,10 +20,12 @@ from docx.shared import Inches, RGBColor
 from core.text import shorten_at_boundary
 
 from . import rationale as R
+from ..diagrams.xmlsafe import xml_safe
 from .settings import app_number, get as get_settings
 
 TEMPLATE = Path(__file__).with_name("assets") / "Application_Assessment_Report_Template.docx"
 UNKNOWN = "Unknown"
+log = logging.getLogger(__name__)
 INK = RGBColor(0x1F, 0x29, 0x37)
 SEV = ["critical", "high", "medium", "low", "info"]
 
@@ -122,6 +125,7 @@ class Doc:
 
 
 def _set_para(p, text, italic=False, bold=None):
+    text = xml_safe(text)
     runs = p.runs
     if not runs:
         r = p.add_run(text)
@@ -141,7 +145,7 @@ def _set_para(p, text, italic=False, bold=None):
 
 
 def set_cell(cell, text):
-    text = "" if text is None else str(text)
+    text = "" if text is None else xml_safe(str(text))
     paras = cell.paragraphs
     had_runs = bool(paras[0].runs)
     for extra in paras[1:]:
@@ -665,6 +669,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                             UNKNOWN]] + ([["Batch schedule and operator involvement to confirm", "Internal", "Not applicable",
                                            "Scheduled batch jobs", UNKNOWN]] if _jobs(store) else []))
     flows = store.get_meta("ui_flows") or {}
+    figs = {}      # figures actually inserted, so captions and cross-references never claim one that is missing
     proc = doc.para("[Insert process flow diagram")
     if proc is not None:
         from . import figures as FG
@@ -673,10 +678,14 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         except Exception:  # noqa: BLE001
             uf = diagrams.get("userflow")
         if uf:
-            pic = doc.picture(png(uf, scale=1.6), proc._p, 6.8, max_h=4.0)
-            doc.new_para(f"Figure 1. Current-state process for {name}: each step in processing order, grouped by the platform "
-                         f"it runs on. The order is inferred from the code and must be confirmed with the business owner.",
-                         pic._p, italic=True)
+            try:
+                pic = doc.picture(png(uf, scale=1.6), proc._p, 6.8, max_h=4.0)
+                doc.new_para(f"Figure 1. Current-state process for {name}: each step in processing order, grouped by the platform "
+                             f"it runs on. The order is inferred from the code and must be confirmed with the business owner.",
+                             pic._p, italic=True)
+                figs["process"] = 1
+            except Exception:  # noqa: BLE001
+                log.exception("Process figure could not be inserted; the report continues without it")
         proc._p.getparent().remove(proc._p)
     doc.replace("Document each business process the application supports", "The process below is drawn from what each "
                 "component reads, calculates and writes, from the arrival of inputs to the outputs and look-ups. Manual steps, "
@@ -788,11 +797,18 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     if ref is not None:
         img = ref._p.getprevious()
         arch = diagrams.get("architecture")
-        if arch is not None and img is not None and img.xpath(".//w:drawing"):
-            img.getparent().remove(img)
-            from .editorial import _diagram
-            doc.picture(_diagram(comps), ref._p.getprevious(), 6.8, max_h=4.0)
-        _set_para(ref, f"Figure 2. Component overview of {name}. Layer roles and source-derived connections are listed below; production boundaries need confirmation.",
+        has_img = img is not None and bool(img.xpath(".//w:drawing"))
+        if has_img:
+            img.getparent().remove(img)      # the template's stock picture is not this program's architecture
+            if arch is not None:
+                try:
+                    from .editorial import _diagram
+                    doc.picture(_diagram(comps), ref._p.getprevious(), 6.8, max_h=4.0)
+                    figs["arch"] = 2
+                except Exception:  # noqa: BLE001
+                    log.exception("Component overview figure could not be inserted; the report continues without it")
+        _set_para(ref, (f"Figure 2. Component overview of {name}. " if figs.get("arch") else f"Component overview of {name} (no diagram in this report). ")
+                  + "Layer roles and source-derived connections are listed below; production boundaries need confirmation.",
                   italic=True)
         anchor = doc.new_para("Architecture at a glance", ref._p, bold=True)._p
         for layer in ("Presentation", "Application", "Data", "Integration"):
@@ -818,10 +834,6 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     doc.replace("The reference layout below shows", "The architecture below is derived from the supplied components in "
                 "Section 3, in the standard layer order so it can be read alongside other application reports.")
     doc.remove("Each application report should include the following views")
-    fill_col(T[14], 2, {"A.": "Source-derived inventory (Figure 2); production boundary to confirm", "B.": "Inferred only (4.5); hosting and network detail to be confirmed",
-                                   "C.": "Complete at system level (Figure 3); systems at each end to be named",
-                                   "D.": "Complete (Figure 4)" if diagrams.get("data") else "Pending",
-                                   "E.": "Pending: requires the portfolio inventory"})
     doc.unknown("Deployment (physical) architecture: servers, environments, network zones", "4.1", "IT")
     ins = doc.para("[Insert diagrams A to E here")
     if ins is not None:
@@ -830,18 +842,32 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         try:
             diagrams["context_sys"] = RD.map(FG.context(AM, DM, name))
         except Exception:  # noqa: BLE001
-            pass
-        for n, key, cap in ((3, "context_sys", "System context: user groups, upstream systems and shared-data owners, the "
+            log.exception("System context diagram could not be built; the report continues without it")
+        for key, cap in (("context_sys", "System context: user groups, upstream systems and shared-data owners, the "
                                                "application by platform, and downstream systems; dashed boxes are systems "
                                                "still to be named"),
-                            (4, "data", "Data model: tables, columns and keys used by the application")):
+                            ("data", "Data model: tables, columns and keys used by the application")):
             dg = diagrams.get(key)
             if dg is None:
                 continue
-            pic = doc.picture(png(dg, scale=1.5), anchor, 6.8)
-            capp = doc.new_para(f"Figure {n}. {cap}. Validation with the IT owner: pending.", pic._p, italic=True)
+            n = 3 + sum(1 for k_ in ("context_sys", "data") if figs.get(k_))
+            try:
+                pic = doc.picture(png(dg, scale=1.5), anchor, 6.8)
+                capp = doc.new_para(f"Figure {n}. {cap}. Validation with the IT owner: pending.", pic._p, italic=True)
+            except Exception:  # noqa: BLE001
+                log.exception("Diagram %s could not be inserted; the report continues without it", key)
+                continue
+            figs[key] = n
             anchor = capp._p
         ins._p.getparent().remove(ins._p)
+    _missing_fig = "not included in this report"
+    fill_col(T[14], 2, {"A.": f"Source-derived inventory (Figure {figs['arch']}); production boundary to confirm" if figs.get("arch")
+                        else f"Source-derived inventory in 3.2 (diagram {_missing_fig})",
+                        "B.": "Inferred only (4.5); hosting and network detail to be confirmed",
+                        "C.": f"Complete at system level (Figure {figs['context_sys']}); systems at each end to be named"
+                        if figs.get("context_sys") else f"Pending (diagram {_missing_fig})",
+                        "D.": f"Complete (Figure {figs['data']})" if figs.get("data") else "Pending",
+                        "E.": "Pending: requires the portfolio inventory"})
 
     ints = []
     ext = [e for e in store.entities() if _is_interface(e)]
@@ -1525,7 +1551,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                          ("Appendix B:", "Appendix B: Technology and component inventory (Sections 3.2 and 6.2)"),
                          ("Appendix C:", "Appendix C: Technical debt detail (Section 7.3)"),
                          ("Appendix D:", "Appendix D: Security findings are recorded in Section 8; any separate restricted distribution requires confirmation"),
-                         ("Appendix E:", "Appendix E: Current-state process (Figure 1)"),
+                         ("Appendix E:", "Appendix E: Current-state process" + (" (Figure 1)" if figs.get("process") else " (diagram not included)")),
                          ("Appendix F:", "Appendix F: Report catalog (Section 5.3)"),
                          ("Appendix G:", "Appendix G: Glossary of technical terms (below)")):
         p = doc.para(starts)
@@ -1892,16 +1918,6 @@ def _eol_plain(t):
         t.get("status"), f"{nm} has an unconfirmed support status")
 
 
-def _health_line(a):
-    hs, _ = _health_total(a)
-    c = hs["overall"][0]
-    rated = sum(1 for k, v in hs.items() if k != "overall" and v[0])
-    if not c:
-        return "Not rated"
-    return (f"{c} – {LEVEL_WORD[c].title()} (1 is best, 5 is worst). This is the weighted average of the health scorecard "
-            f"in Section 6.1, where {rated} of the 7 areas could be rated from the evidence.")
-
-
 _NOUNS = {"consolidate": "consolidation", "re-architect": "re-architecture", "replace": "replacement", "refactor": "refactoring",
           "re-platform": "re-platforming", "retain": "retention", "retire": "retirement", "rehost": "rehosting"}
 
@@ -1969,6 +1985,17 @@ def _cmp(v, limit):
     return "Within threshold" if v <= limit else "Above threshold"
 
 
+_TEST_WORD = re.compile(r"(?:^|[/\\_.\- ])tests?(?:[/\\_.\- ]|$)|^tests?\d", re.I)
+_TEST_CAMEL = re.compile(r"(?<=[a-z0-9])Tests?(?=\.[^./\\]+$|$)")
+
+
+def is_test_file(name) -> bool:
+    """A test file by its name: a whole word 'test'/'tests' (test_x.py, x_test.go, tests/x) or a CamelCase suffix
+    (PaymentTest.java). Names that merely contain the letters, such as LATEST.cbl or ATTESTRPT.cbl, are not tests."""
+    base = str(name or "")
+    return bool(_TEST_WORD.search(base) or _TEST_CAMEL.search(base))
+
+
 def _metrics(arts):
     from core.assess.scores import text_metrics
     per = []
@@ -1977,7 +2004,7 @@ def _metrics(arts):
     total = 0
     for x in arts:
         text = x.get("transcription") or ""
-        if re.search(r"test", x["name"], re.I):
+        if is_test_file(x["name"]):
             tests += 1
         try:
             m = text_metrics(text, x["name"], x.get("language") or "")
@@ -1993,34 +2020,6 @@ def _metrics(arts):
     mx = max(per)
     return {"avg": round(sum(p for p, _ in per) / len(per), 1), "max": mx[0], "max_file": mx[1], "tests": tests,
             "translated": round(100 * translated / total) if total else 0}
-
-
-def _health_total(a):
-    """Map the program scores onto the template's seven health dimensions, each with its reason."""
-    S = a["scores"]
-    dims = {"Technology currency": (20, ["supportability"]), "Code quality": (15, ["tech_debt", "complexity"]),
-            "Stability and reliability": (15, ["health"]), "Performance and scalability": (10, []),
-            "Security posture": (15, ["security"]), "Documentation and knowledge": (10, []),
-            "Business fit and adaptability": (15, ["coupling"])}
-    out, wsum, acc = {}, 0, 0.0
-    for key, (w, src) in dims.items():
-        vals = [S[d]["score"] for d in src if (S.get(d) or {}).get("score") is not None]
-        if not vals:
-            out[key] = (None, "Excluded", "Not rated: no evidence for this dimension in the material reviewed (open item).")
-            continue
-        score = round(sum(vals) / len(vals))
-        c, label = R.condition(score)
-        why = " ".join(R.explain_program(a, d, 2).split(". ", 1)[1] for d in src)
-        out[key] = (c, f"{c * w / 100:.2f}", why)
-        wsum += w
-        acc += c * w
-    overall = round(acc / wsum, 1) if wsum else None
-    label = R.CONDITION[min(4, max(0, round(overall) - 1))][2] if overall else "Not rated"
-    out["overall"] = (round(overall) if overall else None, f"{overall}" if overall else "")
-    rated = len([k for k in out if k != "overall" and out[k][0]])
-    txt = (f"{overall} – {label}. The weighted average of the {rated} areas that could be rated; the weights of the "
-           f"{7 - rated} unrated areas are left out, so the total is taken over {wsum}%.") if overall else "Not rated"
-    return out, txt
 
 
 def _options(code):

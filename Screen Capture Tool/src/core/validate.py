@@ -20,6 +20,7 @@ check_source(path) -> {
 
 import ast
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -53,10 +54,57 @@ def _have(cmd: str) -> bool:
     return _which(cmd) is not None
 
 
+_SECRET_PATTERNS = (
+    (re.compile(r"sk-ant-[A-Za-z0-9_-]+"), "[REDACTED-KEY]"),
+    (re.compile(r"(ANTHROPIC_API_KEY\s*[=:]\s*)[^\s'\"]+", re.I), r"\1[REDACTED]"),
+)
+
+
+def redact(text: str) -> str:
+    """Strip API keys from checker output so a compiler echoing an included file never leaks them downstream."""
+    for pattern, repl in _SECRET_PATTERNS:
+        text = pattern.sub(repl, text or "")
+    return text
+
+
+_INCLUDE = re.compile(r"^[ \t]*#[ \t]*(include_next|include|import|embed)\b(.*)$", re.M)
+_LITERAL_INCLUDE = re.compile(r'^\s*(?:<([^>\n]*)>|"([^"\n]*)")')
+
+
+def unsafe_include(src: str):
+    """Reason a C-family source must not be handed to a compiler, else None.
+
+    The compiler would read whatever an absolute or parent-relative include names and echo it back
+    in its diagnostics, which then flows into reports and model prompts."""
+    for m in _INCLUDE.finditer(src or ""):
+        operand = _LITERAL_INCLUDE.match(m.group(2))
+        if not operand:
+            return f"#{m.group(1)} with a computed operand is not compiled"
+        target = (operand.group(1) if operand.group(1) is not None else operand.group(2)).replace("\\", "/")
+        if target.startswith(("/", "~")) or re.match(r"[A-Za-z]:", target) or ".." in target.split("/"):
+            return f"#{m.group(1)} of '{target}' (absolute or parent path) is not compiled"
+    return None
+
+
+def check_code_text(code: str, extension: str) -> dict:
+    """Check source held in memory: written to a private, empty temp dir that is removed afterwards."""
+    from core.outputs import safe_ext
+    ext = safe_ext(extension or "txt")
+    with tempfile.TemporaryDirectory(prefix="codesnap_check_") as td:
+        target = Path(td) / f"source.{ext}"
+        target.write_text(code)
+        res = check_source(target)
+    if res.get("errors"):
+        # collapse absolute temp paths (e.g. /var/folders/.../source.java:1:) to the bare filename
+        res["errors"] = re.sub(r"\S*/([\w.\-]+:\d+:)", r"\1", res["errors"])
+    return res
+
+
 def _run(args: list, timeout: int = TIMEOUT):
     try:
-        p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-        return p.returncode, ((p.stderr or "") + (p.stdout or "")).strip()
+        with tempfile.TemporaryDirectory(prefix="codesnap_run_") as cwd:   # empty cwd: relative includes find nothing
+            p = subprocess.run(args, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+        return p.returncode, redact(((p.stderr or "") + (p.stdout or "")).strip())
     except subprocess.TimeoutExpired:
         return 1, f"check timed out after {timeout}s"
     except Exception as exc:  # noqa: BLE001
@@ -240,11 +288,23 @@ _CHECKERS.update({"php": _check_php, "php3": _check_php, "php4": _check_php, "ph
                   "xaml": _check_xml, "dtsx": _check_xml})
 
 
+_C_FAMILY = {"c", "h", "cpp", "cc", "cxx", "hpp", "hh", "hxx"}
+
+
 def check_source(path) -> dict:
     """Syntax/compile-check a source file by extension. Never runs the program."""
-    path = Path(path)
+    path = Path(path).absolute()
     ext = path.suffix.lower().lstrip(".")
+    if ext in _C_FAMILY:
+        try:
+            reason = unsafe_include(path.read_text(errors="replace"))
+        except OSError:
+            reason = None
+        if reason:
+            return _result(False, False, "gcc/clang", note=f"not compiled: {reason}")
     checker = _CHECKERS.get(ext)
-    if checker is None:
-        return _check_structure(path)
-    return checker(path)
+    res = _check_structure(path) if checker is None else checker(path)
+    for key in ("errors", "note"):
+        if isinstance(res.get(key), str):
+            res[key] = redact(res[key])
+    return res

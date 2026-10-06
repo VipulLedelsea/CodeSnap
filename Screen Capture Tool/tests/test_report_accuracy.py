@@ -17,6 +17,8 @@ from core.model import ProgramStore
 from core.report import docx_bytes
 
 DEMO = Path(__file__).resolve().parent / "fixtures" / "demo930"
+if not (DEMO / "sources").is_dir():
+    pytest.skip("tests/fixtures/demo930 is not present in this checkout", allow_module_level=True)
 SOURCES = "\n".join(p.read_text(errors="ignore") for p in (DEMO / "sources").iterdir())
 
 

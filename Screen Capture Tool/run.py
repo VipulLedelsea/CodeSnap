@@ -69,7 +69,13 @@ def ensure_api_key() -> None:
     key = input("  Paste your ANTHROPIC_API_KEY: ").strip()
     if not key:
         sys.exit("No key entered — re-run when you have one.")
-    env_file.write_text(f"ANTHROPIC_API_KEY={key}\n")
+    fd = os.open(str(env_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)   # owner-only from the first byte
+    with os.fdopen(fd, "w") as fh:
+        fh.write(f"ANTHROPIC_API_KEY={key}\n")
+    try:
+        os.chmod(env_file, 0o600)
+    except OSError:
+        pass
     print(f"  Saved to {env_file}  (git-ignored — stays on your machine).")
 
 

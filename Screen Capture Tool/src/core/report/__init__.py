@@ -4,7 +4,7 @@ import zipfile
 from core import robust
 from core.diagrams import all_diagrams, drawio, vsdx
 
-from . import docx_report, html
+from . import html
 from .content import build
 
 REPORT_REVISION = "2026-10-02-concise-report-v13"

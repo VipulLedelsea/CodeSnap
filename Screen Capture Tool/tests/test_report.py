@@ -80,7 +80,7 @@ def test_docx_opens_with_images_and_tables(program):
 
 
 def test_package_writes_all_files(program):
-    out = package(program, today=TODAY)
+    out = package(program, today=TODAY, pdf=False)
     names = set(zipfile.ZipFile(io.BytesIO(out["zip"])).namelist())
     slug = program.info["slug"]
     assert names - {f"{slug}_assessment_report.pdf"} == {f"{slug}_assessment_report.html", f"{slug}_assessment_report.docx", f"{slug}_diagrams.vsdx", f"{slug}_diagrams.drawio"}
@@ -147,7 +147,10 @@ def test_report_api_waits_for_deep_analysis(tmp_path, monkeypatch):
     slug = client.post("/api/programs", json={"name": "Report waiting"}).json()["program"]["slug"]
     with ProgramStore.open(slug) as store:
         add(store, "AIDCALC.cbl", (COBOL / "AIDCALC.cbl").read_text(), "COBOL", "cbl")
+    # A GET never starts paid analysis.
     response = client.get(f"/api/programs/{slug}/report.docx")
     assert response.status_code == 409
-    assert "Deep code analysis is running" in response.json()["error"]
+    assert started == []
+    # Starting it is an explicit POST; afterwards the report waits on the running job.
+    assert client.post(f"/api/programs/{slug}/report/prepare").status_code == 200
     assert started == [slug]

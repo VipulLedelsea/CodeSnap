@@ -303,12 +303,13 @@ class ProgramStore:
         return allv if artifact_id is None else allv.get(str(artifact_id))
 
     def set_verification(self, artifact_id, v):
-        allv = self.get_meta("verification") or {}
-        if v:
-            allv[str(artifact_id)] = v
-        else:
-            allv.pop(str(artifact_id), None)
-        self.set_meta("verification", allv)
+        with self.transaction():
+            allv = self.get_meta("verification") or {}
+            if v:
+                allv[str(artifact_id)] = v
+            else:
+                allv.pop(str(artifact_id), None)
+            self.set_meta("verification", allv)
 
     def pending_captures(self) -> dict:
         return {int(k): v for k, v in (self.get_meta("pending_captures", {}) or {}).items()}
@@ -400,6 +401,7 @@ class ProgramStore:
         import uuid
         source = self.sources_dir / f"{uuid.uuid4().hex}.source"
         source.write_text(transcription or "")
+        old_source = art.get("source_path")
         try:
             with self.transaction() as db:
                 db.execute("UPDATE artifact SET artifact_type = ?, language = ?, transcription = ?, source_path = ?, "
@@ -408,6 +410,9 @@ class ProgramStore:
         except Exception:
             source.unlink(missing_ok=True)
             raise
+        if old_source and old_source != source.name and not self._one(
+                "SELECT 1 FROM artifact WHERE source_path = ?", (old_source,)):
+            (self.sources_dir / old_source).unlink(missing_ok=True)
 
     def model_stamp(self) -> str:
         """Changes whenever something the report depends on changes: files, corrections, staff inputs, reviewed findings."""
@@ -460,14 +465,15 @@ class ProgramStore:
         self.clear_pending(artifact_id)
         if self.verification(artifact_id):
             self.set_verification(artifact_id, None)
-        deep = self.get_meta("deepdive", {}) or {}
-        deep.pop(str(artifact_id), None)
-        self.set_meta("deepdive", deep)
-        target = self.get_meta("recapture_target") or {}
-        if target.get("artifact_id") == artifact_id:
-            self.set_meta("recapture_target", None)
-        for key in ("assessment", "deepdive_program", "report_stamp"):
-            self.set_meta(key, None)
+        with self.transaction():
+            deep = self.get_meta("deepdive", {}) or {}
+            deep.pop(str(artifact_id), None)
+            self.set_meta("deepdive", deep)
+            target = self.get_meta("recapture_target") or {}
+            if target.get("artifact_id") == artifact_id:
+                self.set_meta("recapture_target", None)
+            for key in ("assessment", "deepdive_program", "report_stamp"):
+                self.set_meta(key, None)
 
     def export_copybooks(self) -> Path:
         target = self.path / "copybooks"

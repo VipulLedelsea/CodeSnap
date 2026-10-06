@@ -7,6 +7,7 @@ import sys
 import json
 import math
 import tempfile
+import threading
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -33,6 +34,7 @@ def capture_settings(region=None, display=None):
 
 class SessionManager:
     def __init__(self):
+        self._lock = threading.RLock()
         self._proc = None
         self._pending = None
         self.program = None
@@ -64,6 +66,10 @@ class SessionManager:
 
     def start(self, single: bool = False, idle_stop=None, region=None, project_mode=False, program=None, capture_kind="code",
               display=None) -> bool:
+        with self._lock:   # two near-simultaneous starts must not spawn two capture processes
+            return self._start_locked(single, idle_stop, region, project_mode, program, capture_kind, display)
+
+    def _start_locked(self, single, idle_stop, region, project_mode, program, capture_kind, display) -> bool:
         mode = (bool(single), bool(project_mode), idle_stop)
         if self.running() and (self.program != program or self._mode != mode):
             raise RuntimeError("Stop the current capture session before switching programs or capture modes.")
@@ -101,6 +107,10 @@ class SessionManager:
 
     def process_pending(self, program: str) -> bool:
         """Analyse a program's saved-but-unanalysed captures in a background worker (no hotkeys, exits when done)."""
+        with self._lock:
+            return self._process_pending_locked(program)
+
+    def _process_pending_locked(self, program: str) -> bool:
         if self._pending is not None and self._pending.poll() is None:
             return False
         base = [sys.executable, "--capture"] if getattr(sys, "frozen", False) else \
@@ -109,7 +119,15 @@ class SessionManager:
         return True
 
     def stop(self) -> bool:
-        if not self.running():
-            return False
-        self._proc.terminate()
-        return True
+        """Terminate the capture session and any background pending-analysis worker."""
+        with self._lock:
+            stopped = False
+            for attr in ("_proc", "_pending"):
+                proc = getattr(self, attr)
+                if proc is not None and proc.poll() is None:
+                    try:
+                        proc.terminate()
+                        stopped = True
+                    except OSError:
+                        pass
+            return stopped

@@ -24,6 +24,8 @@ from core.verify import summarize
 
 REAL = Path(__file__).resolve().parent / "real"
 CASES = sorted(p for p in REAL.glob("2*/*") if (p / "case.json").exists())
+if not CASES:
+    pytest.skip("tests/real capture samples are not present in this checkout", allow_module_level=True)
 IDS = [f"{p.parent.name.split('-')[-1]}/{p.name}" for p in CASES]
 
 

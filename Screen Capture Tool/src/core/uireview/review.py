@@ -81,8 +81,12 @@ def _site_libs(summary, add, today):
 
 def run_ui_review(store, *, site_url=None, fetcher=None, max_pages=10, today=None) -> dict:
     today = today or date.today()
-    kept = {(f["rule"], f["title"]): f["status"] for f in store.findings()
-            if f["category"] in CATEGORIES and f.get("status", "open") != "open"}
+    from core.model.corrections import finding_sig, legacy_sig, stable_sig
+    kept, kept_legacy = {}, {}
+    for f in store.findings():
+        if f["category"] in CATEGORIES and f.get("status", "open") != "open":
+            kept[finding_sig(f)] = f["status"]
+            kept_legacy[legacy_sig(f)] = f["status"]
     site_prior = store.get_meta("site_scan")
     if site_url:
         store.clear_findings(CATEGORIES)
@@ -108,10 +112,13 @@ def run_ui_review(store, *, site_url=None, fetcher=None, max_pages=10, today=Non
         if f.get("title"):
             title = f"{title} — {f['title']}"
         where = evidence.get("file") or ""
+        refs = _refs(f)
+        basis = f.get("snippet") or evidence.get("snippet") or f["detail"]
+        refs["sig"] = stable_sig(f["rule"], where, basis)
         store.add_finding(f["category"], f["severity"], f"{title}: {where}{':' + str(evidence['line']) if evidence.get('line') else ''}",
                           detail=_sentence(f["detail"]), source=source,
                           target_type="artifact" if target_id else None, target_id=target_id, evidence=[evidence],
-                          rule=f["rule"], refs=_refs(f))
+                          rule=f["rule"], refs=refs)
 
     count = 0
     for aid, a in arts.items():
@@ -141,7 +148,7 @@ def run_ui_review(store, *, site_url=None, fetcher=None, max_pages=10, today=Non
             count += 1
         store.set_meta("site_scan", site["summary"])
     for f in store.findings():
-        st = kept.get((f["rule"], f["title"]))
+        st = kept.get(finding_sig(f)) or kept_legacy.get(legacy_sig(f))
         if st and f["category"] in CATEGORIES:
             store.set_finding_status(f["id"], st)
     from core.model.corrections import apply_corrections

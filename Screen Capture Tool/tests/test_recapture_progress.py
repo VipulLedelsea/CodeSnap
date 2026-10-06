@@ -4,18 +4,25 @@ from pathlib import Path
 
 import pytest
 
+from conftest import need_fixture
+
 from core import deepdive as DD
 from core.model import ProgramStore
 from core.model.ingest import complete_capture
 
 HERE = Path(__file__).resolve().parent
 RUN1 = HERE / "fixtures" / "run1_program"
-TRUTH = next((HERE / "real" / "2026-09-29-run2" / "aidpayrn_cobol").glob("truth.*")).read_text()
-SHOT = next((HERE / "real" / "2026-09-29-run2" / "aidpayrn_cobol").glob("01.png"))
+_CASE = HERE / "real" / "2026-09-29-run2" / "aidpayrn_cobol"
+_TRUTH, _SHOTS = sorted(_CASE.glob("truth.*")), sorted(_CASE.glob("01.png"))
+if not (RUN1.exists() and _TRUTH and _SHOTS):
+    pytest.skip("tests/fixtures and tests/real samples are not present in this checkout", allow_module_level=True)
+TRUTH = _TRUTH[0].read_text()
+SHOT = _SHOTS[0]
 
 
 @pytest.fixture
 def store(tmp_path):
+    need_fixture(RUN1)
     shutil.copytree(RUN1, tmp_path / "p")
     st = ProgramStore.open("p", root=tmp_path)
     yield st

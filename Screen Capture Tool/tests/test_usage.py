@@ -141,7 +141,7 @@ def test_text_steps_use_text_model_and_vision_steps_use_main_model(tmp_path):
     models = {r["step"]: r["model"] for r in tracker.take(everything=True)}
     assert {models[s] for s in ("classify", "explain_error", "analyst", "diagram")} == {analysis.TEXT_MODEL}
     assert {models[s] for s in ("transcribe", "column_review")} == {analysis.MODEL}
-    assert analysis.MODEL == "claude-opus-5-5" and analysis.TEXT_MODEL == "claude-sonnet-5"
+    assert analysis.MODEL == "claude-opus-5-5" and analysis.TEXT_MODEL == "claude-sonnet-5-5"
 
 
 def test_cache_prefix_preserves_prompt_and_leaves_images_uncached(monkeypatch):

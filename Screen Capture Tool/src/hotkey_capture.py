@@ -44,7 +44,7 @@ from pathlib import Path
 
 # Analysis engine: env loading, background per-image extraction + cache, the
 # incremental analyser (cache hits + one overview call), and the docx builder.
-from core.analysis import load_env, extract_to_cache, analyse_incremental, fix_source
+from core.analysis import load_env, extract_to_cache, analyse_incremental, fix_source, fix_looks_complete
 from core.validate import check_source
 from core.capture import capture_full_png, capture_region_png, next_png_path
 from agent import run_agent, run_session
@@ -133,6 +133,10 @@ class App:
         self.sessions = []                        # every session folder this run
         self._unsaved_sessions = set()            # retain recoverable evidence after a failed registration
         self._inflight = set()                    # saved captures this worker is analysing right now
+        self._state_lock = threading.Lock()       # guards _inflight / _kind_guess / _threads (touched from several threads)
+        self._kind_guess = {}                     # session folder -> future of the code/screen guess
+        self._threads = []                        # burst loops + background analyses, joined before shutdown deletes folders
+        self._session_start_lock = threading.Lock()
         self.display = None                       # display for captures: index, or None = the one under the mouse
         self._capture_lock = threading.Lock()     # serialises the actual screen grab
         self._analysis_lock = threading.Lock()    # serialises stop/quit analysis
@@ -140,6 +144,20 @@ class App:
         self._futures = []                         # pending background reads
         self._fut_lock = threading.Lock()
         self.listener = None                       # set in main()
+
+    _LAZY = {"_state_lock": threading.Lock, "_session_start_lock": threading.Lock, "_kind_guess": dict, "_threads": list}
+    _lazy_guard = threading.Lock()
+
+    def __getattr__(self, name):
+        # Only reached for attributes missing from the instance: objects built without __init__ (tests, subclasses)
+        # still get working locks and registries, created once.
+        factory = type(self)._LAZY.get(name)
+        if factory is None:
+            raise AttributeError(name)
+        with type(self)._lazy_guard:
+            if name not in self.__dict__:
+                self.__dict__[name] = factory()
+            return self.__dict__[name]
 
     # --- hotkey handlers: run on the listener thread; keep them light ---
     def toggle(self):
@@ -178,6 +196,40 @@ class App:
         self._attach_usage_persistence()
         return self.client
 
+    # --- thread-safe bookkeeping ---
+    def _track(self, artifact_id):
+        with self._state_lock:
+            self._inflight.add(artifact_id)
+
+    def _untrack(self, artifact_id):
+        with self._state_lock:
+            self._inflight.discard(artifact_id)
+
+    def _is_inflight(self, artifact_id):
+        with self._state_lock:
+            return artifact_id in self._inflight
+
+    def _spawn(self, target, *args, **kwargs):
+        """Start a daemon thread that shutdown can later join."""
+        t = threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True)
+        with self._state_lock:
+            self._threads = [x for x in self._threads if x.is_alive()]
+            self._threads.append(t)
+        t.start()
+        return t
+
+    def _join_threads(self):
+        """Wait for every tracked burst/analysis thread (including ones they start meanwhile)."""
+        me = threading.current_thread()
+        while True:
+            with self._state_lock:
+                pending = [t for t in self._threads if t.is_alive() and t is not me]
+                self._threads = list(pending)
+            if not pending:
+                return
+            for t in pending:
+                t.join()
+
     # --- burst mode: auto-capture while the user scrolls; phash drops near-dups ---
     def _stop_burst(self):
         """Manually end a running burst (Cmd+Shift+1 again). The burst loop sees
@@ -190,6 +242,16 @@ class App:
         self.running = False
 
     def _begin_burst_session(self):
+        # check-and-set of `running` must be atomic: a double hotkey press must not start two bursts
+        if not self._session_start_lock.acquire(blocking=False):
+            print("(a session is already starting)")
+            return
+        try:
+            self._begin_burst_session_locked()
+        finally:
+            self._session_start_lock.release()
+
+    def _begin_burst_session_locked(self):
         if self.running:
             print("(a session is already running)")
             return
@@ -226,7 +288,7 @@ class App:
         self.capture_enabled = True
         print("[burst] Scroll through the file steadily. It captures automatically and "
               "stops when you stop scrolling. Cmd+Shift+9 to quit.")
-        threading.Thread(target=self._burst_loop, args=(self.session_dir,), daemon=True).start()
+        self._spawn(self._burst_loop, self.session_dir)
 
     def _load_capture_settings(self):
         """Refresh only at a capture boundary, keeping each file on one selected area."""
@@ -261,8 +323,11 @@ class App:
             self.tracker.set_thread_bucket(str(Path(path).parent))
             extract_to_cache(self.client, path, cache_dir)
             self._sync_text_cache(Path(path).parent, [Path(path)], load=False)   # keep the text even if the worker restarts
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            from core.analysis import is_fatal_api_error
+            if is_fatal_api_error(exc):   # a bad key / request will fail every frame: say so now, not at the end
+                print(f"Frame read failed and will not recover by retrying: {type(exc).__name__}: {exc}", file=sys.stderr)
+            # transient failures are retried when the file is analysed
 
     def _own_window_in_front(self) -> bool:
         """True while CodeSnap itself is the front window, so its own screen is never captured as a file."""
@@ -331,9 +396,10 @@ class App:
                 print(f"  burst frame {kept}: {out.name}")
                 if kept == 1 and self.capture_kind == "auto":
                     from core.analysis import detect_kind
-                    self._kind_guess = getattr(self, "_kind_guess", {})
-                    self._kind_guess[str(session_dir)] = self._pool.submit(detect_kind, self.client, out)
-                guess = getattr(self, "_kind_guess", {}).get(str(session_dir))
+                    with self._state_lock:
+                        self._kind_guess[str(session_dir)] = self._pool.submit(detect_kind, self.client, out)
+                with self._state_lock:
+                    guess = self._kind_guess.get(str(session_dir))
                 guessed_screen = False
                 if guess is not None and guess.done():
                     try:
@@ -365,15 +431,14 @@ class App:
                 from core.model import ProgramStore
                 with ProgramStore.open(self.program) as store:
                     store.update_pending(artifact_id, capture_incomplete=True)
-            self._inflight.discard(artifact_id)
+            self._untrack(artifact_id)
             status.publish(capture_error, "error", stage="done")
             return
         if self.project_mode:
             print(f"[burst] done capturing: {kept} unique frame(s). Analysing in background — start the next file.")
             self.running = False        # project mode: free the session so the next file can be captured now
             self.capture_enabled = False
-            threading.Thread(target=self._analyse_burst, args=(session_dir,), kwargs={"artifact_id": artifact_id},
-                             daemon=True).start()
+            self._spawn(self._analyse_burst, session_dir, artifact_id=artifact_id)
         else:
             print(f"[burst] done capturing: {kept} unique frame(s). Analysing...")
             self.running = False          # free run-state; the _analysing gate blocks a new capture until done
@@ -406,7 +471,7 @@ class App:
                     for i, e in enumerate(store.artifact_evidence(append_to), 1):
                         shutil.copyfile(store.evidence(e["id"])["abs_path"], Path(session_dir) / f"0000_{i:03d}.png")
                 store.claim_pending(artifact_id, self._owner)
-                self._inflight.add(artifact_id)
+                self._track(artifact_id)
                 name = store.artifact(artifact_id)["name"]
             what = ((f"added screenshots to {target['name']}" if target.get("mode") == "append" else
                      f"new version of {target['name']}") if target.get("name") else name)
@@ -432,9 +497,9 @@ class App:
                 if art is None:
                     store.clear_pending(aid)
                     continue
-                if aid in self._inflight or art["status"] != "captured" or not store.claim_pending(aid, self._owner):
+                if self._is_inflight(aid) or art["status"] != "captured" or not store.claim_pending(aid, self._owner):
                     continue
-                self._inflight.add(aid)
+                self._track(aid)
                 todo.append((aid, info.get("kind") or "code", [e["abs_path"] for e in
                             (store.evidence(x["id"]) for x in store.artifact_evidence(aid)) if e]))
         return todo
@@ -470,7 +535,8 @@ class App:
             return kind if kind != "auto" else "code"
         from core import status
         from core.analysis import detect_kind
-        fut = getattr(self, "_kind_guess", {}).pop(str(imgs[0].parent), None)
+        with self._state_lock:
+            fut = self._kind_guess.pop(str(imgs[0].parent), None)
         kind = fut.result() if fut is not None else detect_kind(self.client, imgs[0])
         status.publish("Looks like an application screen: reading it as one" if kind == "screen" else
                        "Looks like code: reading it as code", "info")
@@ -493,9 +559,10 @@ class App:
         try:
             kind = self._resolve_kind(kind, imgs, artifact_id)
         except Exception as exc:
-            self.running = self.capture_enabled = False
+            # a background analysis failing must not stop a capture the user has since started
+            print(f"Capture classification failed: {type(exc).__name__}: {exc}", file=sys.stderr)
             self._mark_failed(artifact_id, f"Capture classification failed: {exc}")
-            self._inflight.discard(artifact_id)
+            self._untrack(artifact_id)
             return
         if not imgs:
             print("[burst] no frames captured.")
@@ -515,6 +582,8 @@ class App:
             program_mode=bool(self.program),
         )
         self._analysis_lock.acquire()   # serialise overlapping analyses (captures stay non-blocking)
+        imgs = sorted(session_dir.glob("*.png"))   # listed under the lock: never a half-written frame set
+        ctx.images = list(imgs)
         self._analysing = True
         self._sync_text_cache(session_dir, imgs, load=True)
         self._stage(artifact_id, "reading screenshots", cache_dir=ctx.cache_dir)
@@ -560,7 +629,7 @@ class App:
                 pass
         finally:
             self._analysing = False
-            self._inflight.discard(artifact_id)
+            self._untrack(artifact_id)
             self._analysis_lock.release()
             print("\n[idle] Cmd+Shift+1 for a new burst, Cmd+Shift+9 to quit.")
 
@@ -981,21 +1050,34 @@ class App:
             print("  Left as-is.")
             return
 
+        original = path.read_text()
+        candidate = path.with_name(f"{path.stem}.fixed{path.suffix}")
+        current = original
         for i in range(1, MAX_FIX_ITERS + 1):
             print(f"  fix attempt {i}/{MAX_FIX_ITERS}...")
             try:
-                fixed = _strip_code_fences(fix_source(self.client, path.read_text(), language, res["errors"]))
+                fixed = _strip_code_fences(fix_source(self.client, current, language, res["errors"]))
             except Exception as exc:  # noqa: BLE001
-                print(f"  (fix call failed: {type(exc).__name__}: {exc}) — kept the last version", file=sys.stderr)
-                return
-            path.write_text(fixed)
-            res = check_source(path)
+                print(f"  (fix call failed: {type(exc).__name__}: {exc}) — the captured original was kept", file=sys.stderr)
+                break
+            problem = fix_looks_complete(original, fixed)
+            if problem:
+                print(f"  (fix discarded: {problem}) — the captured original was kept", file=sys.stderr)
+                break
+            current = fixed
+            candidate.write_text(fixed)   # never overwrite the captured original
+            res = check_source(candidate)
             if res["ok"]:
                 print(f"  fixed — check passed ({res['tool']}) after {i} attempt(s).")
+                print(f"  corrected copy: {candidate}   (captured original untouched: {path})")
                 return
             print("  still failing:")
             print(textwrap.indent(res["errors"] or "(no detail)", "    "))
-        print(f"  Could not fully fix after {MAX_FIX_ITERS} attempt(s); saved the latest version.")
+        else:
+            print(f"  Could not fully fix after {MAX_FIX_ITERS} attempt(s); the latest attempt is in {candidate}.")
+            print(f"  The captured original is untouched: {path}")
+            return
+        candidate.unlink(missing_ok=True)
 
     def _save_docx(self, result, session_dir):
         if input("\nSave report to a Word document? [y/n]: ").strip().lower() != "y":
@@ -1013,7 +1095,13 @@ class App:
         print("\n[quit] wrapping up...")
         if self.running:
             self.running = False
-            self._finish(self.session_dir)
+            if not self.burst_mode:
+                self._finish(self.session_dir)
+            # burst mode: the loop sees running=False and its own tail analyses the capture; joined below,
+            # so the session is analysed once, not by both _finish() and _analyse_burst()
+
+        # Burst loops and background analyses must be done before any folder is deleted.
+        self._join_threads()
 
         # Stop accepting/await background reads before deleting anything.
         self._pool.shutdown(wait=True, cancel_futures=True)

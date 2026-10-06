@@ -60,6 +60,8 @@ def _ranks(ids, edges):
 
 def layered(nodes: list, edges: list, direction="TB", sinks=None, straight=False, per_row=None, max_ranks=None) -> dict:
     ids = [n["id"] for n in nodes]
+    known = set(ids)
+    edges = [e for e in edges if e["from"] in known and e["to"] in known]     # edges to unknown nodes cannot be drawn
     pairs = [(e["from"], e["to"]) for e in edges]
     rank, _ = _ranks(ids, pairs)
     if max_ranks:
@@ -206,6 +208,8 @@ def stagger(edges, horizontal):
 
 
 def columns(cols: list, edges: list, gap=140) -> dict:
+    known = {n["id"] for col in cols for n in col}
+    edges = [e for e in edges if e["from"] in known and e["to"] in known]
     x = MARGIN
     heights = []
     for col in cols:
@@ -246,6 +250,8 @@ def sequence(participants: list, messages: list) -> dict:
     y = top + 30
     edges = []
     for m in messages:
+        if m["from"] not in centers or m["to"] not in centers:
+            continue
         a, b = centers[m["from"]], centers[m["to"]]
         if m["from"] == m["to"]:
             pts = [(a, y), (a + 30, y), (a + 30, y + 14), (a, y + 14)]
@@ -261,7 +267,7 @@ def sequence(participants: list, messages: list) -> dict:
         edges.insert(0, {"from": n["id"], "to": n["id"], "label": "", "style": "dashed", "head": "none",
                          "points": [(cx, n["y"] + n["h"]), (cx, bottom)], "lifeline": True})
     width = max(x - 40 + MARGIN, max((max(p[0] for p in e["points"]) + 40 + len(e["label"]) * 3.5)
-                                     for e in edges if e.get("message")) if messages else 300)
+                                     for e in edges if e.get("message")) if any(e.get("message") for e in edges) else 300)
     return {"nodes": nodes, "edges": edges, "width": round(max(width, 300)), "height": round(bottom + MARGIN)}
 
 

@@ -220,6 +220,12 @@ DIMS = [("Technology currency", 20), ("Code quality", 15), ("Stability and relia
         ("Business fit and adaptability", 15)]
 
 
+# Dimensions that cannot be judged from source code at all (they need operations records and documents). They are
+# shown as "Insufficient evidence" and left out of both the overall rating and the coverage figure, so the coverage
+# cap measures what the code could have shown.
+NOT_FROM_CODE = ("Performance and scalability", "Documentation and knowledge")
+
+
 def material(comps, AM) -> list:
     """Code components that carry the application: 15+ lines, or they write data, or they define a data store."""
     roles = {c["name"]: c for c in AM["components"]}
@@ -266,6 +272,11 @@ def scorecard(comps, AM, sec_rating, sec_text, facts) -> dict:
     file_only, max_copies, frag_entity, confidence, skills."""
     mat = material(comps, AM)
     out = {}
+    if not comps:
+        why = "Insufficient evidence: no components were supplied, so nothing could be measured."
+        out = {k: (None, why) for k, _ in DIMS}
+        out["overall"] = (None, None, 0.0, "")
+        return out
 
     def from_code(dims, label, extra=None):
         w = _weakest(mat, dims)
@@ -315,9 +326,10 @@ def scorecard(comps, AM, sec_rating, sec_text, facts) -> dict:
         f"{len(facts.get('skills') or [])} required skill sets" if facts.get("skills") else "") if x])
                                           + ". Not included in the overall rating.")
     arch = []
-    p = facts.get("platforms") or 1
-    arch.append((1 if p <= 1 else 2 if p == 2 else 3 if p == 3 else 4 if p <= 5 else 5,
-                 f"it runs on {p} platform(s)"))
+    p = facts.get("platforms")
+    if p:
+        arch.append((1 if p <= 1 else 2 if p == 2 else 3 if p == 3 else 4 if p <= 5 else 5,
+                     f"it runs on {p} platform(s)"))
     if facts.get("file_only"):
         arch.append((3, ("supplied components exchange data through files and shared databases; no service or API layer was identified"
                          if facts.get("shared") else "no service or API layer was identified in supplied source, and no supplied component uses data another "
@@ -329,19 +341,25 @@ def scorecard(comps, AM, sec_rating, sec_text, facts) -> dict:
     cpl = _weakest(mat, ["coupling"])
     if cpl:
         arch.append((condition(cpl[1]), f"code-level coupling is {words(condition(cpl[1])).split(' – ')[1].lower()}"))
-    r_ = max(a for a, _ in arch)
-    out["Business fit and adaptability"] = (r_, f"Rated on architecture, because business fit needs the business owner: "
-                                               f"{P.sentence([w for _, w in sorted(arch, key=lambda x: -x[0])])}. The "
-                                               f"worst of these sets the rating.")
+    arch = [(a, w) for a, w in arch if a]
+    if arch:
+        r_ = max(a for a, _ in arch)
+        out["Business fit and adaptability"] = (r_, f"Rated on architecture, because business fit needs the business owner: "
+                                                   f"{P.sentence([w for _, w in sorted(arch, key=lambda x: -x[0])])}. The "
+                                                   f"worst of these sets the rating.")
+    else:
+        out["Business fit and adaptability"] = (None, "Insufficient evidence: no architecture facts (platforms, "
+                                                      "integration, data placement) could be established.")
     rated = [(k, w) for k, w in DIMS if out[k][0]]
     wsum = sum(w for _, w in rated)
     raw = sum(out[k][0] * w for k, w in rated) / wsum if wsum else None
-    cov = wsum / 100
+    rateable = sum(w for k, w in DIMS if k not in NOT_FROM_CODE)
+    cov = min(1.0, sum(w for k, w in rated if k not in NOT_FROM_CODE) / rateable) if rateable else 0.0
     conf = facts.get("confidence") or "medium"
     overall = math.floor(raw + 0.5) if raw else None
     cap_note = ""
     if overall and (cov < COVERAGE_CAP or conf == "low") and overall < 3:
-        cap_note = (f" Capped at 3 – Fair because only {round(cov * 100)}% of the scorecard weight could be rated"
+        cap_note = (f" Capped at 3 – Fair because only {round(cov * 100)}% of the scorecard weight that source code can show could be rated"
                     + (" and assessment confidence is low" if conf == "low" else "") + "; the rating cannot be better "
                     "than Fair until the missing evidence is provided.")
         overall = 3

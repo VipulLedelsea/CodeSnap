@@ -1,9 +1,20 @@
 import io
 import math
 import zipfile
-from xml.sax.saxutils import escape, quoteattr
+from xml.sax.saxutils import escape as _escape, quoteattr as _quoteattr
 
 from .layout import LINE_H, PAD
+from .xmlsafe import xml_safe
+
+MAX_PNG_PIXELS = 24_000_000     # about 72 MB of RGB; larger scenes are rendered at a lower scale
+
+
+def escape(text, *a, **k):
+    return _escape(xml_safe(text), *a, **k)
+
+
+def quoteattr(text, *a, **k):
+    return _quoteattr(xml_safe(text), *a, **k)
 
 STYLE = {
     "system": ("#FBF6F2", "#BE6E4A"), "actor": ("#E4EFF6", "#2E7DB0"), "external_system": ("#F2F2F5", "#6E6E73"),
@@ -170,7 +181,9 @@ def _dashed(draw, pts, fill, width, dash=6, gap=4):
 
 def png(scene: dict, scale: float = 2.0) -> bytes:
     from PIL import Image, ImageDraw
-    W, H = int(scene["width"] * scale), int(scene["height"] * scale)
+    area = max(1.0, float(scene["width"]) * float(scene["height"]))
+    scale = max(0.05, min(scale, math.sqrt(MAX_PNG_PIXELS / area)))
+    W, H = max(1, int(scene["width"] * scale)), max(1, int(scene["height"] * scale))
     img = Image.new("RGB", (W, H), "#FFFFFF")
     d = ImageDraw.Draw(img)
     f, fb, fs, ft = _font(int(12 * scale)), _font(int(12 * scale), True), _font(int(10.5 * scale)), _font(int(15 * scale), True)

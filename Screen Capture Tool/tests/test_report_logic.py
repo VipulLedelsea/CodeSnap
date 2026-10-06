@@ -142,11 +142,11 @@ def test_unrated_dimensions_are_insufficient_evidence_and_excluded():
     sc = RT.scorecard([comp("a", 95)], am(["a"]), 1, "", FACTS)
     for k in ("Performance and scalability", "Documentation and knowledge"):
         assert sc[k][0] is None and sc[k][1].startswith("Insufficient evidence")
-    assert sc["overall"][2] == pytest.approx(0.8)
+    assert sc["overall"][2] == pytest.approx(1.0)      # coverage counts only what source code can show
 
 
 def test_overall_is_capped_at_fair_when_coverage_is_low():
-    sc = RT.scorecard([comp("a", 99)], am(["a"]), 1, "", FACTS)
+    sc = RT.scorecard([comp("a", 99)], am(["a"]), None, "", FACTS)      # security posture could not be rated
     assert sc["overall"][0] == 3 and "Capped at 3" in sc["overall"][3]
 
 

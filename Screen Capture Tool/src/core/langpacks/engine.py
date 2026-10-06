@@ -4,6 +4,9 @@ from core.extractors.common import entity, mask, rel
 from core.langs.structure import connection_target, mask_connection
 from core.security.rules import SQL_WORDS
 
+_CALL_TOKEN = re.compile(r"(?<![\w$>.:-])([\w$]+)\s*\(")
+_LEAD_TOKEN = re.compile(r"^\s*([^\s;]+)(?=\s|;|$)")
+
 SQL_READ = re.compile(r"\b(?:FROM|JOIN)\s+([A-Z_#@$\[][\w#@$\].]*)", re.I)
 SQL_WRITE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE\s+TABLE|CREATE\s+TABLE(?=\s+[\w#@$.\[\]]+\s+AS\b))\s+([A-Z_#@$\[][\w#@$\].]*)", re.I)
 SQL_SKIP = {"DUAL", "SYSIBM.SYSDUMMY1", "SELECT", "WHERE", "SET", "VALUES", "TABLE", "(", "LATERAL", "UNNEST"}
@@ -135,13 +138,13 @@ def parse_with(pack, text: str, filename: str = "") -> dict:
             u["end"] = nxt or len(raw)
         entities.append(entity(u["kind"], u["name"], container, u["start"], u["end"]))
 
+    owner_at = [None] * (len(raw) + 2)
+    for u in sorted(units, key=lambda v: v["start"]):      # a later start wins, as the innermost unit
+        for k in range(max(u["start"], 0), min(u["end"] or len(raw), len(raw) + 1) + 1):
+            owner_at[k] = u["name"]
+
     def owner(n):
-        best = None
-        for u in units:
-            if u["start"] <= n <= (u["end"] or len(raw)):
-                if best is None or u["start"] >= best["start"]:
-                    best = u
-        return best["name"] if best else container
+        return (owner_at[n] if 0 <= n < len(owner_at) else None) or container
 
     fields = 0
     for n, line in enumerate(lines, 1):
@@ -191,13 +194,16 @@ def parse_with(pack, text: str, filename: str = "") -> dict:
         for n, line in enumerate(lines, 1):
             if n in starts:
                 continue
-            for name in names:
-                if local == "paren":
-                    hit = re.search(rf"(?<![\w$>.:-]){re.escape(name)}\s*\(", line)
-                else:
-                    hit = re.match(rf"^\s*{re.escape(name)}(\s|$|;)", line)
-                if hit and owner(n) != name:
-                    relations.append(rel("calls", owner(n), f"function:{name}", n))
+            if local == "paren":
+                found = {m.group(1) for m in _CALL_TOKEN.finditer(line)} & names
+            else:
+                m = _LEAD_TOKEN.match(line)
+                found = {m.group(1)} & names if m else set()
+            if found:
+                own = owner(n)
+                for name in sorted(found):
+                    if own != name:
+                        relations.append(rel("calls", own, f"function:{name}", n))
     sql_text = []
     for rx in pack.get("sql_blocks", []):
         joined = "\n".join(lines)

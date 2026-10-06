@@ -2,8 +2,13 @@ import re
 from datetime import date
 
 from . import cves, eol
-from .rules import code_lines, family, pii_class, scan_text, student_data_lines
+from .rules import code_lines, family, mask_snippet, pii_class, scan_text, student_data_lines
 from .standards import RULES, escalate, refs_for
+
+
+def stable_sig(rule, file, snippet):
+    from core.model.corrections import stable_sig as _sig
+    return _sig(rule, file, snippet)
 
 CATEGORIES = ("eol", "vulnerability", "security", "privacy")
 _ORDER = ["info", "low", "medium", "high", "critical"]
@@ -193,7 +198,7 @@ def _code(store, ctx, sensitive_artifacts, has_pii):
                 hits.append({"rule": "SEC-CRED", "severity": "high", "line": ent["line_start"],
                              "artifact_id": ent["artifact_id"], "connection": True,
                              "detail": f"secret stored in config item {ent['name']}",
-                             "snippet": f"{ent['name']} = {(ent.get('attrs') or {}).get('value') or '****'}"})
+                             "snippet": mask_snippet(f"{ent['name']} = ****", "SEC-CRED")})
     for rel in store.relations("connects_to"):
         attrs = rel.get("attrs") or {}
         if attrs.get("hardcoded_secret") and rel["artifact_id"]:
@@ -203,7 +208,7 @@ def _code(store, ctx, sensitive_artifacts, has_pii):
                 hits.append({"rule": "SEC-CRED", "severity": "high", "line": rel["line"],
                              "artifact_id": rel["artifact_id"], "connection": True,
                              "detail": "password embedded in a connection string",
-                             "snippet": attrs.get("connection", "")})
+                             "snippet": mask_snippet(attrs.get("connection", ""), "SEC-CRED")})
     for h in hits:
         rule = h["rule"]
         base = RULES[rule]
@@ -213,31 +218,55 @@ def _code(store, ctx, sensitive_artifacts, has_pii):
         detail = h["detail"][0].upper() + h["detail"][1:] + "."
         if student:
             detail += " Raised one level: this file or connection handles personal data."
-        store.add_finding("security", severity, f"{base['title']}: {ctx.artifacts[h['artifact_id']]['name']}"
+        fname = ctx.artifacts[h["artifact_id"]]["name"]
+        snippet = mask_snippet(h.get("snippet", ""), "SEC-CRED" if rule == "SEC-CRED" else None)
+        refs = refs_for(rule, student_data=student)
+        if snippet:
+            refs = {**refs, "sig": stable_sig(rule, fname, snippet)}
+        store.add_finding("security", severity, f"{base['title']}: {fname}"
                           f"{':' + str(h['line']) if h.get('line') else ''}", detail=detail, source=f"rule {rule}",
                           target_type="artifact", target_id=h["artifact_id"],
-                          evidence=[ctx.ev(h["artifact_id"], h.get("line"), h.get("snippet", ""))], rule=rule,
-                          refs=refs_for(rule, student_data=student))
+                          evidence=[ctx.ev(h["artifact_id"], h.get("line"), snippet)], rule=rule, refs=refs)
     return len(hits)
+
+
+class _Collector:
+    """Records add_finding calls so run_scan can swap findings in a single transaction; reads go to the real store."""
+
+    def __init__(self, store):
+        self._store = store
+        self.calls = []
+
+    def add_finding(self, *args, **kw):
+        self.calls.append((args, kw))
+        return len(self.calls)
+
+    def __getattr__(self, name):
+        return getattr(self._store, name)
 
 
 def run_scan(store, *, online: bool = False, today: date | None = None, cache_dir=None) -> dict:
     today = today or date.today()
     data = eol.load_data()
-    kept = {(f["rule"], f["title"]): f["status"] for f in store.findings()
-            if f["category"] in CATEGORIES and f.get("status", "open") != "open"}
-    store.clear_findings(CATEGORIES)
-    ctx = _Ctx(store)
-    sensitive, has_pii = _pii(store, ctx)
-    inventory, _ = _eol(store, ctx, data, today, online, cache_dir)
-    _code(store, ctx, sensitive, has_pii)
-    for f in store.findings():
-        status = kept.get((f["rule"], f["title"]))
-        if status and f["category"] in CATEGORIES:
-            store.set_finding_status(f["id"], status)
-    from core.model.corrections import apply_corrections
-    apply_corrections(store)
-    store.log_run("security_scan", model=None, prompt_version="security-v1", ok=True)
+    from core.model.corrections import apply_corrections, finding_sig, legacy_sig
+    collector = _Collector(store)          # the scan (which may call the network) runs first; the DB swap is one transaction
+    ctx = _Ctx(collector)
+    sensitive, has_pii = _pii(collector, ctx)
+    inventory, _ = _eol(collector, ctx, data, today, online, cache_dir)
+    _code(collector, ctx, sensitive, has_pii)
+    with store.transaction():
+        kept, kept_legacy = {}, {}
+        for f in store.findings():
+            if f["category"] in CATEGORIES and f.get("status", "open") != "open":
+                kept[finding_sig(f)] = f["status"]
+                kept_legacy[legacy_sig(f)] = f["status"]
+        store.clear_findings(CATEGORIES)
+        for args, kw in collector.calls:
+            probe = {"rule": kw.get("rule"), "category": args[0], "title": args[2], "refs": kw.get("refs") or {}}
+            status = kept.get(finding_sig(probe)) or kept_legacy.get(legacy_sig(probe))
+            store.add_finding(*args, **{**kw, "status": status or kw.get("status", "open")})
+        apply_corrections(store)
+        store.log_run("security_scan", model=None, prompt_version="security-v1", ok=True)
     return {"snapshot": data["snapshot"], "technologies": inventory, "summary": summary(store)}
 
 

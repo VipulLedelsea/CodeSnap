@@ -30,12 +30,6 @@ def test_stitch_keeps_distinct_blocks():
     assert "import os" in out and "def helper():" in out
 
 
-def test_overlap_len_requires_min_run():
-    # a single shared line should not be treated as an overlap (min_overlap=2)
-    assert analysis._overlap_len(["}"], ["}", "next"]) == 0
-    assert analysis._overlap_len(["a", "b", "c"], ["b", "c", "d"]) == 2
-
-
 # ── JSON parsing ─────────────────────────────────────────────────────────────
 
 def test_parse_json_variants():

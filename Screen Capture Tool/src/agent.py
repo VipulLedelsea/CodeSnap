@@ -131,6 +131,10 @@ def run_agent(client, ctx, goal=None, messages=None, max_iters=MAX_ITERS, verbos
 
         final = "".join(getattr(b, "text", "") for b in _blocks(resp)
                          if getattr(b, "type", None) == "text").strip()
+        reason = getattr(resp, "stop_reason", None)
+        if reason in ("max_tokens", "refusal"):
+            why = "ran out of output tokens" if reason == "max_tokens" else "declined to continue"
+            return f"(agent stopped without a complete report: it {why})", messages
         try:
             from core import status
             status.publish("Report ready", kind="done", stage="done")

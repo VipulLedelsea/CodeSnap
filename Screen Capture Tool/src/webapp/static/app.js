@@ -1,8 +1,23 @@
 const $ = (id) => document.getElementById(id);
+
+// Per-launch session token (embedded by the server in the page it serves). Every
+// state-changing request must carry it, so other web pages can't drive this app.
+const _CSRF = ((document.querySelector('meta[name="codesnap-token"]') || {}).content) || "";
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init) => {
+  init = init || {};
+  const method = String(init.method || (input && input.method) || "GET").toUpperCase();
+  if (_CSRF && method !== "GET" && method !== "HEAD") {
+    const headers = new Headers(init.headers || (input && input.headers) || {});
+    headers.set("X-CodeSnap-Token", _CSRF);
+    init = Object.assign({}, init, { headers });
+  }
+  return _nativeFetch(input, init);
+};
 let _program = "";
 let _captureKind = "code", _kindManual = false;
 let _view = "codesnap";
-if (window.mermaid) { try { mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" }); } catch (e) {} }
+if (window.mermaid) { try { mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "strict" }); } catch (e) {} }
 
 const ANALYZING_MSGS = [
   "Reading the captured frames\u2026",
@@ -81,8 +96,18 @@ function fmtSize(n) {
 }
 
 function escapeHtml(s) {
-  return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
+
+// Buttons carry data-act/data-name instead of inline onclick="...${value}...".
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest && ev.target.closest("[data-act]");
+  if (!b) return;
+  const name = b.dataset.name != null ? b.dataset.name : b.dataset.f;
+  const fn = { saved: "downloadSaved", report: "downloadReport", code: "downloadCode" }[b.dataset.act];
+  if (fn && window[fn]) window[fn](name);
+});
 
 function section(label, text, cls) {
   if (!text) return "";
@@ -94,8 +119,8 @@ function reportCard(r) {
   if (r.kind === "report") {
     const isProj = String(r.language || "").toLowerCase() === "project";
     const dlCode = (!isProj && r.code_file)
-      ? `<button class="dl" onclick="downloadSaved(this.dataset.f)" data-f="${escapeHtml(r.code_file)}">Download code</button>` : "";
-    const dlReport = `<button class="dl secondary" onclick="downloadReport('${r.name}')">Download report</button>`;
+      ? `<button class="dl" data-act="saved" data-f="${escapeHtml(r.code_file)}">Download code</button>` : "";
+    const dlReport = `<button class="dl secondary" data-act="report" data-name="${escapeHtml(r.name)}">Download report</button>`;
     const codeSec = isProj
       ? `<div class="rsec"><span class="rsec-label">Files</span><div class="rsec-body" style="color:var(--muted)">Get the code for each file from the <b>Files</b> section below.</div></div>`
       : `<div class="rsec"><span class="rsec-label">Code</span><pre class="code">${escapeHtml(r.code || "")}</pre></div>`;
@@ -103,7 +128,7 @@ function reportCard(r) {
       <div class="report-head">
         <span class="tag code">${escapeHtml(isProj ? "Project" : (r.language || r.extension || "code"))}</span>
         <span class="report-name">${escapeHtml(r.code_file || r.name)}</span>
-        <span class="report-time">${time}</span>
+        <span class="report-time">${escapeHtml(time)}</span>
       </div>
       ${section("Overview", r.overview, "overview")}
       ${isProj ? "" : section("Errors found", r.errors, "errors")}
@@ -115,12 +140,12 @@ function reportCard(r) {
   }
   const body = r.content
     ? `<pre class="code">${escapeHtml(r.content)}</pre>`
-    : `<p style="font-size:13px;color:var(--muted);margin:6px 0 0">${fmtSize(r.size)} · <button class="dl" onclick="downloadSaved(this.dataset.f)" data-f="${escapeHtml(r.code_file||r.name)}">Download</button></p>`;
+    : `<p style="font-size:13px;color:var(--muted);margin:6px 0 0">${fmtSize(r.size)} · <button class="dl" data-act="saved" data-f="${escapeHtml(r.code_file||r.name)}">Download</button></p>`;
   return `<div class="report">
     <div class="report-head">
-      <span class="tag ${r.kind}">${r.ext || r.kind}</span>
+      <span class="tag ${escapeHtml(r.kind)}">${escapeHtml(r.ext || r.kind)}</span>
       <span class="report-name">${escapeHtml(r.name)}</span>
-      <span class="report-time">${time}</span>
+      <span class="report-time">${escapeHtml(time)}</span>
     </div>
     ${body}
   </div>`;
@@ -235,14 +260,14 @@ async function downloadReport(name) {
 function pendingCard(r) {
   const time = (r.modified || "").replace("T", " ");
   _pending[r.name] = r;
-  const acts = `<button class="dl" onclick="downloadCode('${r.name}')">Save code</button>`
-    + `<button class="dl secondary" onclick="downloadReport('${r.name}')">Save report</button>`;
+  const acts = `<button class="dl" data-act="code" data-name="${escapeHtml(r.name)}">Save code</button>`
+    + `<button class="dl secondary" data-act="report" data-name="${escapeHtml(r.name)}">Save report</button>`;
   return `<div class="report pending">
     <div class="report-head">
       <span class="tag ready">Ready \u00b7 not saved</span>
       <span class="tag code">${escapeHtml(r.language || r.extension || "code")}</span>
       <span class="report-name">${escapeHtml(r.code_file || r.name)}</span>
-      <span class="report-time">${time}</span>
+      <span class="report-time">${escapeHtml(time)}</span>
     </div>
     ${section("Overview", r.overview, "overview")}
     ${section("Errors found", r.errors, "errors")}
@@ -609,6 +634,19 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
 })();
 
 
+// Viewing a report may need the deep analysis to run first; that is a POST, never a side effect of the GET.
+["progReportHtml", "progReportDocx", "progReportPdf", "progReportZip"].forEach(id => {
+  const el = $(id); if (!el) return;
+  el.addEventListener("click", async (ev) => {
+    const href = el.getAttribute("href") || "";
+    const base = href.replace(/\.(html|docx|pdf|zip)$/, "");
+    if (el.classList.contains("disabled") || !base || base === href) return;
+    ev.preventDefault();
+    try { await fetch(`${base}/prepare`, { method: "POST" }); } catch (e) {}
+    if (el.getAttribute("target") === "_blank") window.open(href, "_blank", "noopener"); else window.location.assign(href);
+  });
+});
+
 // ── First-run API key onboarding ─────────────────────────────────────────────
 async function checkApiKey() {
   const banner = $("keyBanner"); if (!banner) return;
@@ -622,7 +660,7 @@ if ($("keySave")) $("keySave").addEventListener("click", async () => {
   const v = ($("keyInput").value || "").trim();
   if (!v) { toast("Paste your key first."); return; }
   try {
-    const r = await fetch("/api/key?value=" + encodeURIComponent(v), { method: "POST" });
+    const r = await fetch("/api/key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value: v }) });
     const j = await r.json();
     if (j.ok) { $("keyBanner").style.display = "none"; $("keyInput").value = ""; toast("API key saved — you're ready to capture."); }
     else toast(j.error || "Couldn't save that key.");

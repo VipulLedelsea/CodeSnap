@@ -141,11 +141,39 @@ _SECRET_VALUE = re.compile(r'''((?:password|passwd|pwd|secret|api_?key|access_?k
 _CONN_PWD = re.compile(r"((?:Password|Pwd)\s*=\s*)([^;\"'\s]+)", re.I)
 
 
-def mask_snippet(line: str) -> str:
+_CRED_ASSIGN = re.compile(
+    r"""((?:password|passwd|pwd|secret|api_?key|access_?key|token|dbpass|logpass)\w*["']?\s*(?:==|=|:|\.Equals\s*\(|,)\s*@?)(["'])([^"'\n]+)(["'])""", re.I)
+_QUOTED_LIT = re.compile(r"""(@?)(["'])((?:\\.|""|[^"'\\\n])*)(\2)""")
+_CMD_PWD = [
+    re.compile(r"(\s-P\s*)(\S+)"),
+    re.compile(r"(\s-p)(\S+)"),
+    re.compile(r"(\bIDENTIFIED\s+BY\s+)(\"?\w+\"?)", re.I),
+    re.compile(r"(\b\w+/)([^\s@/]+)(@\w+)"),
+    re.compile(r"(\b(?:password|pw|pwd|dbpass)\s*=\s*)([^\"'\s;)&%*]{2,})", re.I),
+    re.compile(r"(net\s+use\s+(?:[A-Za-z*]:\s+)?\\\\\S+\s+)(?!/)(\S+)", re.I),
+]
+
+
+def _redact_literals(line: str) -> str:
+    return _QUOTED_LIT.sub(lambda m: f"{m.group(1)}{m.group(2)}****{m.group(4)}", line)
+
+
+def _redact_cmd(line: str) -> str:
+    for rx in _CMD_PWD:
+        line = rx.sub(lambda m: m.group(1) + "****" + (m.group(3) if m.lastindex and m.lastindex >= 3 else ""), line)
+    return line
+
+
+def mask_snippet(line: str, rule: str | None = None) -> str:
+    """Hide secret values in an evidence line. With rule == "SEC-CRED" every quoted literal and command-line password
+    token on the line is redacted (the rule fired, so something on this line is a secret)."""
     line = _SECRET_VALUE.sub(lambda m: m.group(1) + "****" + m.group(3), line)
+    line = _CRED_ASSIGN.sub(lambda m: m.group(1) + m.group(2) + "****" + m.group(4), line)
     line = _CONN_PWD.sub(lambda m: m.group(1) + "****", line)
     line = re.sub(r"(VALUE\s+['\"])([^'\"]+)(['\"])", lambda m: m.group(1) + "****" + m.group(3), line) \
         if re.search(r"(PASSWORD|PASSWD|PWD)", line, re.I) else line
+    if rule == "SEC-CRED":
+        line = _redact_cmd(_redact_literals(line))
     return line.strip()[:200]
 
 
@@ -178,7 +206,7 @@ LINE_RULES = [
      "weak hash or cipher"),
     ("SEC-CRYPTO", {"java"}, "medium", r'''Cipher\.getInstance\s*\(\s*"(AES"|[^"]*/ECB/)''', "AES in ECB mode (Java's default when no mode is given)"),
     ("SEC-CRYPTO", {"cpp"}, "medium", r"\b(MD5_Init|MD5Init|DES_ecb_encrypt|DES_set_key|CALG_MD5|CALG_DES|CALG_RC4|CALG_SHA1)\b", "weak hash or cipher"),
-    ("SEC-TLS", CODE | {"config", "props", "json"}, "medium", r'''["'=>\s](http|ftp|telnet)://(?!(localhost|127\.0\.0\.1|www\.w3\.org|schemas\.|java\.sun\.com|xmlns\.|tempuri\.org))[\w.-]+''',
+    ("SEC-TLS", CODE | {"config", "props", "json"}, "medium", r'''^(?!.*(xmlns[:\w]*\s*=|schemaLocation|<!DOCTYPE)).*?["'=>\s](http|ftp|telnet)://(?!(localhost|127\.0\.0\.1|www\.w3\.org|schemas\.|java\.sun\.com|xmlns\.|tempuri\.org|maven\.apache\.org|www\.springframework\.org|hibernate\.sourceforge\.net|hibernate\.org|xml\.apache\.org|www\.oracle\.com/xml|www\.jboss\.org|ant\.apache\.org)|[^\s"']*\.(xsd|dtd)\b)[\w.-]+''',
      "plain-text protocol endpoint"),
     ("SEC-TLS", {"cs", "config", "props", "json", "java"}, "medium", r"Encrypt\s*=\s*(False|no)\b|TrustServerCertificate\s*=\s*(True|yes)\b", "database connection without verified encryption"),
     ("SEC-TLS", {"config"}, "medium", r'''<security\s+mode\s*=\s*["']None["']|requireSSL\s*=\s*["']false["']''', "transport security disabled"),
@@ -276,10 +304,13 @@ def _is_constant(token: str) -> bool:
     return bool(re.fullmatch(r"[A-Z][A-Z0-9_]*|\d+|(this\.)?[A-Z][A-Z0-9_]+", token))
 
 
+_MAX_STMT_LINES = 5
+
+
 def _sql_concat(lines: list, fam: str) -> list:
     if fam not in ("cs", "java", "cpp", "js", "vb", "web"):
         return []
-    hits, stmt, start = [], "", None
+    hits, stmt, start, count = [], "", None, 0
     sql_vars = set()
     for n, line in enumerate(lines, 1):
         if not line.strip():
@@ -287,8 +318,10 @@ def _sql_concat(lines: list, fam: str) -> list:
         if start is None:
             start = n
         stmt += " " + line
-        if ";" not in line and fam != "vb" and not line.rstrip().endswith(("{", "}")):
+        count += 1
+        if ";" not in line and fam != "vb" and not line.rstrip().endswith(("{", "}")) and count < _MAX_STMT_LINES:
             continue
+        count = 0
         s, stmt_start, stmt = stmt, start, ""
         start = None
         literals = _LITERAL.findall(s)
@@ -296,10 +329,14 @@ def _sql_concat(lines: list, fam: str) -> list:
         assign = re.match(r"\s*(?:[\w<>\[\]]+\s+)?(\w+)\s*(\+?=)\s*(.*)", s)
         if has_sql and assign and assign.group(2) == "=":
             sql_vars.add(assign.group(1))
-        bare = _LITERAL.sub(" S ", s)
-        concat = [t for t in re.findall(r"S\s*\+\s*([A-Za-z_][\w.\[\]()]*)|([A-Za-z_][\w.\]\)]*)\s*\+\s*S", bare)
+        bare = _LITERAL.sub(lambda m: " Q " if SQL_WORDS.search(m.group(0)) else " S ", s)
+        prev = None
+        while prev != bare:       # literals chained to an SQL literal belong to the SQL text
+            prev = bare
+            bare = re.sub(r"\bQ\s*\+\s*[QS]\b|\bS\s*\+\s*Q\b", " Q ", bare)
+        concat = [t for t in re.findall(r"\bQ\s*\+\s*([A-Za-z_][\w.\[\]()]*)|([A-Za-z_][\w.\]\)]*)\s*\+\s*Q\b", bare)
                   for t in t if t]
-        concat = [t for t in concat if not _is_constant(t.split(".")[-1].rstrip("()")) and t not in ("S",)]
+        concat = [t for t in concat if not _is_constant(t.split(".")[-1].rstrip("()")) and t not in ("S", "Q")]
         reason = None
         if has_sql and concat:
             reason = f"SQL text concatenated with {concat[0]}"
@@ -340,7 +377,7 @@ def scan_text(text: str, filename: str, language: str = "") -> list:
         if key in seen:
             return
         seen.add(key)
-        snippet = mask_snippet(raw[line_no - 1]) if 0 < line_no <= len(raw) else ""
+        snippet = mask_snippet(raw[line_no - 1], rule) if 0 < line_no <= len(raw) else ""
         out.append({"rule": rule, "severity": severity, "line": line_no, "detail": desc, "snippet": snippet,
                     "family": fam})
 
@@ -367,7 +404,21 @@ def _whole_file(lines: list, fam: str) -> list:
     out = []
     text = "\n".join(lines)
     if fam == "cs" and re.search(r"\b(Controller|ApiController|ControllerBase)\b", text):
-        authz = re.search(r"\[\s*Authorize\b", text)
+        authz_rx = re.compile(r"\[\s*Authorize\b")
+
+        def attr_block(k):
+            """Lines of the attribute block directly above line k (stops at the first non-attribute line)."""
+            blk, m = [], k - 1
+            while m >= 0 and len(blk) < 8 and (not lines[m].strip() or lines[m].strip().startswith("[")):
+                blk.append(lines[m])
+                m -= 1
+            return blk
+
+        def class_authorized(k):
+            c = next((m for m in range(k, -1, -1) if re.search(r"\bclass\s+\w+", lines[m])), None)
+            if c is None:
+                return False
+            return bool(authz_rx.search(lines[c].split("class")[0]) or any(authz_rx.search(l) for l in attr_block(c)))
         for i, line in enumerate(lines):
             if not re.search(r"\[\s*Http(Post|Put|Delete|Patch)\b", line):
                 continue
@@ -375,6 +426,8 @@ def _whole_file(lines: list, fam: str) -> list:
             if j is None:
                 continue
             head = "\n".join(lines[max(0, i - 3):j + 1])
+            own = "\n".join(attr_block(i) + lines[i:j + 1])
+            authz = authz_rx.search(own) or class_authorized(i)
             sig = lines[j]
             name = (re.search(r"(\w+)\s*\(", sig) or re.search(r"(\w+)", sig)).group(1)
             if not authz and "AllowAnonymous" not in head:
@@ -437,12 +490,15 @@ def _names_only(line: str) -> str:
     return _QUOTED.sub(keep, line)
 
 
+_COMMON_WORDS = {"race", "ethnic", "homeless", "migrant", "disability", "sped", "birthday", "enroll", "grade"}
+
+
 def student_data_lines(lines) -> set:
     """Line numbers that name a sensitive personal-data field (a string shown to users does not count)."""
     out = set()
     for n, line in enumerate(lines, 1):
         for token in re.findall(r"[A-Za-z][\w-]{1,40}", _names_only(line)):
-            if token.islower():
+            if token.islower() and token in _COMMON_WORDS:
                 continue
             hit = pii_class(token)
             if hit and hit[1] in ("critical", "high"):

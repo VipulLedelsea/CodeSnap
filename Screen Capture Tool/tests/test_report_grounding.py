@@ -6,6 +6,8 @@ from pathlib import Path
 import docx
 import pytest
 
+from conftest import need_fixture
+
 from core.model import ProgramStore
 from core.report import docx_bytes
 from core.report import architecture as A
@@ -33,6 +35,7 @@ class EmptyStore:
 def prose(tmp_path_factory):
     root = tmp_path_factory.mktemp("grounding")
     fixture = Path(__file__).parent / "fixtures/demo930"
+    need_fixture(fixture)
     shutil.copytree(fixture, root / "demo")
     with ProgramStore.open("demo", root=root) as store:
         document = docx.Document(io.BytesIO(docx_bytes(store, rescan=True)))

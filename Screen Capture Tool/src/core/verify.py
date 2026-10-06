@@ -106,6 +106,7 @@ def sideways_views(frames: list) -> set:
     """Indexes of the screens that were taken scrolled right: most of their lines are cut at the left edge, or are
     pieces of lines another screen shows from their start."""
     out = set()
+    blobs = [("\n".join(normalized_line(_stem(g)) for g in fr), "\n".join(_stem(g) for g in fr)) for fr in frames]
     for i, f in enumerate(frames):
         long_ = [l for l in f if len(_stem(l).strip()) >= 8]
         if not long_:
@@ -115,15 +116,32 @@ def sideways_views(frames: list) -> set:
             out.add(i)
             continue
         others = [g for j, fr in enumerate(frames) if j != i for g in fr]
-        pieces = sum(1 for l in long_ if any(_piece_of(l, g) for g in others))
+        # Cheap necessary conditions (C-speed substring tests over the other screens) before the exact per-line
+        # comparison: a piece must lie inside some line (normalized) or start with the last >= 8 chars of one.
+        norm_blob = "\n".join(blobs[j][0] for j in range(len(frames)) if j != i)
+        raw_blob = "\n".join(blobs[j][1] for j in range(len(frames)) if j != i)
+        pieces = 0
+        for l in long_:
+            l0 = normalized_line(_stem(l))
+            head = _stem(l).strip()[:8]
+            if (len(l0) < 8 or l0 not in norm_blob) and (len(head) < 8 or head not in raw_blob):
+                continue
+            if any(_piece_of(l, g) for g in others):
+                pieces += 1
         if pieces >= 0.5 * len(long_):
             out.add(i)
     return out
 
 
 def sideways_merge(merged: list, lines: list, force: bool = False):
+    """(merged, extended) from sideways_merge_ex, or None."""
+    got = sideways_merge_ex(merged, lines, force)
+    return None if got is None else got[:2]
+
+
+def sideways_merge_ex(merged: list, lines: list, force: bool = False):
     """If `lines` is a sideways-scrolled view of text already in `merged` (pieces that start part-way into known lines),
-    return (merged with the rest of cut lines joined on, number of lines extended); otherwise None. A sideways view is
+    return (merged with the rest of cut lines joined on, number of lines extended, the joined lines); otherwise None. A sideways view is
     never appended as new lines, even when it adds nothing."""
     cand = [l for l in lines if len(_stem(l).strip()) >= 8]
     if len(cand) < 3:
@@ -150,8 +168,7 @@ def sideways_merge(merged: list, lines: list, force: bool = False):
             piece += 1             # starts part-way into a known line: the view is scrolled right
         pos = i + 1
     if force or (ext + piece >= max(3, 0.4 * len(cand)) and miss <= 0.25 * len(cand)):
-        sideways_merge.joined = joined
-        return out, ext
+        return out, ext, joined
     return None
 
 
@@ -178,17 +195,26 @@ def merge_by_numbers(parts: list, metas: list):
         lines, nums, st = p.split("\n"), m["numbers"], m.get("status") or []
         if len(nums) != len(lines):
             return None
-        prev = None
+        prev, prev_text = None, ""
+        widest = max((len(_stem(l)) for l, n in zip(lines, nums) if n is not None), default=0)
         for i, (l, n) in enumerate(zip(lines, nums)):
             s = st[i] if i < len(st) else "unchecked"
             if n is None:
-                if prev is not None and l.strip():      # a word-wrapped continuation row
+                if l.strip():
+                    # A word-wrapped continuation follows a row that ran to the right edge (or was cut there).
+                    # Anything else is an unnumbered row we cannot place: fall back to overlap stitching rather
+                    # than gluing it onto the wrong line or silently dropping it.
+                    reaches_edge = prev_text.rstrip().endswith("[CUT OFF]") or (
+                        widest > 0 and len(_stem(prev_text)) >= 0.85 * widest)
+                    if prev is None or not reaches_edge:
+                        return None
                     c = cands[prev][-1]
                     c[0], c[1] = c[0].rstrip() + " " + l.strip(), "wrapped"
                     wrapped += 1
+                prev_text = l
                 continue
             cands.setdefault(n, []).append([l, s or "unchecked"])
-            prev = n
+            prev, prev_text = n, l
     if not cands:
         return None
     out, conflicts, sideways = {}, 0, 0
@@ -364,7 +390,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
             s = "cut"
         elif changed:
             s = "edited"
-        elif i in spacing_conflicts:
+        elif (read_i + 1 if read_i is not None else (i if read_lines is None else None)) in spacing_conflicts:
             s = 'spacing'
         elif s is None:
             s = statuses.get(l.rstrip())

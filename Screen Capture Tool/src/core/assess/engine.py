@@ -181,20 +181,21 @@ def run_assessment(store, *, scan: bool = True, online: bool = False, today=None
 
 
 def set_inputs(store, payload: dict) -> dict:
-    current = store.get_meta("assessment_inputs", {}) or {}
-    if "program" in payload:
-        current["program"] = {k: v for k, v in (payload["program"] or {}).items() if v not in (None, "", False)}
-    for name, vals in (payload.get("components") or {}).items():
-        clean = {}
-        for k, v in (vals or {}).items():
-            if k in ("impact", "criticality") and v not in (None, ""):
-                clean[k] = max(1, min(5, int(v)))
-            elif k in ("retire", "cots", "note") and v not in (None, "", False):
-                clean[k] = v
-        comps = current.setdefault("components", {})
-        if clean:
-            comps[name] = clean
-        else:
-            comps.pop(name, None)
-    store.set_meta("assessment_inputs", current)
+    with store.transaction():
+        current = store.get_meta("assessment_inputs", {}) or {}
+        if "program" in payload:
+            current["program"] = {k: v for k, v in (payload["program"] or {}).items() if v not in (None, "", False)}
+        for name, vals in (payload.get("components") or {}).items():
+            clean = {}
+            for k, v in (vals or {}).items():
+                if k in ("impact", "criticality") and v not in (None, ""):
+                    clean[k] = max(1, min(5, int(v)))
+                elif k in ("retire", "cots", "note") and v not in (None, "", False):
+                    clean[k] = v
+            comps = current.setdefault("components", {})
+            if clean:
+                comps[name] = clean
+            else:
+                comps.pop(name, None)
+        store.set_meta("assessment_inputs", current)
     return current
