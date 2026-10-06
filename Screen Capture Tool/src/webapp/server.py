@@ -1440,6 +1440,11 @@ def main():
     import sys
     url = "http://127.0.0.1:8000"
     _serve_in_thread()
+    try:
+        import resume
+        resume.resume_in_background()
+    except Exception:  # noqa: BLE001
+        pass
     if not _wait_until_up(url):
         print("Server failed to start.", file=sys.stderr)
         return 1

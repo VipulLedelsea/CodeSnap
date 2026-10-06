@@ -1,5 +1,6 @@
 import os
 import shutil
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -41,7 +42,41 @@ def _draft_bytes(store):
     return f.read_bytes() if f.exists() else None
 
 
+def _job(store, state, **extra):
+    store.set_meta("pipeline_job", {**(store.get_meta("pipeline_job") or {}), "state": state,
+                                    "updated": time.strftime("%Y-%m-%dT%H:%M:%S"), **extra})
+
+
+def interrupted(root=None) -> list:
+    from core.model import ProgramStore
+    from core.model.workspace import programs_root
+    out = []
+    for d in sorted(p for p in programs_root(root).iterdir() if p.is_dir()):
+        try:
+            with ProgramStore.open(d.name, root=root) as st:
+                if (st.get_meta("pipeline_job") or {}).get("state") == "running":
+                    out.append(d.name)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 def run_staged(store, client, progress=None, report=True) -> dict:
+    _job(store, "running", started=(store.get_meta("pipeline_job") or {}).get("started") or time.strftime("%Y-%m-%dT%H:%M:%S"))
+    try:
+        res = _run_staged(store, client, progress, report)
+    except BaseException:
+        raise
+    _job(store, "done" if res["complete"] else "partial", errors=len(res["errors"]))
+    try:
+        from core.notify import notify
+        notify("CodeSnap", "Your report is ready." if res["complete"] else "Analysis finished with some files unfinished.")
+    except Exception:  # noqa: BLE001
+        pass
+    return res
+
+
+def _run_staged(store, client, progress=None, report=True) -> dict:
     """Stage 1: cheap model reads every file, draft report. Stage 2: stronger model re-reads each file against the
     draft's claims, reviews them, decides what needs a rescan, and the final report is built from that."""
     errors = []

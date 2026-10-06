@@ -69,3 +69,11 @@ def test_report_review_verdicts_filter_report(store, monkeypatch):
     v = RR.verdicts(store)
     assert v[RR.claim_key("Fake risk")]["verdict"] == "unsupported"
     assert "1 not shown" in RR.summary_line(store)
+
+
+def test_unfinished_run_is_found_for_resume(store, tmp_path):
+    from core.model.workspace import programs_root
+    pipeline._job(store, "running")
+    assert pipeline.interrupted(tmp_path) == ["run1"]
+    pipeline._job(store, "done")
+    assert pipeline.interrupted(tmp_path) == []
