@@ -265,14 +265,19 @@ def interpret(store, text: str, client, model=None) -> dict:
         if getattr(block, "type", "") == "tool_use" and getattr(block, "name", "") == "propose_corrections":
             data = dict(block.input or {})
     if data is None:
-        data = _parse_json("".join(getattr(b, "text", "") for b in msg.content)) or {"changes": []}
+        data = _parse_json("".join(getattr(b, "text", "") for b in msg.content))
+    if not isinstance(data, dict):
+        data = {"changes": []}
     usage = getattr(msg, "usage", None)
     if usage is not None:
         store.log_run("interpret_correction", model=model or TEXT_MODEL, prompt_version=INTERPRET_VERSION,
                       input_tokens=getattr(usage, "input_tokens", None), output_tokens=getattr(usage, "output_tokens", None))
     valid, rejected = [], []
     known = {e["key"] for e in ctx["entities"]} | {s for s in (f["sig"] for f in ctx["findings"])}
-    for ch in data.get("changes") or []:
+    changes = data.get("changes")
+    for ch in changes if isinstance(changes, list) else []:
+        if not isinstance(ch, dict):
+            continue
         try:
             C.validate(ch.get("op"), ch.get("payload") or {})
             if ch.get("op") == "artifact.replace_line":

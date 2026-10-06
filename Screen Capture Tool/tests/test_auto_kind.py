@@ -1,12 +1,16 @@
 """A capture set to Detect is read as code or as an app screen from what its first frame shows."""
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import pytest
 
 from core.analysis import detect_kind
 
-SHOT = next((Path(__file__).resolve().parent / "real" / "2026-09-29-run2" / "aidpayrn_cobol").glob("01.png"))
+_SHOTS = sorted((Path(__file__).resolve().parent / "real" / "2026-09-29-run2" / "aidpayrn_cobol").glob("01.png"))
+if not _SHOTS:
+    pytest.skip("tests/real capture samples are not present in this checkout", allow_module_level=True)
+SHOT = _SHOTS[0]
 
 
 class Answer:
@@ -38,7 +42,7 @@ def test_the_worker_resolves_auto_once_and_keeps_explicit_choices(monkeypatch):
     import core.analysis as an
     seen = []
     monkeypatch.setattr(an, "detect_kind", lambda client, p: seen.append(p) or "screen")
-    app = SimpleNamespace(client=None, program=None, _kind_guess={})
+    app = SimpleNamespace(client=None, program=None, _kind_guess={}, _state_lock=threading.Lock())
     resolve = hk.App._resolve_kind
     assert resolve(app, "code", [SHOT]) == "code" and resolve(app, "screen", [SHOT]) == "screen"
     assert resolve(app, "auto", [SHOT]) == "screen" and seen == [SHOT]

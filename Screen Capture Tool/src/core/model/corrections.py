@@ -29,8 +29,20 @@ class CorrectionError(ValueError):
     pass
 
 
-def finding_sig(f) -> str:
+def legacy_sig(f) -> str:
     return f"{f.get('rule') or f['category']}|{f['title']}"
+
+
+def stable_sig(rule, file, snippet) -> str:
+    """Identity of a code finding that survives line moves: rule + file + hash of the normalized masked snippet."""
+    norm = " ".join(str(snippet or "").split()).lower()
+    return f"{rule}|{file or ''}|{hashlib.sha1(norm.encode()).hexdigest()[:12]}"
+
+
+def finding_sig(f) -> str:
+    """Stable signature when the scan stored one (refs.sig), otherwise the old rule|title form."""
+    sig = (f.get("refs") or {}).get("sig") if isinstance(f.get("refs"), dict) else None
+    return sig or legacy_sig(f)
 
 
 def _entity(store, key):
@@ -86,6 +98,9 @@ def validate(op, payload):
             raise CorrectionError("old_text and new_text must be text")
         if op == "artifact.replace_line" and payload["old_text"] == payload["new_text"]:
             raise CorrectionError("the corrected line is unchanged")
+        if op == "artifact.replace_line" and (
+                len(payload["new_text"].splitlines()) != 1 or payload["new_text"].splitlines()[0] != payload["new_text"]):
+            raise CorrectionError("the corrected line must be exactly one line of text")
     for k in ("attrs",):
         if k in OPS[op] and not isinstance(payload.get(k), dict):
             raise CorrectionError("attrs must be an object")
@@ -279,7 +294,8 @@ def apply_one(store, c) -> str | None:
                                    (json.dumps({**r["attrs"], **p["attrs"]}), r["id"]))
                     changed = True
     elif op in ("finding.status", "finding.severity"):
-        hits = [f for f in store.findings() if finding_sig(f) == p["sig"] or f["title"] == p["sig"]]
+        hits = [f for f in store.findings()
+                if p["sig"] in (finding_sig(f), legacy_sig(f)) or f["title"] == p["sig"]]
         for f in hits:
             with store.transaction() as db:
                 if op == "finding.status" and f["status"] != p["status"]:
@@ -343,12 +359,13 @@ def undo(store, correction_id) -> dict:
                             transcription="\n".join(lines) + trailing)
         before = p.get("_before") or {}
         store.set_verification(art["id"], copy.deepcopy(before.get("verification")))
-        manual = store.get_meta("manual_capture_concerns") or {}
-        if before.get("manual_concerns") is None:
-            manual.pop(str(art["id"]), None)
-        else:
-            manual[str(art["id"])] = before["manual_concerns"]
-        store.set_meta("manual_capture_concerns", manual)
+        with store.transaction():
+            manual = store.get_meta("manual_capture_concerns") or {}
+            if before.get("manual_concerns") is None:
+                manual.pop(str(art["id"]), None)
+            else:
+                manual[str(art["id"])] = before["manual_concerns"]
+            store.set_meta("manual_capture_concerns", manual)
     elif op in ("entity.rename", "entity.set_attrs") and p.get("_before"):
         e = _entity(store, p["key"]) or (_entity(store, None))
         if e:

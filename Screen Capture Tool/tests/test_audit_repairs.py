@@ -152,20 +152,26 @@ def test_deep_review_bypasses_exhausted_program_budget(store, monkeypatch):
 def test_parallel_reads_issue_duplicate_requests_for_one_screenshot(tmp_path, monkeypatch):
     from core import analysis
     shot = image(tmp_path)
-    barrier = threading.Barrier(2)
     calls = []
+    entered, release = threading.Event(), threading.Event()
     def extract(client, path):
         calls.append(path)
-        time.sleep(0.05)
+        entered.set()
+        release.wait(30)            # hold the first read open until the second one has started
         return {'raw': 'say 1', 'corrections': []}
     monkeypatch.setattr(analysis, 'extract_structured', extract)
     errors = []
     def read():
         try: analysis.extract_to_cache(None, shot, tmp_path / '.cache')
         except Exception as exc: errors.append(exc)
-    threads = [threading.Thread(target=read) for _ in range(2)]
-    for t in threads: t.start()
-    for t in threads: t.join(5)
+    first, second = threading.Thread(target=read), threading.Thread(target=read)
+    first.start()
+    assert entered.wait(30)
+    second.start()
+    time.sleep(0.2)                 # let the second read reach the cache / lock before the first one finishes
+    release.set()
+    for t in (first, second): t.join(30)
+    assert not first.is_alive() and not second.is_alive()
     assert not errors and len(calls) == 1
 
 

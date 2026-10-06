@@ -164,11 +164,12 @@ def rebuild_saved_capture(store, artifact_id, progress=None):
             store.set_validation(new_id, validation['tool'], validation['ok'] if validation['checked'] else None,
                                  validation['errors'] if validation['checked'] else validation['note'])
         verification = store.verification(new_id)
-        deep = store.get_meta('deepdive') or {}
-        deep.pop(str(artifact_id), None)
-        store.set_meta('deepdive', deep)
-        for key in ('assessment', 'deepdive_program', 'report_stamp', 'ui_flows', 'site_scan'):
-            store.set_meta(key, None)
+        with store.transaction():
+            deep = store.get_meta('deepdive') or {}
+            deep.pop(str(artifact_id), None)
+            store.set_meta('deepdive', deep)
+            for key in ('assessment', 'deepdive_program', 'report_stamp', 'ui_flows', 'site_scan'):
+                store.set_meta(key, None)
         store.log_run('rebuild_saved_capture', artifact_id=new_id, cost=0, input_tokens=0, output_tokens=0)
         return {'ok': True, 'artifact_id': new_id, 'version': store.artifact(new_id)['version'],
                 'frames': len(frames), 'lines': len(code.splitlines()), 'verification': verification,

@@ -3,6 +3,7 @@ import time
 
 PRICES = {
     "claude-opus-5-5": (4.0, 20.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
     "claude-sonnet-5": (2.0, 10.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5": (1.0, 5.0),
@@ -231,8 +232,47 @@ class _TrackedMessages:
             object.__setattr__(msg, "_codesnap_usage_record", record)
         return msg
 
+    def stream(self, **kwargs):
+        """Budget-checked, usage-recorded streaming (used for large outputs)."""
+        if self._tracker.budget is not None:
+            self._tracker.budget.check(self._tracker)
+        step = step_for(kwargs.get("system"))
+        kwargs = cached_request(kwargs)
+        return _TrackedStream(self._messages.stream(**kwargs), self._tracker, step, kwargs.get("model"))
+
     def __getattr__(self, name):
         return getattr(self._messages, name)
+
+
+class _TrackedStream:
+    def __init__(self, manager, tracker, step, model):
+        self._manager, self._tracker, self._step, self._model = manager, tracker, step, model
+        self._began = time.monotonic()
+        self._recorded = False
+
+    def _ms(self):
+        return int((time.monotonic() - self._began) * 1000)
+
+    def __enter__(self):
+        self._stream = self._manager.__enter__()
+        return self
+
+    def get_final_message(self):
+        msg = self._stream.get_final_message()
+        truncated = getattr(msg, "stop_reason", None) == "max_tokens"
+        self._recorded = True
+        self._tracker.record(self._step, getattr(msg, "model", None) or self._model, getattr(msg, "usage", None), self._ms(),
+                             ok=not truncated, error="output truncated (max_tokens)" if truncated else None)
+        return msg
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc is not None and not self._recorded:
+            self._recorded = True
+            self._tracker.record(self._step, self._model, None, self._ms(), ok=False, error=f"{exc_type.__name__}: {exc}")
+        return self._manager.__exit__(exc_type, exc, tb)
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
 
 
 class TrackedClient:

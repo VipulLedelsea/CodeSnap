@@ -9,6 +9,7 @@ MEMBER_OP = ("function", "paragraph", "section")
 CODE_REL = ("calls", "uses", "includes", "imports", "invokes_transaction", "depends_on", "navigates_to")
 DATA_REL = ("reads", "writes", "connects_to", "displays")
 MAX_ATTR, MAX_OPS, MAX_MESSAGES = 10, 14, 40
+MAX_TABLE_COLS, MAX_TABLES = 30, 60      # keeps the data model diagram drawable for very large schemas
 
 
 def _short(s, n=48):
@@ -264,16 +265,22 @@ def _data_stereotype(table):
 
 def data_model(store) -> dict:
     m = _model(store)
-    tables = [e for e in m.ents.values() if e["kind"] == "table"]
+    all_tables = [e for e in m.ents.values() if e["kind"] == "table"]
+    tables = all_tables
+    if len(all_tables) > MAX_TABLES:
+        linked = {r[k] for r in m.rels if r["kind"] == "depends_on" for k in ("from_id", "to_id")}
+        tables = sorted(all_tables, key=lambda t: (t["id"] not in linked, t["name"]))[:MAX_TABLES]
     nodes, edges, seen = [], [], set()
     for t in sorted(tables, key=lambda t: t["name"]):
         cols = [k for k in m.children.get(t["id"], []) if k["kind"] == "column"]
         lines = []
-        for c in sorted(cols, key=lambda c: (c["line_start"] or 0, c["name"])):
+        for c in sorted(cols, key=lambda c: (c["line_start"] or 0, c["name"]))[:MAX_TABLE_COLS]:
             at = c.get("attrs") or {}
             flag = " PK" if at.get("primary_key") else ""
             null = "" if at.get("nullable", True) else " NOT NULL"
             lines.append(_short(f"{c['name']}{': ' + str(at['type']) if at.get('type') else ''}{flag}{null}", 56))
+        if len(cols) > MAX_TABLE_COLS:
+            lines.append(f"+{len(cols) - MAX_TABLE_COLS} more")
         stereo = _data_stereotype(t)
         nodes.append({"id": f"t{t['id']}", "title": _short(t["name"], 44), "stereotype": stereo, "kind": "table",
                       "sections": [lines] if lines else [], "dashed": t["origin"] == "placeholder"})
@@ -287,7 +294,8 @@ def data_model(store) -> dict:
                               "label": _data_relationship_label(r.get("attrs") or {}),
                               "style": "solid", "head": "open"})
     scene = layered(nodes, edges, "TB", straight=len(edges) > 12)
-    return {"id": "data", "kind": "data", "title": f"Data model — {store.info['name']}", **scene}
+    shown = f" (showing {len(tables)} of {len(all_tables)} tables)" if len(all_tables) > len(tables) else ""
+    return {"id": "data", "kind": "data", "title": f"Data model — {store.info['name']}{shown}", **scene}
 
 
 def interactions(store, limit=40) -> list:
@@ -639,9 +647,9 @@ def user_flow(store) -> dict | None:
         nodes.append({"id": f"s{e['id']}", "title": _short(name, 32), "stereotype": ("not captured" if e["origin"] == "placeholder"
                                                                                    else tech), "kind": "actor" if e["origin"] != "placeholder" else "missing",
                       "dashed": e["origin"] == "placeholder"})
-    ids = {n["title"]: n["id"] for n in nodes}
+    ids = {name: f"s{e['id']}" for name, e in by_name.items()}      # keyed by the full, unique name
     for a, b, how in fl["edges"]:
-        if _short(a, 32) in ids and _short(b, 32) in ids:
-            edges.append({"from": ids[_short(a, 32)], "to": ids[_short(b, 32)], "label": how, "style": "solid", "head": "arrow"})
+        if a in ids and b in ids:
+            edges.append({"from": ids[a], "to": ids[b], "label": how, "style": "solid", "head": "arrow"})
     scene = layered(nodes, edges, "LR", straight=len(edges) > 12)
     return {"id": "userflow", "kind": "userflow", "title": f"User flow — {store.info['name']}", **scene}

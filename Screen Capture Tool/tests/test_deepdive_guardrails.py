@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import need_fixture
+
 from core import deepdive as DD
 from core.model import ProgramStore
 
@@ -68,6 +70,7 @@ def test_partly_unreadable_span_is_kept_fully_unreadable_is_held_back():
 
 @pytest.fixture
 def store(tmp_path):
+    need_fixture(RUN1)
     shutil.copytree(RUN1, tmp_path / "live-test-09-29")
     st = ProgramStore.open("live-test-09-29", root=tmp_path)
     yield st
@@ -173,6 +176,7 @@ def test_only_one_job_runs_per_program(tmp_path, monkeypatch):
     pytest.importorskip("fastapi")
     monkeypatch.setenv("CODESNAP_PROGRAMS", str(tmp_path / "programs"))
     from webapp import server
+    need_fixture(RUN1)
     shutil.copytree(RUN1, tmp_path / "programs" / "live-test-09-29")
     import threading
     gate = threading.Event()
@@ -293,6 +297,7 @@ def test_eval_expectations_compile_and_score_as_intended():
     assert not ev.score("AIDPAYRN.cbl", {"facts": [{"statement": "Pay period is 202609", "lines": [71, 71]}]})["found"][held]
     assert sc["traps"]
     for name in ev.EXPECTED:
+        need_fixture(RUN1)
         assert (RUN1 / "sources" / f"{name}.v1").exists(), name      # every expectation is about a real fixture file
 
 

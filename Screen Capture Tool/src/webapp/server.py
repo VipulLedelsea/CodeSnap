@@ -6,13 +6,22 @@ Screen capture stays local; this is the control panel / viewer.
 Run:  python -m webapp        (or: python webapp/server.py)
 """
 
+import hmac
+import logging
+import os
+import re
+import secrets
+import shutil
+import tempfile
 import time
 import threading
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Body, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 
 from webapp.reports import scan_reports
 from webapp.session import SessionManager
@@ -27,9 +36,86 @@ REPORTS = PROJECT / "reports"
 PENDING = REPORTS / "pending"
 STATIC = HERE / "static"
 
+log = logging.getLogger("codesnap.webapp")
+
 app = FastAPI(title="Ledelsea — CodeSnap")
 _session = SessionManager()
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+
+# ── Request guard: Host allow-list, same-origin check and a per-launch token ──
+# The server only listens on loopback, but any web page the user visits can still
+# fire requests at it (CSRF) or rebind its own DNS name to 127.0.0.1. So: only
+# loopback Host names are served, browser-originated writes must be same-origin and
+# carry the random token that is embedded in the page we serve at "/".
+CSRF_TOKEN = secrets.token_urlsafe(32)
+CSRF_HEADER = "x-codesnap-token"
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]", "testserver"}
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+# Browser requests (Origin / Sec-Fetch-Site present) always need the token. Plain
+# non-browser clients (curl, tests) can't be driven by a hostile web page, so they
+# only need it when CODESNAP_REQUIRE_TOKEN=1.
+_REQUIRE_TOKEN_ALWAYS = os.environ.get("CODESNAP_REQUIRE_TOKEN") == "1"
+
+
+def allow_host(host: str) -> None:
+    """Allow an extra bound host name (e.g. when serving on a non-default interface)."""
+    if host:
+        _ALLOWED_HOSTS.add(host.lower())
+        _ALLOWED_HOSTS.add(f"[{host.lower()}]" if ":" in host else host.lower())
+
+
+def _host_only(value: str) -> str:
+    value = (value or "").strip().lower()
+    if value.startswith("["):
+        return value.split("]")[0] + "]"
+    return value.split(":")[0]
+
+
+def _forbidden(message: str, code: int = 403):
+    return JSONResponse({"error": message}, status_code=code)
+
+
+@app.middleware("http")
+async def request_guard(request, call_next):
+    host_header = request.headers.get("host", "")
+    if _host_only(host_header) not in _ALLOWED_HOSTS:
+        return _forbidden("Host not allowed", 400)
+    if request.method not in _SAFE_METHODS:
+        origin = request.headers.get("origin")
+        site = request.headers.get("sec-fetch-site")
+        if origin is not None and (origin == "null" or urlparse(origin).netloc.lower() != host_header.strip().lower()):
+            return _forbidden("Cross-origin request blocked")
+        if site is not None and site not in ("same-origin", "none"):
+            return _forbidden("Cross-origin request blocked")
+        if origin is not None or site is not None or _REQUIRE_TOKEN_ALWAYS:
+            sent = request.headers.get(CSRF_HEADER, "")
+            if not hmac.compare_digest(sent.encode(), CSRF_TOKEN.encode()):
+                return _forbidden("Missing or invalid session token")
+    return await call_next(request)
+
+
+def _plain_filename(name) -> str | None:
+    """A bare file name (no directories, no dot-files, no NULs) or None."""
+    if not isinstance(name, str) or not name or name != name.strip():
+        return None
+    if "/" in name or "\\" in name or "\0" in name or name.startswith(".") or name in (".", ".."):
+        return None
+    if Path(name).name != name:
+        return None
+    return name
+
+
+def _file_in(base: Path, name) -> Path | None:
+    """Resolve `name` inside `base`; None unless it is a plain filename that stays in `base`."""
+    plain = _plain_filename(name)
+    if plain is None:
+        return None
+    target = (base / plain).resolve()
+    return target if target.parent == base.resolve() else None
+
+
+def _cleanup_tmp(directory: Path) -> BackgroundTask:
+    return BackgroundTask(shutil.rmtree, str(directory), ignore_errors=True)
 
 
 @app.middleware("http")
@@ -55,6 +141,7 @@ def index():
         v = "0"
     html = html.replace("/static/app.js", f"/static/app.js?v={v}")
     html = html.replace("/static/styles.css", f"/static/styles.css?v={v}")
+    html = html.replace("__CODESNAP_TOKEN__", CSRF_TOKEN)
     return html
 
 
@@ -66,10 +153,10 @@ def api_reports():
 @app.get("/api/download/{name}")
 def api_download(name: str):
     # no path traversal: only a bare filename inside reports/
-    if "/" in name or "\\" in name or name.startswith("."):
+    if _plain_filename(name) is None:
         return JSONResponse({"error": "bad name"}, status_code=400)
-    target = (REPORTS / name).resolve()
-    if target.parent != REPORTS.resolve() or not target.is_file():
+    target = _file_in(REPORTS, name)
+    if target is None or not target.is_file():
         return JSONResponse({"error": "not found"}, status_code=404)
     return FileResponse(str(target), filename=name)
 
@@ -80,26 +167,47 @@ def api_pending():
     return {"reports": scan_reports(PENDING)}
 
 
+def _pending_bundle(name: str):
+    """(json path, meta, code path or None) for a staged report; raises HTTPException."""
+    import json
+    if _plain_filename(name) is None:
+        raise HTTPException(status_code=400, detail="bad name")
+    src_json = _file_in(PENDING, f"{name}.json")
+    if src_json is None or not src_json.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    meta = json.loads(src_json.read_text())
+    code_file = (meta or {}).get("code_file", "")
+    src_code = _file_in(PENDING, code_file) if code_file else None
+    if code_file and src_code is None:
+        raise HTTPException(status_code=400, detail="bad code file name in report")
+    return src_json, src_code
+
+
 @app.get("/api/pending/download/{name}")
 def api_pending_download(name: str):
-    if "/" in name or "\\" in name or name.startswith("."):
-        return JSONResponse({"error": "bad name"}, status_code=400)
-    import json
-    import shutil
-    src_json = (PENDING / f"{name}.json").resolve()
-    if src_json.parent != PENDING.resolve() or not src_json.is_file():
-        return JSONResponse({"error": "not found"}, status_code=404)
-    meta = json.loads(src_json.read_text())
+    """Read-only: serve a staged report's code file (or its json) without saving it."""
+    try:
+        src_json, src_code = _pending_bundle(name)
+    except HTTPException as exc:
+        return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+    served = src_code if src_code is not None and src_code.is_file() else src_json
+    return FileResponse(str(served), filename=served.name)
+
+
+@app.post("/api/pending/download/{name}")
+def api_pending_promote(name: str):
+    """Promote (save) a staged bundle from pending/ into reports/, then serve its code file."""
+    try:
+        src_json, src_code = _pending_bundle(name)
+    except HTTPException as exc:
+        return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
     REPORTS.mkdir(parents=True, exist_ok=True)
-    # promote (save) the bundle from pending/ into reports/, then serve the code file
     dst_json = REPORTS / src_json.name
     shutil.move(str(src_json), str(dst_json))
     served = dst_json
-    code_file = meta.get("code_file", "")
-    if code_file:
-        src_code = PENDING / code_file
-        if src_code.is_file():
-            dst_code = REPORTS / code_file
+    if src_code is not None and src_code.is_file():
+        dst_code = _file_in(REPORTS, src_code.name)
+        if dst_code is not None:
             shutil.move(str(src_code), str(dst_code))
             served = dst_code
     return FileResponse(str(served), filename=served.name)
@@ -242,12 +350,12 @@ def _progress(arts: list) -> dict:
 
 _DEEP = {}
 _REBUILDS = {}
-_REBUILD_LOCK = threading.Lock()
+_JOB_LOCK = threading.RLock()      # guards check-and-register on _DEEP / _REBUILDS
+_REBUILD_LOCK = _JOB_LOCK
 
 
 def _deep_start(slug: str, artifact_ids=None) -> dict:
     """Run the deep code analysis for every file that needs it, in the background (one job per program)."""
-    import threading
     from core import deepdive
     job = _DEEP.get(slug)
     if job and job.get("running"):
@@ -257,8 +365,14 @@ def _deep_start(slug: str, artifact_ids=None) -> dict:
     client = _program_client(slug)
     with _open_program(slug) as store:
         total = len(artifact_ids) if artifact_ids else len(deepdive.pending(store)) or int(deepdive.program_stale(store))
-    job = {"running": True, "done": 0, "total": total, "errors": [], "started": time.time()}
-    _DEEP[slug] = job
+    with _JOB_LOCK:   # re-check and register atomically: two requests must not both start a job
+        job = _DEEP.get(slug)
+        if job and job.get("running"):
+            return job
+        if slug in _REBUILDS:
+            raise HTTPException(status_code=409, detail="Wait for the saved capture rebuild to finish before reviewing.")
+        job = {"running": True, "done": 0, "total": total, "errors": [], "started": time.time()}
+        _DEEP[slug] = job
 
     def work():
         from core.model import ProgramStore
@@ -437,11 +551,13 @@ def api_program_artifact_rebuild(slug: str, artifact_id: int):
         from core import deepdive
         pending_worker = _session._pending
         capture_worker_running = _session.running() or (pending_worker is not None and pending_worker.poll() is None)
-        if ((_DEEP.get(slug) or {}).get("running") or (capture_worker_running and deepdive._active(store)) or
+        if ((capture_worker_running and deepdive._active(store)) or
                 any(store.capture_progress(a["id"]).get("analysing") for a in store.artifacts())):
             return JSONResponse({"error": "Wait for current analysis to finish before rebuilding a saved capture."}, status_code=409)
         from core.model.restitch import rebuild_saved_capture
         with _REBUILD_LOCK:
+            if (_DEEP.get(slug) or {}).get("running"):
+                return JSONResponse({"error": "Wait for current analysis to finish before rebuilding a saved capture."}, status_code=409)
             if slug in _REBUILDS:
                 return JSONResponse({"error": "A saved capture is already being rebuilt. Wait for it to finish."}, status_code=409)
             job = {"name": store.artifact(artifact_id)["name"], "stage": "Reading saved screenshots", "done": 0, "total": 0}
@@ -747,6 +863,24 @@ def api_program_diagram(slug: str, diagram_id: str, fmt: str):
     raise HTTPException(status_code=404, detail="Use svg or png.")
 
 
+@app.post("/api/programs/{slug}/report/prepare")
+def api_program_report_prepare(slug: str):
+    """Start the deep code analysis the report needs (if any). The report GETs never do this."""
+    from core import report as rep
+    from core import deepdive
+    with _open_program(slug) as store:
+        if rep.waiting(store):
+            return {"ok": True, "started": False, "waiting": True}
+        job = _DEEP.get(slug) or {}
+        needs = bool(deepdive.pending(store) or deepdive.program_stale(store))
+    if job.get("running"):
+        return {"ok": True, "started": False, "running": True}
+    if needs and api_key_status()["has_key"]:
+        _deep_start(slug)
+        return {"ok": True, "started": True}
+    return {"ok": True, "started": False}
+
+
 @app.get("/api/programs/{slug}/report.{fmt}")
 def api_program_report(slug: str, fmt: str, rescan: bool = True, client: str | None = None):
     from core import report as rep
@@ -773,11 +907,13 @@ def api_program_report(slug: str, fmt: str, rescan: bool = True, client: str | N
             todo = deepdive.pending(store)
             job = _DEEP.get(slug) or {}
             if (todo or deepdive.program_stale(store) or job.get("running")) and api_key_status()["has_key"]:
+                # Read-only: starting the analysis is a POST (/report/prepare); a GET never starts work.
                 if not job.get("running"):
-                    job = _deep_start(slug)
-                msg = (f"Deep code analysis is running ({job.get('done', 0)} of {job.get('total', len(todo))} files). " if todo else
-                       "Drawing the cross-file observations from the reviewed files. ") + (
-                       "The report is built from it; refresh in a minute.")
+                    msg = "The deep code analysis hasn't been started yet. Open the report from the app (View report) to start it."
+                else:
+                    msg = (f"Deep code analysis is running ({job.get('done', 0)} of {job.get('total', len(todo))} files). " if todo else
+                           "Drawing the cross-file observations from the reviewed files. ") + (
+                           "The report is built from it; refresh in a minute.")
                 if fmt == "html":
                     return HTMLResponse(f"<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=20>"
                                         f"<body style='font:16px system-ui;padding:40px'><h2>Analysing the code</h2>"
@@ -970,18 +1106,31 @@ def api_key_status():
     return {"has_key": bool(os.environ.get("ANTHROPIC_API_KEY"))}
 
 
+def _write_private(path: Path, text: str) -> None:
+    """Write a secret file readable by the owner only (0600), never briefly world-readable."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+    os.chmod(str(path), 0o600)
+
+
 @app.post("/api/key")
-def api_key_set(value: str = ""):
+def api_key_set(payload: dict | None = Body(None), value: str = ""):
     """Save the user's Anthropic key to ~/.codesnap/.env (found by the capture
     worker on launch) and this process's env. Local-only server, so this is fine."""
-    import os
+    if isinstance(payload, dict) and payload.get("value") is not None:   # preferred: keep the key out of URLs/logs
+        value = str(payload.get("value"))
     key = (value or "").strip()
     if not (key.startswith("sk-ant") and len(key) > 20):
         return JSONResponse({"ok": False, "error": "That doesn't look like an Anthropic key (it should start with 'sk-ant')."}, status_code=400)
     cfg = Path.home() / ".codesnap"
     try:
         cfg.mkdir(parents=True, exist_ok=True)
-        (cfg / ".env").write_text(f"ANTHROPIC_API_KEY={key}\n")
+        try:
+            os.chmod(cfg, 0o700)
+        except OSError:
+            pass
+        _write_private(cfg / ".env", f"ANTHROPIC_API_KEY={key}\n")
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"ok": False, "error": f"Couldn't save: {exc}"}, status_code=500)
     os.environ["ANTHROPIC_API_KEY"] = key
@@ -1038,6 +1187,7 @@ def api_project_analyze(payload: dict = Body(...)):
         r = lookup.get((it or {}).get("report"))
         if r:
             fname = ((it.get("filename") or r.get("code_file") or r["name"]) or "").strip()
+            fname = fname.replace("\\", "/").rsplit("/", 1)[-1] or r["name"]   # a label, never a path
             files.append({"name": fname, "code": r["code"]})
             picked.append((r, fname))
     if len(files) < 2:
@@ -1057,12 +1207,13 @@ def api_project_analyze(payload: dict = Body(...)):
 
     # Rename each member's bundle on disk to its detected filename (e.g. calc.py),
     # so the file downloads/displays with a real name instead of report_<timestamp>.
-    members = []
+    members, warnings = [], []
     for r, fname in picked:
         if "." in fname:
             base, ext = fname.rsplit(".", 1)
         else:
             base, ext = fname, (r.get("extension") or "txt")
+        ext = re.sub(r"[^A-Za-z0-9]+", "", ext)[:12] or "txt"
         stem = _unique(REPORTS, _slug(base))
         new_name = r["name"]
         try:
@@ -1072,15 +1223,20 @@ def api_project_analyze(payload: dict = Body(...)):
                 "diagrams": r.get("diagrams", ""), "extension": ext, "code": r.get("code", ""),
             }, REPORTS, stem)
             for base_dir in (REPORTS, PENDING):          # remove the old report_<ts> bundle
-                for fp in (base_dir / f"{r['name']}.json", base_dir / (r.get("code_file") or "_")):
+                for victim in (f"{r['name']}.json", r.get("code_file") or ""):
+                    fp = _file_in(base_dir, victim) if victim else None   # plain names inside base_dir only
+                    if fp is None:
+                        continue
                     try:
-                        if fp.name and fp.name != "_" and fp.exists():
+                        if fp.exists():
                             fp.unlink()
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except OSError as exc:
+                        log.warning("could not remove old report file %s: %s", fp, exc)
+                        warnings.append(f"Couldn't remove the old copy of {victim}: {exc}")
             new_name = stem
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.exception("could not rename report bundle for %s", fname)
+            warnings.append(f"Couldn't save {fname} under its own name ({exc}); it keeps its original name.")
         members.append({"name": new_name, "filename": fname})
     report["members"] = members
 
@@ -1090,9 +1246,13 @@ def api_project_analyze(payload: dict = Body(...)):
     name = _unique(REPORTS, base_name)
     try:
         save_report_bundle(report, REPORTS, name)   # finished deliverable -> Recent results
-    except Exception:  # noqa: BLE001 - still return it even if the save hiccups
-        pass
-    return {"ok": True, "name": name, "report": report}
+    except Exception as exc:  # noqa: BLE001 - still return it even if the save hiccups
+        log.exception("could not save project report %s", name)
+        warnings.append(f"The project report was built but could not be saved to Recent results ({exc}).")
+    out = {"ok": True, "name": name, "report": report}
+    if warnings:
+        out["warnings"] = warnings
+    return out
 
 
 @app.post("/api/report/docx")
@@ -1104,27 +1264,35 @@ def api_report_docx_post(payload: dict = Body(...)):
                 if r.get("kind") == "report" and r.get("name") == name), None)
     if not rep:
         return JSONResponse({"error": "not found"}, status_code=404)
-    import tempfile
     from core.outputs import report_docx
-    tmp = Path(tempfile.mkdtemp()) / f"{name}.docx"
-    report_docx(rep, tmp, images)
-    return FileResponse(str(tmp), filename=f"{name}.docx")
+    tmpdir = Path(tempfile.mkdtemp())
+    tmp = tmpdir / f"{_plain_filename(name) or 'report'}.docx"
+    try:
+        report_docx(rep, tmp, images)
+    except Exception:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+    return FileResponse(str(tmp), filename=f"{name}.docx", background=_cleanup_tmp(tmpdir))
 
 
 @app.get("/api/report/docx/{name}")
 def api_report_docx(name: str):
     """Build a Word (.docx) report for a saved/pending report and serve it (dev browser)."""
-    if "/" in name or "\\" in name or name.startswith("."):
+    if _plain_filename(name) is None:
         return JSONResponse({"error": "bad name"}, status_code=400)
     rep = next((r for r in scan_reports(REPORTS) + scan_reports(PENDING)
                 if r.get("kind") == "report" and r.get("name") == name), None)
     if not rep:
         return JSONResponse({"error": "not found"}, status_code=404)
-    import tempfile
     from core.outputs import report_docx
-    tmp = Path(tempfile.mkdtemp()) / f"{name}.docx"
-    report_docx(rep, tmp)
-    return FileResponse(str(tmp), filename=f"{name}.docx")
+    tmpdir = Path(tempfile.mkdtemp())
+    tmp = tmpdir / f"{name}.docx"
+    try:
+        report_docx(rep, tmp)
+    except Exception:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+    return FileResponse(str(tmp), filename=f"{name}.docx", background=_cleanup_tmp(tmpdir))
 
 
 @app.get("/api/screen.png")
@@ -1188,6 +1356,7 @@ def _serve_in_thread(host="127.0.0.1", port=8000):
     only work on the main thread). Returns once the thread is started."""
     import threading
     import uvicorn
+    allow_host(host)
     config = uvicorn.Config(app, host=host, port=port, log_level="warning")
     server = uvicorn.Server(config)
     server.install_signal_handlers = lambda: None
@@ -1237,16 +1406,19 @@ def main():
                                     if r.get("kind") == "report" and r.get("name") == name), None)
                         if not rep:
                             return False
-                        import tempfile, shutil
                         from core.outputs import report_docx
-                        tmp = Path(tempfile.mkdtemp()) / (name + ".docx")
-                        report_docx(rep, tmp, images)
-                        dest = self.window.create_file_dialog(getattr(getattr(webview, "FileDialog", None), "SAVE", None) or webview.SAVE_DIALOG, save_filename=name + ".docx")
-                        if not dest:
-                            return False
-                        dest = dest if isinstance(dest, str) else dest[0]
-                        shutil.copy(str(tmp), dest)
-                        return True
+                        tmpdir = Path(tempfile.mkdtemp())
+                        try:
+                            tmp = tmpdir / (name + ".docx")
+                            report_docx(rep, tmp, images)
+                            dest = self.window.create_file_dialog(getattr(getattr(webview, "FileDialog", None), "SAVE", None) or webview.SAVE_DIALOG, save_filename=name + ".docx")
+                            if not dest:
+                                return False
+                            dest = dest if isinstance(dest, str) else dest[0]
+                            shutil.copy(str(tmp), dest)
+                            return True
+                        finally:
+                            shutil.rmtree(tmpdir, ignore_errors=True)
                     except Exception:  # noqa: BLE001
                         return False
 

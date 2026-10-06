@@ -7,7 +7,7 @@ just split by role.
 
   Coordinator  (Sonnet) — owns the goal, decides what to run, assembles + saves
                           the final report. Reads no screenshots itself.
-  Extractor    (Haiku)  — reads the captures and returns a faithful, verbatim
+  Extractor    (EXTRACT_MODEL, the main vision model) — reads the captures and returns a faithful, verbatim
                           transcription. Has NO fix/classify ability, so it
                           structurally cannot 'clean up' the code.
   Analyst      (Sonnet) — classifies + writes the plain-English overview and the
@@ -21,7 +21,7 @@ The single-agent loop in agent.py is untouched; this is an opt-in path
 
 import json
 import re
-import tempfile
+import sys
 from pathlib import Path
 
 import tools
@@ -35,11 +35,11 @@ MAX_TOKENS = 4096
 # ── specialist agents ────────────────────────────────────────────────────────
 
 def agent_extract(ctx) -> dict:
-    """Extractor (Haiku). Reads every capture faithfully and returns:
+    """Extractor (analysis.EXTRACT_MODEL — currently the main vision model, not a cheaper one). Reads every capture faithfully and returns:
       code   — the clean stitched transcription (overlaps de-duplicated)
       marked — the same content split by '===== Screenshot N =====' markers
                (lets the Analyst cite which screenshot each part came from)
-    Faithfulness is structural: extraction goes through the Haiku OCR path and
+    Faithfulness is structural: extraction goes through the verbatim OCR path and
     the returned code is the stitched cache, never a paraphrase."""
     raws = []
     metas = []
@@ -107,9 +107,11 @@ def _analyst_enrich(client, text: str, base: dict) -> dict:
         )
         raw = "".join(getattr(b, "text", "") for b in msg.content).strip()
         data = analysis._parse_json(raw)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        if analysis.is_fatal_api_error(exc):
+            print(f"(analyst call failed, report continues without the enrichment: {type(exc).__name__}: {exc})", file=sys.stderr)
         data = None
-    if data:
+    if isinstance(data, dict) and data:
         out["is_code"] = bool(data.get("is_code", out["is_code"]))
         out["language"] = str(data.get("language") or out["language"]).strip()
         out["extension"] = str(data.get("extension") or out["extension"]).strip().lstrip(".").lower()
@@ -135,17 +137,8 @@ def agent_analyze(client, marked_text: str) -> dict:
 
 
 def _check(code: str, extension: str) -> dict:
-    ext = outputs.safe_ext(extension or "txt")
-    tmp = Path(tempfile.mktemp(suffix=f".{ext}"))
-    tmp.write_text(code)
-    try:
-        res = validate.check_source(tmp)
-        if res.get("errors"):
-            # collapse absolute temp paths (e.g. /var/folders/.../tmpXXX/Foo.java:1:) to the bare filename
-            res["errors"] = re.sub(r"\S*/([\w.\-]+:\d+:)", r"\1", res["errors"])
-        return res
-    finally:
-        tmp.unlink(missing_ok=True)
+    # private temp dir, private cwd, include-path guard and key redaction all live in validate.check_code_text
+    return validate.check_code_text(code, extension)
 
 
 _INDENT_ERR = re.compile(
@@ -210,7 +203,15 @@ def agent_decoder(client, code: str, extension: str, language: str) -> dict:
                 "error. If the code is complete on screen, re-capture and scroll to the end.")
         return {"errors": f"{note}\n(checker output: {errors})", "code": code, "checked": True,
                 "tool": res.get("tool", ""), "resolved": None, "truncated": True}
-    fixed = outputs.strip_code_fences(analysis.fix_source(client, code, language, errors))
+    try:
+        fixed = outputs.strip_code_fences(analysis.fix_source(client, code, language, errors))
+        problem = analysis.fix_looks_complete(code, fixed)
+    except analysis.FixRejected as exc:
+        fixed, problem = "", str(exc)
+    if problem:
+        # never replace the captured code with a truncated or drastically shorter "fix"
+        return {"errors": errors, "code": code, "checked": True, "tool": res.get("tool", ""),
+                "resolved": False, "remaining": f"Automatic fix discarded: {problem}."}
     res2 = _check(fixed, extension)
     if res2.get("ok"):
         # fix compiles: ship the corrected code (errors describe what was wrong, now resolved)
@@ -395,7 +396,7 @@ def _tc_finalize(client, ctx, scratch, inp):
 
 COORDINATOR_TOOLS = [
     {"name": "get_transcription",
-     "description": "Delegate to the Extractor (Haiku): read every capture faithfully and return the verbatim transcription, split by '===== Screenshot N =====' markers. Call this FIRST.",
+     "description": "Delegate to the Extractor: read every capture faithfully and return the verbatim transcription, split by '===== Screenshot N =====' markers. Call this FIRST.",
      "input_schema": {"type": "object", "properties": {}}},
     {"name": "analyze",
      "description": "Delegate to the Analyst: classify the content and write the plain-English overview + top-5 tech-stack review. Returns JSON {is_code, language, extension, overview, tech_stack}.",
@@ -508,6 +509,10 @@ def run_team(client, ctx, goal=None, verbose=True, audit=None, max_iters=MAX_ITE
         pass
     if scratch.get("report_md"):
         return scratch["report_md"], messages
+    reason = getattr(resp, "stop_reason", None)
+    if reason in ("max_tokens", "refusal"):
+        why = "ran out of output tokens" if reason == "max_tokens" else "declined to continue"
+        return f"(team stopped without a report: the coordinator {why})", messages
     final = "".join(getattr(b, "text", "") for b in _blocks(resp)
                     if getattr(b, "type", None) == "text").strip()
     return final or "(team finished without producing a report)", messages

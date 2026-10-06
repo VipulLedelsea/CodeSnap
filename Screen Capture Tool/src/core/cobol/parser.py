@@ -24,6 +24,25 @@ _WRITE = re.compile(rf"\b(WRITE|REWRITE)\s+({NAME})", re.I)
 _DELETE = re.compile(rf"\bDELETE\s+({NAME})", re.I)
 _EXEC_START = re.compile(r"\bEXEC\s+(CICS|SQL|DLI)\b", re.I)
 _END_EXEC = re.compile(r"\bEND-EXEC\b", re.I)
+_EXEC_CAP = 50                 # an EXEC block longer than this many lines is treated as unterminated
+_SELECT_START = re.compile(r"\bSELECT\s+(?:OPTIONAL\s+)?" + NAME, re.I)
+
+
+def _collect_exec(lines, i, code, ex, stop, stops=()):
+    """Body of the EXEC statement starting on lines[i]. Only newly added lines are searched for END-EXEC; the scan
+    stops at the next EXEC, a paragraph/section header (`stops`), the cap or `stop`. Returns (body, last_index, closed)."""
+    body, j = code[ex.end():], i
+    if _END_EXEC.search(body):
+        return body, j, True
+    while j + 1 < stop and j - i < _EXEC_CAP:
+        if (j + 1) in stops or _EXEC_START.search(lines[j + 1][1]):
+            break
+        j += 1
+        piece = lines[j][1]
+        body += " " + piece
+        if _END_EXEC.search(piece):
+            return body, j, True
+    return code[ex.end():], i, False
 _OPT_VALUE = r"\s*\(\s*['\"]?(" + NAME + r"(?:\." + NAME + r")*)['\"]?\s*\)"
 _NOT_PARAGRAPHS = {"EXIT", "GOBACK", "CONTINUE", "STOP", "END-IF", "END-PERFORM", "END-EVALUATE", "END-READ",
                    "ELSE", "END-EXEC", "END-CALL", "END-WRITE", "END-STRING", "END-SEARCH", "REPLACE", "EJECT",
@@ -138,13 +157,24 @@ def parse_cobol(text: str, filename: str = "") -> dict:
 
     files, records = {}, {}
     current_fd = None
+    warnings = []
     for i, (n, code, _) in enumerate(lines[:proc_index]):
         stripped = code.strip()
-        s = _SELECT.search(stripped)
+        s = None
+        sm = _SELECT_START.search(stripped)
+        if sm:
+            joined, j = stripped[sm.start():], i
+            while not joined.rstrip().endswith(".") and j + 1 < proc_index and j - i < 10:
+                nxt = lines[j + 1][1].strip()
+                if _SELECT_START.search(nxt) or _FD.match(nxt) or _DIVISION.match(nxt) or _SECTION_HDR.match(nxt):
+                    break
+                j += 1
+                joined += " " + nxt
+            s = _SELECT.search(joined)
         if s:
             fname = s.group(1).upper()
             files[fname] = n
-            entities.append(_entity("data_store", fname, None, n, n, assign=s.group(2).upper(), store_type="file"))
+            entities.append(_entity("data_store", fname, None, n, n, assign=s.group(2).upper().rstrip("."), store_type="file"))
         fd = _FD.match(stripped)
         if fd:
             current_fd = fd.group(2).upper()
@@ -194,10 +224,10 @@ def parse_cobol(text: str, filename: str = "") -> dict:
             continue
         ex = _EXEC_START.search(code)
         if ex:
-            body, start, j = code[ex.end():], n, i
-            while not _END_EXEC.search(body) and j + 1 < len(lines):
-                j += 1
-                body += " " + lines[j][1]
+            start = n
+            body, j, closed = _collect_exec(lines, i, code, ex, len(lines), header_at)
+            if not closed:
+                warnings.append(f"line {n}: EXEC {ex.group(1).upper()} has no END-EXEC; treated as ending on this line")
             body = _END_EXEC.split(body)[0]
             relations += _exec_relations(ex.group(1).upper(), " ".join(body.split()), current, start)
             code = code[:ex.start()]
@@ -260,17 +290,20 @@ def parse_cobol(text: str, filename: str = "") -> dict:
     for i, (n, code, _) in enumerate(lines[:proc_index]):
         ex = _EXEC_START.search(code)
         if ex and ex.group(1).upper() == "SQL":
-            body, j = code[ex.end():], i
-            while not _END_EXEC.search(body) and j + 1 < proc_index:
-                j += 1
-                body += " " + lines[j][1]
+            body, j, closed = _collect_exec(lines, i, code, ex, proc_index)
+            if not closed:
+                warnings.append(f"line {n}: EXEC SQL has no END-EXEC; treated as ending on this line")
             body = " ".join(_END_EXEC.split(body)[0].split())
             inc = _SQL_INCLUDE.match(body)
             if inc and inc.group(1).upper() not in ("SQLCA", "SQLDA"):
                 relations.append(_rel("includes", program, f"copybook:{inc.group(1).upper()}", n, verb="SQL INCLUDE"))
             elif not inc:
                 relations += _exec_relations("SQL", body, program, n)
-    return {"entities": entities, "relations": _dedupe(relations)}
+    result = {"entities": entities, "relations": _dedupe(relations)}
+    if warnings:
+        result["warnings"] = warnings
+        entities[0]["attrs"]["parse_warnings"] = warnings[:20]
+    return result
 
 
 PARSER_VERSION = "cobol-parser-v1"
@@ -393,6 +426,17 @@ def parse_bms(text: str, filename: str = "") -> dict:
 _JCL = re.compile(r"^//([A-Z0-9#@$]*)\s+(JOB|EXEC|DD)\b\s*(.*)$", re.I)
 
 
+def _operand(text: str) -> str:
+    """First blank-delimited (outside quotes) token of a JCL operand field; what follows is a comment."""
+    quote = False
+    for k, ch in enumerate(text):
+        if ch == "'":
+            quote = not quote
+        elif ch == " " and not quote:
+            return text[:k]
+    return text
+
+
 def _jcl_statements(text: str) -> list:
     stmts = []
     for n, raw in enumerate(text.splitlines(), 1):
@@ -401,9 +445,13 @@ def _jcl_statements(text: str) -> list:
             continue
         m = _JCL.match(line[:72])
         if m:
-            stmts.append({"line": n, "label": m.group(1).upper(), "op": m.group(2).upper(), "text": m.group(3)})
-        elif stmts:
-            stmts[-1]["text"] += ' ' + line[2:72].strip()
+            operand = _operand(m.group(3).strip())
+            stmts.append({"line": n, "label": m.group(1).upper(), "op": m.group(2).upper(), "text": operand,
+                          "open": operand.endswith(",")})
+        elif stmts and stmts[-1].get("open"):
+            operand = _operand(line[2:72].strip())
+            stmts[-1]["text"] += operand
+            stmts[-1]["open"] = operand.endswith(",")
     return stmts
 
 
@@ -432,8 +480,8 @@ def parse_jcl(text: str, filename: str = "") -> dict:
             dsn = re.search(r"\bDSN(?:AME)?=([A-Z0-9#@$.()&+-]+?)(?:,|$)", params, re.I)
             if not dsn:
                 continue
-            disp = re.search(r"\bDISP=\(?([A-Z]+)", params, re.I)
-            mode = disp.group(1).upper() if disp else "SHR"
+            disp = re.search(r"\bDISP=\(?([A-Z]*)", params, re.I)
+            mode = (disp.group(1).upper() or "NEW") if disp else "SHR"
             kind = "reads" if mode in ("SHR", "OLD") else "writes"
             relations.append(_rel(kind, job, f"data_store:{dsn.group(1).upper()}", s["line"], step=step,
                                   program=program, ddname=s["label"] or None, disp=mode, store_type="dataset"))

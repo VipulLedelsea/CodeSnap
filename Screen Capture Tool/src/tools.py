@@ -13,7 +13,6 @@ Public surface:
 
 import json
 import time
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -77,13 +76,7 @@ def _t_classify(ctx, inp):
 
 
 def _t_check_code(ctx, inp):
-    ext = outputs.safe_ext(inp.get("extension", "txt"))
-    tmp = Path(tempfile.mktemp(suffix=f".{ext}"))
-    tmp.write_text(inp.get("content", ""))
-    try:
-        res = validate.check_source(tmp)
-    finally:
-        tmp.unlink(missing_ok=True)
+    res = validate.check_code_text(inp.get("content", ""), inp.get("extension", "txt"))
     return json.dumps(res)
 
 
@@ -102,12 +95,7 @@ def _t_check_captured_code(ctx, inp):
     code, _ = merge_frames(raws)
     if not code.strip():
         return json.dumps({"ok": None, "note": "No cached extraction yet — read the captures first."})
-    tmp = Path(tempfile.mktemp(suffix=f".{ext}"))
-    tmp.write_text(code)
-    try:
-        res = validate.check_source(tmp)
-    finally:
-        tmp.unlink(missing_ok=True)
+    res = validate.check_code_text(code, ext)
     return json.dumps({"checked": res["checked"], "ok": res["ok"], "tool": res["tool"],
                        "errors": res["errors"], "code": code})
 

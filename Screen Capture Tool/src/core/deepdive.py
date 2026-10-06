@@ -369,24 +369,42 @@ def _tool(message, name):
     return None
 
 
+
+
+def _bad_request_types():
+    try:
+        import anthropic
+        return (anthropic.BadRequestError, TypeError)   # TypeError: an SDK too old to know `thinking`
+    except Exception:  # noqa: BLE001
+        return (TypeError,)
+
+
 def _call(client, model, system, tool, content, thinking=True):
-    """One call with extended thinking (the model reasons before it answers); falls back without it."""
+    """One call with adaptive thinking (the model decides how much to reason); falls back without it.
+
+    Only a 400 (BadRequestError) triggers the fallback, and a model that refused thinking is remembered so the
+    failing request is not repeated. Thinking is incompatible with a forced tool_choice, so it uses "auto".
+    """
     base = dict(model=model, max_tokens=MAX_TOKENS, system=system, tools=[tool], timeout=600,
                 messages=[{"role": "user", "content": content + f"\n\nCall {tool['name']} once with your complete answer."}])
     began = time.monotonic()
-    if thinking:
+    rejected = _bad_request_types()
+    refused = getattr(client, "_codesnap_no_thinking", None)
+    if not isinstance(refused, set):
+        refused = set()   # models that already answered a thinking request with a 400; never repeat the doomed request
         try:
-            msg = client.messages.create(thinking={"type": "enabled", "budget_tokens": THINKING},
-                                         tool_choice={"type": "auto"}, **base)
+            client._codesnap_no_thinking = refused
+        except Exception:  # noqa: BLE001
+            pass
+    if thinking and model not in refused:
+        try:
+            msg = client.messages.create(thinking={"type": "adaptive"}, tool_choice={"type": "auto"}, **base)
             return msg, int((time.monotonic() - began) * 1000)
-        except Exception as exc:  # noqa: BLE001
-            if not re.search(r"thinking|budget|tool_choice|unsupported|invalid", str(exc), re.I):
-                raise
+        except rejected:
+            refused.add(model)
     try:
         msg = client.messages.create(tool_choice={"type": "tool", "name": tool["name"]}, **base)
-    except Exception as exc:  # noqa: BLE001
-        if "tool_choice" not in str(exc):
-            raise
+    except rejected:
         msg = client.messages.create(tool_choice={"type": "auto"}, **base)
     return msg, int((time.monotonic() - began) * 1000)
 

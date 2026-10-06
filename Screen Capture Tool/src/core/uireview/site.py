@@ -1,4 +1,5 @@
 import http.client
+import ipaddress
 import re
 import socket
 import ssl
@@ -21,11 +22,48 @@ HEADER_RULES = [
 ]
 
 
-def fetch(url, timeout=12, max_redirects=5):
+def _site(host):
+    h = (host or "").lower().rstrip(".")
+    return h[4:] if h.startswith("www.") else h
+
+
+def _internal_address(host) -> str:
+    """Why this host must not be fetched ("" when it is fine): loopback, private, link-local (cloud metadata),
+    reserved or unresolvable-to-public addresses."""
+    if not host:
+        return "no host"
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
+        return ""            # unresolvable: the connection itself will fail and be reported
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        except ValueError:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            return f"{host} resolves to a non-public address ({ip})"
+    return ""
+
+
+def fetch(url, timeout=12, max_redirects=5, allow_private=False):
     chain, tls = [], None
+    origin = urlparse(url)
     for _ in range(max_redirects + 1):
         u = urlparse(url)
-        host, port = u.hostname, u.port or (443 if u.scheme == "https" else 80)
+        try:
+            host, port = u.hostname, u.port or (443 if u.scheme == "https" else 80)
+        except ValueError:
+            return {"url": url, "status": None, "headers": [], "body": "", "chain": chain, "tls": tls,
+                    "error": "invalid URL"}
+        if u.scheme not in ("http", "https"):
+            return {"url": url, "status": None, "headers": [], "body": "", "chain": chain, "tls": tls,
+                    "error": "unsupported URL scheme"}
+        if not allow_private:
+            why = _internal_address(host)
+            if why:
+                return {"url": url, "status": None, "headers": [], "body": "", "chain": chain, "tls": tls,
+                        "error": "refused: " + why}
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
         try:
             if u.scheme == "https":
@@ -51,7 +89,15 @@ def fetch(url, timeout=12, max_redirects=5):
         chain.append((url, resp.status))
         loc = dict(headers).get("location")
         if resp.status in (301, 302, 303, 307, 308) and loc:
-            url = urljoin(url, loc)
+            nxt = urljoin(url, loc)
+            nu = urlparse(nxt)
+            problem = ("redirect to another site refused" if _site(nu.hostname) != _site(origin.hostname)
+                       else "redirect from HTTPS to HTTP refused" if u.scheme == "https" and nu.scheme != "https"
+                       else "redirect to an unsupported scheme refused" if nu.scheme not in ("http", "https") else "")
+            if problem:
+                return {"url": url, "status": None, "headers": [], "body": "", "chain": chain, "tls": tls,
+                        "error": f"{problem}: {nxt[:120]}"}
+            url = nxt
             continue
         return {"url": url, "status": resp.status, "headers": headers, "body": body, "chain": chain, "tls": tls}
     return {"url": url, "status": None, "headers": [], "body": "", "chain": chain, "tls": tls, "error": "too many redirects"}
@@ -123,12 +169,12 @@ def scan_site(start_url, fetcher=None, max_pages=10, respect_robots=True) -> dic
                                                                     "x-aspnetmvc-version", "strict-transport-security",
                                                                     "content-security-policy", "x-frame-options",
                                                                     "x-content-type-options", "referrer-policy")}
-    if final.scheme == "https":
+    if final.scheme == "https" and (first.get("status") or 0) < 400:      # error pages carry no policy headers
         for name, rule, sev, text, nist in HEADER_RULES:
             if name not in hdrs:
                 add(rule, sev, first["url"], text, cwe="CWE-693", nist=[nist])
     csp = " ".join(hdrs.get("content-security-policy", []))
-    if "x-frame-options" not in hdrs and "frame-ancestors" not in csp:
+    if (first.get("status") or 0) < 400 and "x-frame-options" not in hdrs and "frame-ancestors" not in csp:
         add("WEB-FRAME", "medium", first["url"], "page can be framed by other sites (clickjacking)", cwe="CWE-1021", nist=["SC-18"])
     for c in hdrs.get("set-cookie", []):
         name = c.split("=", 1)[0].strip()

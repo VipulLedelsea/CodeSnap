@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import need_fixture
+
 from core import deepdive as DD
 from core.model import ProgramStore
 
@@ -85,6 +87,7 @@ def test_whitespace_differences_in_quotes_are_tolerated_but_not_wording():
 
 @pytest.fixture
 def store(tmp_path):
+    need_fixture(RUN1)
     shutil.copytree(RUN1, tmp_path / "live-test-09-29")
     st = ProgramStore.open("live-test-09-29", root=tmp_path)
     yield st
@@ -131,7 +134,7 @@ def test_analyse_file_end_to_end_with_review(store):
                   "Approve has no [Authorize] attribute on the method or class"]
     assert res["rejected"] == 2                                  # invented email + one the review rejected
     assert res["reviewed"]["supported"] == 1 and res["reviewed"]["partly"] == 1
-    assert client.calls[0]["thinking"]["type"] == "enabled"     # the strongest model reasons before answering
+    assert client.calls[0]["thinking"]["type"] == "adaptive"     # the strongest model reasons before answering
     assert "Password=P@ssw0rd1" in client.calls[0]["messages"][0]["content"]
     assert store.runs()[-1]["step"] == "deepdive_review"
 
@@ -194,6 +197,7 @@ def test_app_endpoints_show_quality_and_run_the_analysis(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     monkeypatch.setenv("CODESNAP_PROGRAMS", str(tmp_path / "programs"))
     from webapp import server
+    need_fixture(RUN1)
     shutil.copytree(RUN1, tmp_path / "programs" / "live-test-09-29")
     a_id = None
     with ProgramStore.open("live-test-09-29") as st:
@@ -208,11 +212,13 @@ def test_app_endpoints_show_quality_and_run_the_analysis(tmp_path, monkeypatch):
     assert pay["quality"]["status"] == "rescan"
     r = api.post(f"/api/programs/live-test-09-29/deepdive?artifact_id={a_id}").json()
     assert r["ok"]
-    for _ in range(50):
+    deadline = _t.monotonic() + 30          # poll on a deadline, not a fixed number of tries, so a slow machine is not a failure
+    while True:
         s = api.get("/api/programs/live-test-09-29/deepdive").json()
-        if not s["job"]["running"]:
+        if not s["job"]["running"] or _t.monotonic() > deadline:
             break
-        _t.sleep(0.1)
+        _t.sleep(0.05)
+    assert not s["job"]["running"], "the analysis job did not finish in 30 seconds"
     assert str(a_id) in s["files"] and any(x["name"] == "AIDPAYRN.cbl" for x in s["rescan"])
     detail = api.get(f"/api/programs/live-test-09-29/artifacts/{a_id}").json()
     assert detail["deep"]["facts"][0]["statement"] == "Receives map AIDMAP1" and detail["deep_current"]

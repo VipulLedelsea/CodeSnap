@@ -4,6 +4,8 @@ organization names embedded in captured file names (for example Some_State_Depar
 automatically when the client shown in the report is different."""
 import re
 
+from core.diagrams.xmlsafe import xml_safe
+
 ORG = re.compile(r"(?:[A-Z][a-z]+[_ ]){0,3}(?:Department|Dept|Agency|Office|Ministry|Board|Division|Bureau|Commission)"
                  r"[_ ]of[_ ](?:[A-Z][a-z]+(?:[_ ]|(?=\.)|$)){1,4}")
 
@@ -32,6 +34,9 @@ class Redactor:
         self.active = bool(self.rules)
 
     def __call__(self, text):
+        if not isinstance(text, str):
+            return text
+        text = xml_safe(text)      # characters XML forbids would make the Word, SVG and Visio files invalid
         if not self.active or not text:
             return text
         for rx, rep in self.rules:
@@ -40,8 +45,6 @@ class Redactor:
         return re.sub(r"__+", "_", text)
 
     def map(self, obj):
-        if not self.active:
-            return obj
         if isinstance(obj, str):
             return self(obj)
         if isinstance(obj, dict):

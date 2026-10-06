@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import need_fixture
+
 docx = pytest.importorskip("docx")
 
 from core.model import ProgramStore
@@ -18,6 +20,7 @@ RUN1 = Path(__file__).resolve().parent / "fixtures" / "run1_program"
 @pytest.fixture(scope="module")
 def paras(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("tone")
+    need_fixture(RUN1)
     shutil.copytree(RUN1, tmp / "p")
     with ProgramStore.open("p", root=tmp) as st:
         d = docx.Document(io.BytesIO(docx_bytes(st)))
