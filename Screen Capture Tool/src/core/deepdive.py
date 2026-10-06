@@ -388,6 +388,9 @@ def _bad_request_types():
         return (TypeError,)
 
 
+NO_THINKING = set(filter(None, os.environ.get("CODESNAP_NO_THINKING_MODELS", "claude-sonnet-5,claude-haiku-4-5").split(",")))
+
+
 def _call(client, model, system, tool, content, thinking=True):
     """One call with adaptive thinking (the model decides how much to reason); falls back without it.
 
@@ -407,7 +410,7 @@ def _call(client, model, system, tool, content, thinking=True):
             client._codesnap_no_thinking = refused
         except Exception:  # noqa: BLE001
             pass
-    if thinking and model not in refused:
+    if thinking and model not in refused and model not in NO_THINKING:
         try:
             msg = client.messages.create(thinking={"type": "adaptive"}, tool_choice={"type": "auto"}, **base)
             return msg, int((time.monotonic() - began) * 1000)

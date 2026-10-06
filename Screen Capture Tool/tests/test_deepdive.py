@@ -122,7 +122,8 @@ def test_model_capture_concerns_also_trigger_a_rescan(store):
     assert q["status"] == "rescan" and 12 in q["bad_lines"]
 
 
-def test_analyse_file_end_to_end_with_review(store):
+def test_analyse_file_end_to_end_with_review(store, monkeypatch):
+    monkeypatch.setattr(DD, 'NO_THINKING', set())
     a = art(store, "AidPaymentController.cs")
     analysis = {"purpose": "An MVC controller for district aid (lines 8-43).",
                 "facts": [fact("Approve updates dbo.PaymentBatch status to 'A'", [28, 28], "SET Status = 'A'", cat="data_write"),

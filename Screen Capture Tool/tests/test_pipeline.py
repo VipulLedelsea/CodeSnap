@@ -77,3 +77,16 @@ def test_unfinished_run_is_found_for_resume(store, tmp_path):
     assert pipeline.interrupted(tmp_path) == ["run1"]
     pipeline._job(store, "done")
     assert pipeline.interrupted(tmp_path) == []
+
+
+def test_models_without_thinking_are_called_once_without_it():
+    seen = []
+
+    class C:
+        class messages:
+            @staticmethod
+            def create(**kw):
+                seen.append("thinking" in kw)
+                return object()
+    DD._call(C, "claude-sonnet-5", "s", {"name": "t"}, "x")
+    assert seen == [False]
