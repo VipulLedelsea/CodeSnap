@@ -81,8 +81,10 @@ def summary(store):
     blockers += [a['name'] + ': current technical review pending' for a in source if str(a['id']) not in reviewed]
     blockers += [name + ': transcription benchmark needs refresh' for name in benchmark['stale']]
     source_names = {a['name'] for a in source}
-    blockers += [name + ': source completeness remains unconfirmed (no current original-file benchmark)'
-                 for name in benchmark['unmeasured'] if name in source_names]
+    unmeasured = [name for name in benchmark['unmeasured'] if name in source_names]
+    if unmeasured:
+        blockers.append(f"{len(unmeasured)} source file{'s' if len(unmeasured) != 1 else ''} ({', '.join(unmeasured)}): source completeness remains unconfirmed "
+                        "(no current original-file benchmark)")
     blockers += [r['artifact'] + ': original-file content differs' for r in benchmark['files']
                  if r['expected'] != r['matched'] or r['actual'] != r['matched']]
     layout = store.get_meta('source_layout_validation') or {}

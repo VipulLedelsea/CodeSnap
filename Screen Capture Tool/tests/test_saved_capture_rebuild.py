@@ -48,7 +48,7 @@ def test_rebuild_preserves_photos_cache_and_old_version_without_api(saved, monke
     assert store.artifact_evidence(result['artifact_id'])[0]['id'] == evidence
     assert hashlib.sha256(frame.read_bytes()).hexdigest() == before
     assert cache.read_text() == SOURCE
-    assert str(aid) not in (store.get_meta('deepdive') or {})
+    assert str(result['artifact_id']) not in (store.get_meta('deepdive') or {})
 
 
 def test_missing_cache_makes_no_changes(saved):
@@ -147,14 +147,19 @@ def test_correction_rebase_uses_owning_paragraph():
     assert _correction_positions(Store(), {'name': 'test.cbl', 'transcription': old}, new)[0][1] == 5
 
 
-def test_correction_rebase_refuses_ambiguous_rows():
+def test_ambiguous_confirmation_does_not_block_rebuild_but_ambiguous_edit_does():
     from core.model.restitch import _correction_positions
     class Store:
         def corrections(self):
             return [{'id': 1, 'op': 'artifact.confirm_line', 'payload': {
                 'artifact': 'x', 'line': 1, 'old_text': 'END'}}]
+    assert _correction_positions(Store(), {'name': 'x', 'transcription': 'END'}, 'END\nEND') == []
+    class Edit:
+        def corrections(self):
+            return [{'id': 2, 'op': 'artifact.replace_line', 'payload': {
+                'artifact': 'x', 'line': 1, 'old_text': 'END', 'new_text': 'END.'}}]
     with pytest.raises(ValueError, match='Cannot safely relocate'):
-        _correction_positions(Store(), {'name': 'x', 'transcription': 'END'}, 'END\nEND')
+        _correction_positions(Edit(), {'name': 'x', 'transcription': 'END.'}, 'END.\nEND.')
 
 
 def test_correction_rebase_preserves_spaces_inside_bms_literals():

@@ -62,6 +62,6 @@ def test_settings_endpoint_updates_existing_worker(manager, monkeypatch):
     client=TestClient(server.app)
     answer=client.post('/api/session/settings',json={'region':'0.2,0.1,0.5,0.6','display':'2'})
     assert answer.status_code==200
-    assert answer.json()['applies']=='next_capture'
+    assert answer.json()['applies']=='now'
     assert manager._settings['display']==2
     assert client.post('/api/session/settings',json={'region':'0,0,2,2','display':'2'}).status_code==400

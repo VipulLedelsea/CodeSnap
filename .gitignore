@@ -26,3 +26,18 @@ captures/
 
 # working files from Claude (backups, update bundles)
 Claude outputs/
+
+# local-only working files
+context.md
+*.tgz
+tmp/
+output/
+deliverables/
+quality-baselines/
+handoff/*.patch
+*.pptx
+Decade Legacy Test 2026-10-01/
+
+retest-*-data/
+Realistic Legacy Test */
+handoff/

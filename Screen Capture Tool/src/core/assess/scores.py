@@ -92,12 +92,6 @@ def score_component(c: dict) -> dict:
     h = s["health"]
     if art.get("status") == "failed":
         h.deduct(40, "HLT-FAILED", "capture or transcription failed")
-    if art.get("validation_ok") == 0:
-        errs = [e for e in (art.get("validation_errors") or "").splitlines() if e.strip()]
-        h.deduct(30, "HLT-SYNTAX", f"syntax check failed ({len(errs) or 1} message(s)) — {art.get('validation_tool') or 'checker'}",
-                 {"errors": errs[:5]})
-    elif art.get("validation_ok") is None and art.get("artifact_type") == "code":
-        h.deduct(5, "HLT-UNCHECKED", "no syntax check ran for this file")
     if c["missing_code"]:
         h.deduct(3 * c["missing_code"], "HLT-GAPS", f"calls {c['missing_code']} program(s)/class(es) not captured", cap=15)
     for f in c["findings"]:

@@ -209,7 +209,7 @@ def register(ctx) -> list:
             imp_pay if fin else 4, basis_imp,
             sorted({o["component"] for g_ in frag for o in g_["occ"]})[:6],
             "Name a system of record per entity (5.5), then add reconciliation with control totals between the copies",
-            ctx["owner_it"], existing=ctx.get("existing_totals") or "None visible in the code")
+            ctx["owner_it"])
     if fc.get("Audit trail integrity") and (fc["Audit trail integrity"][3] or 0) >= 4:
         add("The audit trail can be altered or lost", "Financial control", 3,
             "3: a local audit file is referenced; filesystem permissions and central retention are to confirm", imp_pay if fin else 3,

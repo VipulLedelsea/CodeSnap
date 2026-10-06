@@ -28,7 +28,7 @@ def _correction_positions(store, art, code):
         index = p['line'] - 1
         if correction['op'] == 'artifact.confirm_line' and (
                 index >= len(old) or norm(old[index]) != norm(p['old_text'])):
-            raise ValueError(f'Your confirmation #{correction["id"]} no longer matches the current source. Review it before rebuilding. No changes were made.')
+            continue   # a confirmation of a line that is no longer there cannot block a rebuild
         targets = {norm(p['old_text']), norm(p.get('new_text', p['old_text']))}
         # Earlier rebases may have replaced old_text with the accepted value.
         # Saved screenshots can still contain the original reading; retain those
@@ -52,6 +52,8 @@ def _correction_positions(store, art, code):
         candidates.sort(reverse=True)
         if not candidates or (len(candidates) > 1 and
                               (candidates[0][0] < 2 or candidates[0][0] == candidates[1][0])):
+            if correction['op'] == 'artifact.confirm_line':
+                continue   # still honoured by text through the saved confirmed lines
             raise ValueError(f'Cannot safely relocate your correction #{correction["id"]}. No changes were made.')
         updates.append((correction, candidates[0][1] + 1))
     return updates
@@ -164,10 +166,7 @@ def rebuild_saved_capture(store, artifact_id, progress=None):
             store.set_validation(new_id, validation['tool'], validation['ok'] if validation['checked'] else None,
                                  validation['errors'] if validation['checked'] else validation['note'])
         verification = store.verification(new_id)
-        deep = store.get_meta('deepdive') or {}
-        deep.pop(str(artifact_id), None)
-        store.set_meta('deepdive', deep)
-        for key in ('assessment', 'deepdive_program', 'report_stamp', 'ui_flows', 'site_scan'):
+        for key in ('assessment', 'report_stamp', 'ui_flows', 'site_scan'):
             store.set_meta(key, None)
         store.log_run('rebuild_saved_capture', artifact_id=new_id, cost=0, input_tokens=0, output_tokens=0)
         return {'ok': True, 'artifact_id': new_id, 'version': store.artifact(new_id)['version'],
