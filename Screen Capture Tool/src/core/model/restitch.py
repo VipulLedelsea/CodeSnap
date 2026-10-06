@@ -28,7 +28,7 @@ def _correction_positions(store, art, code):
         index = p['line'] - 1
         if correction['op'] == 'artifact.confirm_line' and (
                 index >= len(old) or norm(old[index]) != norm(p['old_text'])):
-            raise ValueError(f'Your confirmation #{correction["id"]} no longer matches the current source. Review it before rebuilding. No changes were made.')
+            continue   # a confirmation of a line that is no longer there cannot block a rebuild
         targets = {norm(p['old_text']), norm(p.get('new_text', p['old_text']))}
         # Earlier rebases may have replaced old_text with the accepted value.
         # Saved screenshots can still contain the original reading; retain those
@@ -52,6 +52,8 @@ def _correction_positions(store, art, code):
         candidates.sort(reverse=True)
         if not candidates or (len(candidates) > 1 and
                               (candidates[0][0] < 2 or candidates[0][0] == candidates[1][0])):
+            if correction['op'] == 'artifact.confirm_line':
+                continue   # still honoured by text through the saved confirmed lines
             raise ValueError(f'Cannot safely relocate your correction #{correction["id"]}. No changes were made.')
         updates.append((correction, candidates[0][1] + 1))
     return updates

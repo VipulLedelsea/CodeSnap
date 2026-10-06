@@ -44,7 +44,7 @@ def prose(tmp_path_factory):
 
 
 def test_missing_tests_do_not_establish_zero_coverage(prose):
-    assert "Not measured; no test files identified in the supplied source" in prose
+    assert "Not measured; no test files identified in the source reviewed" in prose
     assert "0% (no automated tests" not in prose
     assert "Tests were never built" not in prose
 

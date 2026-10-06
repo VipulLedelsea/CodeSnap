@@ -134,3 +134,42 @@ def check(text: str, filename: str = "", language: str = "", errors: str = "") -
     if fam not in ("cobol",) and (last.count('"') % 2 == 1) and not last.endswith(("_", "\\")):
         reasons.append("last line ends inside a string — cut off mid-line")
     return {"partial": bool(reasons), "reasons": reasons}
+
+
+END_REASONS = ("unclosed", "no PROCEDURE DIVISION", "ends mid-construct", "end probably not captured",
+               "rest of the program not captured")
+
+
+def blank_tail(path):
+    """Rows of empty editor space below the last line of text in a screenshot, or None if it cannot be measured."""
+    try:
+        import numpy as np
+        from core import colfix
+        ink = colfix._ink(path)
+        bands = []
+        colfix._rows(ink, bands_out=bands)
+        if len(bands) < 3:
+            return None
+        pitch = float(np.median(np.diff([b[0] for b in bands])))
+        return (ink.shape[0] - bands[-1][1]) / pitch if pitch > 0 else None
+    except Exception:
+        return None
+
+
+def end_reached(store, art, min_rows=2.5):
+    """A big empty gap under the last line of the final screenshot can only mean the file ended there."""
+    try:
+        evidence = sorted(store.artifact_evidence(art["id"]), key=lambda e: e["ord"])
+        if not evidence:
+            return False
+        from pathlib import Path
+        path = Path(store.evidence(evidence[-1]["id"])["abs_path"])
+        gap = blank_tail(path) if path.exists() else None
+        return gap is not None and gap >= min_rows
+    except Exception:
+        return False
+
+
+def drop_end_reasons(result):
+    reasons = [r for r in result["reasons"] if not any(k in r for k in END_REASONS)]
+    return {**result, "reasons": reasons, "partial": bool(reasons)}

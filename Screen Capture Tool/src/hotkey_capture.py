@@ -66,7 +66,7 @@ HK_READY = "<cmd>+<shift>+7"   # owned session: "I scrolled, capture the next pa
 
 CAPTURES_ROOT = Path("captures")  # scratch PNGs (gitignored); deleted on quit
 REPORTS_ROOT = Path("reports")    # persistent .docx reports; survive quit
-BG_WORKERS = int(os.environ.get("CODESNAP_WORKERS", "3"))   # how many images to read concurrently
+BG_WORKERS = int(os.environ.get("CODESNAP_WORKERS", "12" if os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes") else "3"))   # how many images to read concurrently
 DUP_THRESHOLD = 3                 # perceptual-hash distance treated as a near-duplicate
 MAX_FIX_ITERS = 3                 # max auto-fix passes when a code check fails
 BURST_INTERVAL = 0.8              # seconds between burst captures
@@ -310,6 +310,19 @@ class App:
         except ValueError:
             self.spacing_profile = None
 
+    def _refresh_capture_area(self):
+        path = CAPTURES_ROOT / '.capture_settings.json'
+        try:
+            stamp = path.read_text()
+        except OSError:
+            return False
+        if stamp == getattr(self, '_settings_stamp', None):
+            return False
+        self._settings_stamp = stamp
+        before = (getattr(self, 'region', None), getattr(self, 'display', None), getattr(self, 'spacing_profile', None))
+        self._load_capture_settings()
+        return before != (getattr(self, 'region', None), getattr(self, 'display', None), getattr(self, 'spacing_profile', None))
+
     def _attach_usage_persistence(self):
         if self.program:
             from core.usage import persist_record, SavedBudget
@@ -366,6 +379,9 @@ class App:
                 if kept == 0:
                     started = time.monotonic()
                 continue
+            if self._refresh_capture_area():
+                last_frame = None
+                status.publish("Capture area changed. It applies from the next frame.", "info")
             try:
                 data = capture_region_fixed(self.region) if self.region else capture_full_png()
             except Exception as exc:  # noqa: BLE001
@@ -746,6 +762,8 @@ class App:
         """The line-by-line code analysis, run as part of analysing every file (CODESNAP_DEEP=0 turns it off)."""
         import os
         if os.environ.get("CODESNAP_DEEP", "1") == "0" or not (self.program and artifact_id and self.client):
+            return
+        if os.environ.get("CODESNAP_PIPELINE", "").lower() == "staged":
             return
         from core import deepdive, status
         from core.model import ProgramStore

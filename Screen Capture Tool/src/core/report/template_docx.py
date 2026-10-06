@@ -420,10 +420,15 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     plat_of = {c_["name"]: c_["platform"] for c_ in AM["components"]}
     shared_stores = [n_ for n_, s_ in AM["stores"].items() if len(s_["readers"] | s_["writers"]) > 1
                      and len({plat_of.get(x) for x in s_["readers"] | s_["writers"]}) == 1]
+    _suspect = re.compile(r"duplicated verbatim|defined twice|identical paragraph name|repeated verbatim|blocks of duplicated|"
+                          r"truncated|dangling|syntactically incomplete|corrupted or incompletely|begins mid|two fields both named|"
+                          r"identical screen position|compile error", re.I)
+    _high = [(x, f_) for x in code_arts for f_ in DDV.review_facts(store).get(x["id"], [])
+             if f_.get("severity") == "high" and f_["category"] in ("defect", "data_integrity", "error_handling")]
     review_high = [f"{x['name']}: {P.lower_first(f_['statement'].rstrip('.'))} ({EV.cite(f_['lines'])})"
-                   for x in code_arts for f_ in DDV.review_facts(store).get(x["id"], [])
-                   if f_.get("severity") == "high" and f_["category"] in ("defect", "data_integrity", "error_handling")]
-    SCF.update({"shared": bool(shared_stores), "review_high": review_high})
+                   for x, f_ in _high if not _suspect.search(f_["statement"])]
+    SCF.update({"shared": bool(shared_stores), "review_high": review_high,
+                "capture_suspect": sorted({x["name"] for x, f_ in _high if _suspect.search(f_["statement"])})})
     SC = RT.scorecard(comps, AM, sec_c, sec_txt, SCF)
     conf_level = a["confidence"]["level"]
     cq = SC["Code quality"][0]
@@ -467,6 +472,29 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                       "missing": len(missing_all), "owner_it": owner_it,
                       "owner_fin": s["business_owner"] or "Business owner (finance; to be named)",
                       "owner_sec": "Information security (to be named)", "owner_ea": "Enterprise architecture (to be named)"})
+    from . import codefindings as CFM
+    CF = CFM.select(store, code_arts, DDV.review_facts(store))
+    for cf_ in CF:
+        high_ = cf_["severity"] == "high"
+        BR.append({"title": CFM.short(cf_["text"]), "cat": "Code finding", "L": 3, "I": 4 if high_ else 3,
+                   "score": 12 if high_ else 9,
+                   "why_L": "3: the line-by-line review observed this in the source; production reachability is to confirm",
+                   "why_I": "3: effect on payments depends on how the business uses this path; to confirm with the business owner",
+                   "comps": [cf_["file"]], "owner": owner_it, "existing": "None visible in the code",
+                   "mit": "Confirm the intended rule with the business owner, correct the source, and add a test that records the new behavior"})
+    BR.sort(key=lambda r_: -r_["score"])
+    from core import report_review as RRV
+    RR = RRV.verdicts(store)
+    if RR:
+        _kept = []
+        for r_ in BR:
+            v_ = RR.get(RRV.claim_key(RRV.risk_text(r_["title"], r_["comps"]))) or {}
+            if v_.get("verdict") == "unsupported":
+                continue
+            if v_.get("verdict") == "partly" and v_.get("correction"):
+                r_["why_L"] = f"{r_['why_L']}; the code check corrected this: {v_['correction']}"
+            _kept.append(r_)
+        BR[:] = _kept
     for i, r_ in enumerate(BR, 1):
         r_["id"], r_["rating"] = f"R-{num}-{i:02d}", FC.band(r_["score"])
     risks = BR
@@ -557,7 +585,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
             "Open critical or high vulnerabilities": f"{crit_high} ({sum(1 for f in sec_f if f['severity'] == 'critical')} critical, "
                                                      f"{sum(1 for f in sec_f if f['severity'] == 'high')} high); register in 8.3",
             "Highest risk score": (f"{top['score']} of 25, {top['rating']} ({top['id']}: {top['title']}); "
-                                   f"{sum(1 for r_ in BR if r_['rating'] == 'High')} risks rated High in 9.1" if top else "None"),
+                                   f"{sum(1 for r_ in BR if r_['rating'] == 'High')} risk{'s' if sum(1 for r_ in BR if r_['rating'] == 'High') != 1 else ''} rated High in 9.1" if top else "None"),
             "End-of-life exposure": "; ".join(f"{t.get('name')} {t.get('version') or t.get('cycle') or ''}".strip()
                                               + (f" (ended {t['eol']})" if t.get("eol") else f" ({_status_word(t).lower()})")
                                               for t in eol[:5]) or "None identified",
@@ -653,6 +681,10 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         if rule == "CREDS":
             act = "Change the exposed passwords and keys now, then move them to a secrets store and remove them from the code."
         imm.append([str(len(imm) + 1), cond, act, owner_it, f"Within {min(_due_days(f) for f in fs)} days"])
+    for r_ in BR:
+        if r_["rating"] == "High" or (r_["cat"] == "Financial control" and r_["score"] >= 12):
+            imm.append([str(len(imm) + 1), r_["title"], r_["mit"].split(". Owner")[0], r_["owner"],
+                        "Within 30 days" if r_["rating"] == "High" else "Within 90 days"])
     rows(T[6], imm, empty="None")
 
     # 2 business context
@@ -725,9 +757,10 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                              "High", UNKNOWN] for jb in jobs[:6]] + cycles,
          empty="No scheduled cycles were identified in the source; business calendar to be confirmed with the business owner.")
     ux_issues = [f for f in findings if f["category"] in ("usability", "accessibility")]
+    pain_ = _pain_points(ux_issues)
     doc.replace("Record pain points in the words", [
         "Stakeholder interviews were not part of this review, so pain points are not recorded in stakeholders' words "
-        "(open item). What the screens themselves show:"] + _pain_points(ux_issues))
+        "(open item)." + (" What the screens themselves show:" if pain_ else "")] + pain_)
     if not ux_issues:
         pass
     doc.unknown("Business pain points in stakeholders' words (interviews)", "2.5")
@@ -751,7 +784,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         "Application type": app_type,
         "Build origin": "Custom built (source code provided; who maintains it is to be confirmed)",
         "Legacy lineage": (f"{len(cobolish)} of {len(code_arts)} source files are mainframe or midrange languages "
-                           f"({', '.join(sorted({x.get('language') for x in cobolish})[:4])})") if cobolish else "No legacy lineage identified",
+                           f"({', '.join(sorted({x.get('language') for x in cobolish})[:8])})") if cobolish else "No legacy lineage identified",
         "Deployment model": s["deployment"] or doc.unknown("Deployment model and hosting", "3.1", "IT"),
         "Environments": doc.unknown("Environments (production, test, development, disaster recovery)", "3.1", "IT"),
         "Source code location": doc.unknown("Source code repository and version control", "3.1", "IT"),
@@ -968,6 +1001,8 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
             return ("Confidential (financial; review)", "Financial records")
         if name in personal:
             return "Restricted", "Personal data"
+        if re.search(r"CONTACT|ADDRESS|BANK|CUSTOMER|PERSON|EMPLOYEE|PAYEE|BENEFICIARY|TAXPAYER", name, re.I):
+            return "Confidential (name suggests personal or banking data; review)", "Possible personal or banking data; review"
         if s["privacy_obligations"] or s["regulatory_basis"]:
             return "Internal (review against the client's data practices policy)", "None identified"
         return "Internal", "None identified"
@@ -1117,6 +1152,13 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                     impact, "Retire through the component disposition (12.3)" if strategic else
                     "Fix when the file is next changed" if trivial else "Refactor",
                     "L" if strategic else "S" if trivial else "M", "High" if strategic else "Low" if trivial else "Medium"])
+    for cf_ in [c_ for c_ in CF if c_["category"] in ("defect", "calculation", "data_integrity", "error_handling")][:6]:
+        reg.append([f"{CFM.short(cf_['text'])} ({cf_['file']})", "Code", "Defect or fragile rule in the source as written",
+                    "Wrong results or hard-to-change behavior if left as is; business effect to confirm",
+                    "Correct the source after the rule is confirmed, and cover it with a test",
+                    "S" if cf_["severity"] != "high" else "M", "High" if cf_["severity"] == "high" else "Medium"])
+    if RR:
+        reg = [r_ for r_ in reg if (RR.get(RRV.claim_key(r_[0])) or {}).get("verdict") != "unsupported"]
     reg.sort(key=lambda r_: ["High", "Medium", "Low"].index(r_[-1]))
     reg = [[f"TD-{num}-{i:02d}"] + r_ for i, r_ in enumerate(reg, 1)]
     if moved:
@@ -1521,6 +1563,9 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
             if missing_all else "",
             f"{unconf} technology version{'s' if unconf != 1 else ''} could not be confirmed (3.2)" if unconf else "",
             "business criticality has not been entered, so impact ratings use defaults" if not tier else "") if x) + ".")
+    _rv = RRV.summary_line(store)
+    if _rv:
+        assumptions.append(_rv)
     constraints = ["No access to production systems, data, service management records or stakeholders was part of this review."]
     assumptions.append("Findings are tied to current captured text. Quote matching and review do not prove original-source completeness or production correctness. See Appendix H for independent transcription measurements and limitations.")
     p1 = doc.para("[Assumption made in the absence")
@@ -1633,7 +1678,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     for field in ("title", "subject", "author", "last_modified_by"):
         setattr(cp, field, RD(getattr(cp, field)))
     from . import editorial
-    editorial.apply(doc, a, evidence_quality, s, metadata=metadata,
+    editorial.apply(doc, a, evidence_quality, s, metadata=metadata, analysis_stage=store.get_meta("analysis_stage"),
                     security_counts={severity: sum(f["severity"] == severity for f in sec_f) for severity in SEV},
                     priority_reasons=[r_["title"] for r_ in BR[:2]])
     _fill_toc(doc)
@@ -1712,7 +1757,10 @@ def _infer_stack(stack, arts, DM, AM, store, jobs=()):
         _add_stack(stack, "Database", f"Microsoft SQL Server ({sq}; version not confirmed)", "Microsoft")
     if DM.get("db2"):
         _add_stack(stack, "Database", "Embedded SQL in COBOL (database engine and version not confirmed)", UNKNOWN)
-    if any((x.get("language") or "").upper().startswith("RPG") for x in arts):
+    has_sql_ = any((x.get("name") or "").lower().endswith(".sql") for x in arts)
+    if has_sql_ and "Database" not in stack:
+        _add_stack(stack, "Database", "SQL database definition (database engine and version to confirm)", UNKNOWN)
+    if not has_sql_ and any((x.get("language") or "").upper().startswith("RPG") for x in arts):
         _add_stack(stack, "Database", "RPG file access (database engine to confirm)", "IBM")
     batch = []
     for x in arts:

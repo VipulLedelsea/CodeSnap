@@ -14,44 +14,19 @@ from docx.text.paragraph import Paragraph
 from docx.table import Table
 
 MAX_LINES = 10
+PROSE_LINES = 8        # most prose lines kept under each subsection
+KEY_FINDINGS_MAX = 5   # the template asks for 3-5 short paragraphs under 1.2
+FINDING_ORDER = ("Security", "Risk", "Effort", "Supportability", "Architecture")
 LINE_WIDTH = 68
-HEADERS = {
-    "Attribute": "Item", "Entry": "Result", "Observation": "What we found",
-    "Observations": "What we found", "Recommended disposition": "Recommended action",
-    "Disposition": "Action", "Remediation approach": "How to fix it",
-    "Rationale": "Reason", "Gap identified": "What needs work",
-    "Current state": "Current position", "Impact on operations and change": "Effect on the business",
-    "Recommended mitigation": "Next action", "Existing mitigation": "Current protection",
-    "Technical debt": "Maintenance problems", "Dimension": "Area",
-    "Technology and version": "Technology and version", "Evidence": "Evidence",
-    "Estimated effort": "Estimated work", "End of mainstream support": "Standard support ends",
-    "End of extended support": "Extended support ends", "Measured value": "Result",
-    "Acceptable threshold": "Target", "Root cause": "Cause", "What is true": "Position",
-    "Quantity": "Qty", "Mainstream support end": "Standard support ends",
-    "Vuln ID": "ID", "Affected component": "File", "CVE or CWE reference": "CVE/CWE",
-    "CVSS score": "CVSS", "Severity": "Level", "Exploit known (Y/N)": "Exploit?",
-    "Recommended remediation": "Action", "Restricted detail ref": "Detail",
-    "Connected system (APP ID if in scope)": "System", "Frequency and trigger": "When",
-    "Recommended future state": "Next action", "Dependencies": "Depends on",
-}
+KEEP_SENTENCE = re.compile(r"Rating moved from|were not counted|line-by-line review found|No test files were identified|Errors are swallowed|scores (?:higher|the same) \(|cannot be recommended")
+HEADERS = {}  # the template's column names are kept as written
 PHRASES = {
-    "recommended disposition": "recommended action", "Recommended disposition": "Recommended action",
-    "provisional recommendation": "recommendation to confirm", "remediation": "repairs",
-    "Remediation": "Repairs", "non-functional requirements": "service requirements",
-    "Non-functional requirements": "Service requirements", "Technical debt summary": "Maintenance summary",
-    "Technical debt register": "Maintenance issues", "Technical debt": "Maintenance problems",
-    "technical debt": "maintenance problems", "Portfolio position": "Place in the application portfolio",
-    "Transition architecture and decisions": "Future design and decisions",
-    "Regulatory and policy alignment": "Policy requirements",
-    "Risk and impact matrix": "Risks and business effects",
-    "Current-state process": "Current process", "Estimated total remediation effort": "Estimated repair work",
-    "material reviewed": "information reviewed", "supplied material": "information provided",
+    "provisional recommendation": "recommendation to confirm", "material reviewed": "information reviewed", "supplied material": "information provided",
     "remains unconfirmed": "is not confirmed", "remain unconfirmed": "are not confirmed",
     "to confirm": "to check", "To confirm": "To check",
     "Calculation changes need verified regression coverage": "Test calculation changes against known results before release",
     "Confirm business criticality": "Confirm how important the application is to the business",
-    "Proposed repairs is": "Proposed repairs are", "Repairs priorities": "Repair priorities",
-}
+    }
 
 
 def plain(text):
@@ -132,13 +107,16 @@ def _next_steps_diagram():
     return out.getvalue()
 
 
-def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts=None, priority_reasons=()):
+def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts=None, priority_reasons=(), analysis_stage=None):
     document = doc.d
     from docx.enum.style import WD_STYLE_TYPE
     for name in ("Normal", "Body Text", "List Paragraph"):
         if name not in document.styles:
             document.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH)
     body = document.element.body
+    from core.report import template_fit
+    removed = template_fit.remove_extras(document)
+    numbers = template_fit.removed_numbers(removed)
     detail = []
     groups, current = [], None
     # Keep the template's sections and numbering. Limit prose for each numbered subsection.
@@ -154,36 +132,18 @@ def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts
             current["elements"].append(el)
     main = [g for g in groups if not g["heading"].startswith("Appendix")]
     for group in main:
-        if not re.match(r"\d", group["heading"]):
+        if not re.match(r"\d", group["heading"]) or group["heading"].startswith("1.2 "):
             continue
-        if group["heading"].startswith("3.6 "):
-            # Keep each complete, cited review with its component name. A prose
-            # budget must never separate a finding from the file it describes.
-            names = {c.get("name") for c in assessment.get("components", [])}
-            first = next((i for i, el in enumerate(group["elements"]) if el.tag == qn("w:p")
-                          and Paragraph(el, document).text in names), None)
-            if first is not None:
-                component_detail = group["elements"][first:]
-                detail.append((group["heading"] + " — complete component reviews",
-                               [deepcopy(el) for el in component_detail]))
-                for el in component_detail:
-                    el.getparent().remove(el)
-                group["elements"] = group["elements"][:first]
-                for el in group["elements"]:
-                    if el.tag == qn("w:p"):
-                        p = Paragraph(el, document)
-                        if "marked below" in p.text:
-                            p.text = p.text.replace("marked below", "marked in the appendix")
-                note = _paragraph(document, "Each component's full review and line references are in the supporting detail appendix.")
-                group["elements"][-1].addnext(note)
-                group["elements"].append(note)
         narrative = [el for el in group["elements"] if el.tag == qn("w:p") and
                      Paragraph(el, document).text.strip() and not el.xpath(".//w:drawing") and
                      not Paragraph(el, document).text.startswith("Figure ") and
                      not (len(Paragraph(el, document).text.split()) <= 12 and
                           Paragraph(el, document).runs and Paragraph(el, document).runs[0].bold) and
                      not (Paragraph(el, document).style.name if Paragraph(el, document).style is not None else "").startswith("Heading")]
-        original = [plain(Paragraph(el, document).text.strip()) for el in narrative]
+        if group["heading"].startswith("12.4 "):
+            narrative = [el for el in narrative if not Paragraph(el, document).text.startswith(
+                ("0.", "1.", "2.", "3.", "4.", "5.", "Constraint"))]
+        original = [plain(template_fit.strip_references(Paragraph(el, document).text.strip(), numbers)) for el in narrative]
         selected, records, used = [], [], 0
         candidates = list(zip(narrative, original))
         candidates.sort(key=lambda pair: not pair[1].startswith(("Assessment confidence", "Assumptions:")))
@@ -192,15 +152,11 @@ def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts
             # Complete sentences only; never cut a finding or its qualification halfway through.
             for sentence in ([text] if re.match(r"^\d+\.", text) else re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)):
                 n = len(lines(sentence))
-                if used + n <= 8:
+                if used + n <= PROSE_LINES:
                     selected.append(sentence); chosen.append(sentence); used += n
             if chosen:
                 records.append((source_el, chosen))
         changed = " ".join(selected) != " ".join(original)
-        if changed and original:
-            detail.append((group["heading"], [deepcopy(el) for el in narrative]))
-            selected.append("Full wording and tables are in the supporting detail appendix.")
-            records.append((narrative[-1], [selected[-1]]))
         if narrative:
             for source_el, texts in records:
                 el = deepcopy(source_el); source_el.addprevious(el)
@@ -210,129 +166,158 @@ def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts
                 p.paragraph_format.keep_with_next = False
             for el in narrative:
                 el.getparent().remove(el)
-        noted_table = changed
         for el in group["elements"]:
             if el.tag != qn("w:tbl"):
                 continue
-            # Inventory totals and version qualifications must remain together.
             if group["heading"].startswith(("3.1 ", "3.2 ")):
                 continue
             table = Table(el, document)
-            changed_table = any(len(c.text.split()) > 32 or len(c.text) > 240 for r in table.rows[1:] for c in r.cells)
-            if changed_table:
-                long_cells = []
-                for index, row in enumerate(table.rows[1:], 1):
-                    seen = set()
-                    for col, cell in enumerate(row.cells):
-                        if cell._tc in seen: continue
-                        seen.add(cell._tc)
-                        if len(cell.text.split()) > 32 or len(cell.text) > 240:
-                            label = f"{row.cells[0].text} — {table.rows[0].cells[col].text}"
-                            # Use one whole short sentence or refer to the full evidence. No invented summary.
-                            sentence = re.split(r"(?<=[.!?])\s+(?=[A-Z])", cell.text)[0]
-                            if cell.text.startswith("Blocks issue:"):
-                                # An issue gate needs its actual corrective action,
-                                # not a generic pointer to another part of the report.
-                                continue
-                            p = document.add_paragraph(label + ": " + cell.text)
-                            long_cells.append(deepcopy(p._p)); p._p.getparent().remove(p._p)
-                            cell.text = plain(sentence) if len(sentence.split()) <= 32 and len(sentence) <= 240 else (
-                                "Blocks issue: see supporting detail." if cell.text.startswith("Blocks issue:")
-                                else "See supporting detail.")
-                detail.append((group["heading"] + " table notes", long_cells))
-                if not noted_table:
-                    note = _paragraph(document, "Key entries shown. Full tables are in the supporting detail appendix.")
-                    el.addnext(note); noted_table = True
-    # Replace the long section 1 with a bounded two-page leadership brief.
-    start = next((p for p in document.paragraphs if p.text.startswith("1. Application summary")), None)
-    end = next((p for p in document.paragraphs if p.text.startswith("2. ") and p.style is not None and p.style.name == "Heading 1"), None)
-    if start is not None and end is not None:
-        el = start._p.getnext()
-        snapshot = []
-        while el is not None and el is not end._p:
-            following = el.getnext()
-            if el.tag == qn("w:tbl"):
-                snapshot.append(deepcopy(el))
-            el.getparent().remove(el); el = following
-        if snapshot:
-            detail.append(("1.1 Application snapshot", snapshot))
-        start.text = "1. Executive summary"
-        start.paragraph_format.page_break_before = True
-        end.paragraph_format.page_break_before = True
-        anchor = start._p
-        def add(text, style=None):
-            nonlocal anchor
-            el = _paragraph(document, text, style); anchor.addnext(el); anchor = el
-            return Paragraph(el, document)
-        color, action, ink = decision(assessment, evidence)
-        add("1.1 Decision", "Heading 2")
-        p = add("Needs changes — Fix the issues and complete the missing checks." if color == "Yellow" else f"{color.upper()}  {action}")
-        p.runs[0].bold = True; p.runs[0].font.color.rgb = RGBColor.from_string(ink)
-        purpose = settings.get("purpose") or "The business purpose still needs confirmation."
-        if len(purpose.split()) > 20:
-            purpose = "See section 2.1 for the business purpose and owner."
-        add(purpose)
-        v = assessment.get("verdict") or {}
-        add(f"Recommended action: {v.get('label') or 'Not rated'}. Confidence: {assessment.get('confidence', {}).get('level', 'not rated')}.")
-        add("1.2 Why this decision", "Heading 2")
-        high = security_counts if security_counts is not None else assessment.get("security", {}).get("by_severity", {})
-        count = high.get("critical", 0) + high.get("high", 0)
-        security_reason = (f"The assessment recorded {count} open critical or high security findings. Review their effect before approving changes."
-                           if count else "No open critical or high security findings were recorded. This does not prove the application is secure.")
-        reasons = ([security_reason,
-                    f"{len(assessment.get('components') or [])} components were reviewed. Hidden source and runtime behavior are not confirmed."]
-                   if assessment.get("components") else ["No components have been reviewed yet. No verdict can be given."])
-        reasons = list(priority_reasons[:2]) + reasons[:1] if priority_reasons else reasons
-        for reason in reasons[:3]:
-            short = plain(reason)
-            add(short if len(short.split()) <= 35 else "The detailed assessment gives the evidence for this recommendation.")
-        if evidence.get("blockers"):
-            add("Evidence is incomplete. Confirm the source, technical review and business requirements before approving changes.")
-        p = add(""); p.add_run().add_picture(io.BytesIO(_diagram(assessment.get("components") or [])), width=Inches(6.5))
-        add("Application overview. These are the components reviewed, not proof of the full system.")
-        p = add("1.3 What to do next", "Heading 2"); p.paragraph_format.page_break_before = True
-        priorities = [i for phase in assessment.get("roadmap", {}).get("phases", []) for i in phase.get("items", [])
-                      if phase.get("phase") in {"assess", "stabilize"}]
-        for i, item in enumerate(priorities[:3], 1):
-            title = plain(item.get("title") or "Confirm the evidence")
-            add(f"{i}. {title}" if len(title.split()) <= 18 else f"{i}. Resolve priority finding {i} in the detailed assessment.")
-        if not priorities:
-            add("1. Confirm the missing evidence and name the application owner.")
-        add("Agree the plan with the owner. Test repairs before release.")
-        add("How to read the colours", "Heading 3")
-        legend = document.add_table(rows=1, cols=2)
-        legend.columns[0].width = Inches(1.0); legend.columns[1].width = Inches(6.0)
-        legend.cell(0, 0).text = "Status"; legend.cell(0, 1).text = "Action"
-        legend.cell(0, 0).width = Inches(1.0); legend.cell(0, 1).width = Inches(6.0)
-        anchor.addnext(legend._tbl); anchor = legend._tbl
-        for label, explanation, hexcolor in [
-            ("RED", "Act now. Start retirement or replacement and control the risk during the transition.", "B42318"),
-            ("YELLOW", "Workable with changes. Repair the issues and complete the missing checks.", "996300"),
-            ("GREEN", "Good to keep. Continue routine maintenance; this is not a security certification.", "176B3A")]:
-            row = legend.add_row(); row.cells[0].text = label; row.cells[1].text = explanation
-        add("Decision path", "Heading 3")
-        p = add(""); p.add_run().add_picture(io.BytesIO(_next_steps_diagram()), width=Inches(6.5))
-        add("Missing evidence cannot earn green. Keep essential services running during replacement.")
-        if metadata is not None:
-            metadata["traffic_light"] = color.lower()
-    if detail:
-        p = document.add_paragraph("Appendix I Supporting detail", "Heading 1")
-        p.paragraph_format.page_break_before = True
-        document.add_paragraph("Full findings and evidence behind the short sections. Section numbers match the main report.")
-        for title, elements in detail:
-            document.add_paragraph("Notes for " + plain(title), "Heading 2")
-            for el in elements:
-                body.insert(len(body) - 1, el)
-    # Leadership sees the recommendation before contents and reference material.
-    contents = next((p for p in document.paragraphs if p.text.strip() == "Contents"), None)
-    if contents is not None and start is not None and end is not None:
-        brief, el = [], start._p
-        while el is not None and el is not end._p:
-            brief.append(el); el = el.getnext()
-        for el in brief:
-            contents._p.addprevious(el)
-        contents.paragraph_format.page_break_before = True
+            for row in table.rows[1:]:
+                seen = set()
+                for cell in row.cells:
+                    if cell._tc in seen: continue
+                    seen.add(cell._tc)
+                    if (len(cell.text.split()) > 32 or len(cell.text) > 240) and not cell.text.startswith("Blocks issue:"):
+                        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z])", cell.text)
+                        sentence = " ".join([parts[0]] + [x for x in parts[1:] if KEEP_SENTENCE.search(x)])
+                        if len(sentence) < len(cell.text):
+                            cell.text = plain(sentence)
+    # Section 1 keeps the template layout: 1.1 snapshot, 1.2 key findings, 1.3 actions.
+    color, action, ink = decision(assessment, evidence)
+    findings = next((p for p in document.paragraphs if p.text.startswith("1.2 ")), None)
+    if findings is not None:
+        line = ("Needs changes. Fix the problems and finish the missing checks." if color == "Yellow"
+                else f"{color.upper()}  {action}")
+        if analysis_stage == "draft":
+            line = "DRAFT: first-pass review, not yet checked line by line. " + line
+        el = _paragraph(document, line)
+        findings._p.addnext(el)
+        first = Paragraph(el, document)
+        first.runs[0].bold = True
+        first.runs[0].font.color.rgb = RGBColor.from_string(ink)
+        body_ps, nxt = [], el.getnext()
+        while nxt is not None and not (nxt.tag == qn("w:p") and Paragraph(nxt, document).style is not None
+                                       and Paragraph(nxt, document).style.name.startswith("Heading")):
+            if nxt.tag == qn("w:p") and Paragraph(nxt, document).text.strip():
+                body_ps.append(nxt)
+            nxt = nxt.getnext()
+        alt = "|".join(map(re.escape, numbers)) or "$^"
+        gone = re.compile(rf"\bSections?\s+(?:{alt})\b|\((?:{alt})\)")
+        keep = []
+        for i, e in enumerate(body_ps):
+            para = Paragraph(e, document)
+            text = plain(template_fit.strip_references(para.text, numbers))
+            if gone.search(text) or para.text.startswith("Code review"):
+                continue
+            sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
+            if i == 0 and text.startswith("This assessment describes"):
+                text = ("This report covers only the source code that was reviewed. "
+                        "Ratings are temporary until the open items are closed.")
+            else:
+                out, used = [], 0
+                for sentence in sentences:
+                    n = len(lines(sentence))
+                    if used + n <= MAX_LINES:
+                        out.append(sentence); used += n
+                text = " ".join(out)
+            _set_text(para, text)
+            keep.append(e)
+        def rank(e):
+            if e is keep[0]:
+                return 0
+            label = Paragraph(e, document).text.split(" (")[0].split(".")[0]
+            if label in FINDING_ORDER:
+                return 2 + FINDING_ORDER.index(label)
+            return 1 if len(label.split()) > 3 else 20
+        ordered = sorted(keep, key=rank)[:KEY_FINDINGS_MAX - 1]
+        for e in body_ps:
+            if e not in ordered:
+                e.getparent().remove(e)
+        for e in ordered:
+            e.getparent().remove(e)
+        anchor = el
+        for e in ordered:
+            anchor.addnext(e); anchor = e
+    if metadata is not None:
+        metadata["traffic_light"] = color.lower()
+    _strip_removed_refs(document, numbers)
     _style(document)
+    _simple_english(document)
+
+
+def _strip_removed_refs(document, numbers):
+    if not numbers:
+        return
+    from core.report import template_fit
+    skip = ".//w:drawing|.//w:fldChar|.//w:hyperlink"
+
+    def fix(paragraph):
+        style = paragraph.style.name if paragraph.style is not None else ""
+        if style.startswith(("Heading", "Title")) or paragraph._p.xpath(skip) or not paragraph.text.strip():
+            return
+        new = template_fit.strip_references(paragraph.text, numbers)
+        if new != paragraph.text:
+            _set_text(paragraph, new)
+    for paragraph in document.paragraphs:
+        fix(paragraph)
+    for table in document.tables:
+        for row in table.rows:
+            seen = set()
+            for cell in row.cells:
+                if id(cell._tc) in seen:
+                    continue
+                seen.add(id(cell._tc))
+                for paragraph in cell.paragraphs:
+                    fix(paragraph)
+
+
+def _set_text(paragraph, text):
+    runs = paragraph.runs
+    if not runs:
+        paragraph.text = text
+        return
+    runs[0].text = text
+    for run in runs[1:]:
+        run.text = ""
+
+
+def _simple_english(document):
+    from core.report.plainenglish import simplify
+    skip = ".//w:drawing|.//w:fldChar|.//w:hyperlink"
+    def fix(paragraph, prose):
+        style = paragraph.style.name if paragraph.style is not None else ""
+        if style.startswith(("Heading", "Title")) or paragraph._p.xpath(skip) or len(paragraph.text.split()) < 3:
+            return
+        if not prose and paragraph._p.getparent() is not None and paragraph._p.getparent().getparent() is not None \
+                and paragraph._p.getparent().getparent().getparent() is not None \
+                and paragraph._p.getparent().getparent().getprevious() is None:
+            return  # header row of a table: keep the template's column names
+        new = simplify(paragraph.text, prose=prose)
+        if new != paragraph.text:
+            _set_text(paragraph, new)
+    seen_prose = set()
+    for el in list(document.element.body.iterchildren()):
+        if el.tag == qn("w:p"):
+            p = Paragraph(el, document)
+            style = p.style.name if p.style is not None else ""
+            fix(p, True)
+            key = re.sub(r"\W+", " ", p.text).strip().lower()
+            if len(key.split()) >= 10 and not style.startswith(("Heading", "Title")) and not p._p.xpath(skip):
+                if key in seen_prose and el.getparent() is not None:
+                    el.getparent().remove(el)
+                    continue
+                seen_prose.add(key)
+            if not p.text.strip() and not style.startswith("Heading") and not p._p.xpath(skip) and el.getparent() is not None:
+                el.getparent().remove(el)
+        elif el.tag == qn("w:tbl"):
+            for row in Table(el, document).rows:
+                seen = set()
+                for cell in row.cells:
+                    if id(cell._tc) in seen:
+                        continue
+                    seen.add(id(cell._tc))
+                    for p in cell.paragraphs:
+                        fix(p, False)
 
 
 def _style(document):
@@ -359,7 +344,7 @@ def _style(document):
                 run.font.size = document.styles[p.style.name].font.size
             else:
                 run.font.size = Pt(11)
-            if not p.text.startswith(("RED", "YELLOW", "GREEN", "Needs changes —")):
+            if not p.text.startswith(("RED", "YELLOW", "GREEN", "Needs changes")):
                 run.font.color.rgb = RGBColor(0, 0, 0)
     for table in document.tables:
         heat_map = table.cell(0, 0).text.startswith("Impact 5")

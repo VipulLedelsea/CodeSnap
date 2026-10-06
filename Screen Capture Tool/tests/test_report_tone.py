@@ -60,7 +60,7 @@ def test_no_text_cut_off_mid_word(paras):
 
 
 def test_one_colon_per_sentence_in_the_summary(paras):
-    start = next(i for i, p in enumerate(paras) if p.startswith("1.2 Why this decision"))
+    start = next(i for i, p in enumerate(paras) if p.startswith("1.2 "))
     end = next(i for i, p in enumerate(paras) if p.startswith("1.3 "))
     for p in paras[start + 1:end]:
         for sent in re.split(r"(?<=[.])\s+(?=[A-Z])", p):

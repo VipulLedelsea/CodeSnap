@@ -245,7 +245,7 @@ def test_shared_counts_agree_across_all_report_sections(report):
                        if line.startswith('The current source identifies'))
     assert int(re.search(r'(\d+) data store', observation).group(1)) == count
     stack = rows_after(rendered, '3.2', '3.3')
-    unconfirmed = sum(row.split(' | ')[1].count('version not confirmed)') for row in stack)
+    unconfirmed = sum(row.split(' | ')[1].count('version unknown)') for row in stack)
     confidence = next(line for line in section(rendered, '13.3', '13.4')
                       if line.startswith('Assessment confidence'))
     match = re.search(r'(\d+) technology versions?', confidence)

@@ -438,16 +438,33 @@ def spacing_agreement(code, parts, metas, notes):
     """
     final = code.split('\n')
     conflicts = set(notes.get('spacing_conflicts') or [])
-    for part in parts:
+    statuses = notes.get('spacing_statuses') or []
+    lead = lambda s: len(s) - len(s.lstrip())
+    agree, differ, shifts = {}, {}, []
+    for k, part in enumerate(parts):
         rows = part.split('\n')
         mapping = _line_map(part, code)
+        deltas = {}
         for i, j in enumerate(mapping):
-            if i<len(notes.get('spacing_statuses') or []) and notes['spacing_statuses'][i]=='measured':
+            if i < len(statuses) and statuses[i] == 'measured':
                 continue
             if j is None or not final[i].strip() or '[CUT OFF]' in final[i] + rows[j]:
                 continue
-            if _norm(final[i]) == _norm(rows[j]) and final[i].rstrip() != rows[j].rstrip():
-                conflicts.add(i+1)
+            if _norm(final[i]) == _norm(rows[j]):
+                if final[i].rstrip() != rows[j].rstrip():
+                    deltas[i] = lead(final[i]) - lead(rows[j])
+                    differ.setdefault(i, []).append(k)
+                else:
+                    agree[i] = agree.get(i, 0) + 1
+        # a screenshot that is off by one constant amount on every line it disagrees about was shifted as a whole;
+        # that is a frame offset, not a disagreement about the line
+        uniform = len(deltas) >= 3 and len(set(deltas.values())) == 1
+        shifts.append((k, deltas, uniform))
+    for k, deltas, uniform in shifts:
+        for i in deltas:
+            if uniform and agree.get(i):
+                continue
+            conflicts.add(i + 1)
     notes['spacing_conflicts'] = sorted(conflicts)
 
 

@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 PROMPT_VERSION = "deepdive-v2-screen-formats"
 MAX_TOKENS = 20000   # the SDK refuses non-streamed calls much above this
 THINKING = 8000
+DEFAULT_DEEP_MODEL = "claude-sonnet-5"
+DEFAULT_REVIEW_MODEL = "claude-haiku-4-5"
 CATEGORIES = ["purpose", "business_rule", "calculation", "data_read", "data_write", "interface", "control_flow",
               "error_handling", "security", "data_integrity", "defect", "dependency", "configuration", "ui"]
 SEVERITIES = ["high", "medium", "low", "info"]
@@ -130,13 +132,14 @@ PROGRAM_TOOL = {
 
 ADVICE = {
     "cut": "the line runs past the edge of the screen: widen the window or scroll right and capture the rest",
-    "break": "the screens did not overlap here, so lines may be missing: scroll back and capture this part again",
+    "break": "the screens did not overlap here, so lines may be missing: scroll back over this part and use Add screenshots on just that part",
     "rows": "the screen shows a different number of lines than was read, so a line may be skipped or added: capture "
             "this part again",
     "mismatch": "the text did not match the pixels on screen: zoom in or enlarge the font and capture again",
-    "partial": "the file looks incomplete: capture the missing start or end",
+    "partial": "the file looks incomplete: use Add screenshots to capture only the missing start or end; the rest is kept",
     "compile": "the code does not compile as captured, which often means a mis-read: check and recapture these lines",
     "model": "the reviewer found text that cannot be right as captured: recapture these lines",
+    "spacing": "the screenshots disagree about the spacing on these lines: set the source margin again and check them",
 }
 
 
@@ -185,18 +188,17 @@ def capture_quality(store, art, concerns=None) -> dict:
         issues.append({"kind": k, "lines": _ranges(ls), "reason": {"cut": "text cut off at the screen edge",
                                                                    "break": "possible gap between screens",
                                                                    "rows": "line count differs from the screen",
-                                                                   "mismatch": "text may be mis-read"}[k],
-                       "advice": ADVICE[k]})
+                                                                   "mismatch": "text may be mis-read",
+                                                                   "spacing": "spacing differs between screenshots"}.get(k, "needs a check"),
+                       "advice": ADVICE.get(k, "check these lines against the screen")})
     if art.get("artifact_type") in (None, "code"):
-        c = check(text, art["name"], art.get("language") or "",
-                  art.get("validation_errors") if art.get("validation_ok") == 0 else "")
+        c = check(text, art["name"], art.get("language") or "")
+        if c["partial"]:
+            from core.model.completeness import end_reached, drop_end_reasons
+            if end_reached(store, art):
+                c = drop_end_reasons(c)
         if c["partial"]:
             issues.append({"kind": "partial", "lines": [], "reason": "; ".join(c["reasons"]), "advice": ADVICE["partial"]})
-        if art.get("validation_ok") == 0 and (art.get("validation_errors") or "").strip() not in ("", "None"):
-            nums = [int(n) for n in re.findall(r"(?:line|:)\s*(\d{1,5})\b", art["validation_errors"])[:20]
-                    if 0 < int(n) <= len(lines)]
-            issues.append({"kind": "compile", "lines": _ranges(nums), "reason": art["validation_errors"].strip().splitlines()[0][:160],
-                           "advice": ADVICE["compile"]})
     for c in concerns or []:
         ln = c.get("line")
         if isinstance(ln, int) and 0 < ln <= len(lines):
@@ -206,12 +208,18 @@ def capture_quality(store, art, concerns=None) -> dict:
                        "reason": "; ".join(c.get("reason", "") for c in concerns[:3])[:240], "advice": ADVICE["model"]})
     status = "rescan" if any(i["kind"] in ("cut", "break", "rows", "mismatch", "partial", "model") for i in issues) else \
         "unchecked" if not ver and art.get("artifact_type") in (None, "code") else "good"
-    if status == "good" and any(i["kind"] == "compile" for i in issues):
-        status = "rescan"
     return {"status": status, "issues": issues, "bad_lines": sorted(bad), "verified": bool(ver)}
 
 
 def current_concerns(store, art, dd=None):
+    found = _current_concerns(store, art, dd)
+    if not found:
+        return found
+    from core.model import confirmed
+    return confirmed.keep_unconfirmed(store, art["name"], art.get("transcription"), found)
+
+
+def _current_concerns(store, art, dd=None):
     """The reviewer's capture concerns, only while they still describe the file's current text."""
     d = ((dd if dd is not None else store.get_meta("deepdive")) or {}).get(str(art["id"])) or {}
     current_hash = _hash(art.get("transcription"))
@@ -386,7 +394,9 @@ def _call(client, model, system, tool, content, thinking=True):
     failing request is not repeated. Thinking is incompatible with a forced tool_choice, so it uses "auto".
     """
     base = dict(model=model, max_tokens=MAX_TOKENS, system=system, tools=[tool], timeout=600,
-                messages=[{"role": "user", "content": content + f"\n\nCall {tool['name']} once with your complete answer."}])
+                messages=[{"role": "user", "content": content + f"\n\nCall {tool['name']} once with your complete answer."
+                                                  + (" The 'facts' list is required: put every finding in 'facts'; 'purpose' is only a one-line summary."
+                                                     if tool["name"] == "record_analysis" else "")}])
     began = time.monotonic()
     rejected = _bad_request_types()
     refused = getattr(client, "_codesnap_no_thinking", None)
@@ -407,6 +417,16 @@ def _call(client, model, system, tool, content, thinking=True):
     except rejected:
         msg = client.messages.create(tool_choice={"type": "auto"}, **base)
     return msg, int((time.monotonic() - began) * 1000)
+
+
+def _analysis_call(store, client, art_id, step, model, content):
+    msg, ms = _call(client, model, DEEP_SYSTEM, ANALYSIS_TOOL, content)
+    data = _tool(msg, ANALYSIS_TOOL["name"])
+    if getattr(msg, "stop_reason", None) == "max_tokens" or (data is not None and isinstance(data.get("facts"), list)):
+        return msg, ms
+    _log(store, step, art_id, model, msg, ms)
+    return _call(client, model, DEEP_SYSTEM, ANALYSIS_TOOL, content
+                 + "\n\nYour previous answer left out the required 'facts' list. Put every finding in 'facts'.")
 
 
 def _log(store, step, artifact_id, model, msg, ms):
@@ -496,9 +516,10 @@ def check_facts(facts, text, bad=()):
     return kept, corrected, rejected, unverifiable
 
 
-def analyse_file(store, client, art, model=None, review=True) -> dict:
-    from core.analysis import MODEL
-    model = model or MODEL
+def analyse_file(store, client, art, model=None, review=True, review_model=None, claims=None) -> dict:
+    chosen = model or os.environ.get("CODESNAP_DEEP_MODEL")
+    model = chosen or DEFAULT_DEEP_MODEL
+    review_model = review_model or os.environ.get("CODESNAP_DEEP_REVIEW_MODEL") or (model if chosen else DEFAULT_REVIEW_MODEL)
     text = art.get("transcription") or ""
     q0 = capture_quality(store, art)
     from core.technology_support import analysis_context
@@ -507,12 +528,17 @@ def analyse_file(store, client, art, model=None, review=True) -> dict:
               f"Lines: {len(text.splitlines())}\n" + context
               + (f"Lines marked ⚠ are unreliable ({', '.join(_ranges(q0['bad_lines'])[:20])}).\n"
                  if q0["bad_lines"] else ""))
-    msg, ms = _call(client, model, DEEP_SYSTEM, ANALYSIS_TOOL, header + "\n" + listing(text, q0["bad_lines"]))
+    if claims:
+        header += ("\nA first-pass review by a cheaper model made the claims below about this file. Check each one against "
+                   "the code. Record it as a finding with an exact quote only if the code supports it, correct it if it is "
+                   "only partly right, and leave it out if the code does not show it. Then do your own full review; do not "
+                   "limit yourself to these claims.\nClaims:\n" + "\n".join("- " + c for c in claims) + "\n")
+    msg, ms = _analysis_call(store, client, art["id"], "deepdive", model, header + "\n" + listing(text, q0["bad_lines"]))
     _log(store, "deepdive", art["id"], model, msg, ms)
     if getattr(msg,'stop_reason',None)=='max_tokens':
         raise ValueError('Detailed source analysis was truncated; review remains incomplete.')
     data = _tool(msg, ANALYSIS_TOOL["name"])
-    if data is None:
+    if data is None or not isinstance(data.get("facts"), list):
         raise ValueError('Detailed source analysis did not return its required result; review remains incomplete.')
     lines_ = text.split("\n")
     concerns = [c for c in data.get("capture_concerns") or [] if isinstance(c, dict) and isinstance(c.get("line"), int)
@@ -521,7 +547,7 @@ def analyse_file(store, client, art, model=None, review=True) -> dict:
     kept, corrected, rejected, unverifiable = check_facts(data.get("facts"), text, q["bad_lines"])
     gaps = uncovered(text, kept + unverifiable, q["bad_lines"])
     if gaps:
-        more_msg, mms = _call(client, model, DEEP_SYSTEM, ANALYSIS_TOOL,
+        more_msg, mms = _analysis_call(store, client, art["id"], "deepdive_gaps", model,
                               header + f"\nA first pass recorded findings for the rest of the file. These lines have NO findings "
                                        f"yet: {', '.join(gaps)}. Review ONLY those lines (the rest is context) and record "
                                        f"everything they show, including defects.\n\n" + listing(text, q["bad_lines"]))
@@ -542,9 +568,9 @@ def analyse_file(store, client, art, model=None, review=True) -> dict:
         for i, f in enumerate(kept, 1):
             f["id"] = i
         payload = "\n".join(f"{f['id']}. [{f['category']}] {f['statement']} (lines {f['lines'][0]}-{f['lines'][1]})" for f in kept)
-        rmsg, rms = _call(client, model, REVIEW_SYSTEM, REVIEW_TOOL,
+        rmsg, rms = _call(client, review_model, REVIEW_SYSTEM, REVIEW_TOOL,
                           context + f"File: {art['name']}\n\n{listing(text, q['bad_lines'])}\n\nFindings:\n{payload}")
-        _log(store, "deepdive_review", art["id"], model, rmsg, rms)
+        _log(store, "deepdive_review", art["id"], review_model, rmsg, rms)
         if getattr(rmsg,'stop_reason',None)=='max_tokens':
             raise ValueError('Independent source review was truncated; review remains incomplete.')
         verdicts = {int(v["id"]): v for v in (_tool(rmsg, REVIEW_TOOL["name"]) or {}).get("verdicts") or []
@@ -570,7 +596,7 @@ def analyse_file(store, client, art, model=None, review=True) -> dict:
         f["id"] = i
     purpose = (data.get("purpose") or "").strip()
     return {"artifact_id": art["id"], "name": art["name"], "version": art.get("version"), "hash": _hash(text),
-            "model": model, "prompt_version": PROMPT_VERSION, "ran_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "model": model, "review_model": review_model if review else None, "prompt_version": PROMPT_VERSION, "ran_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "purpose": purpose, "facts": kept, "unknowns": [u for u in data.get("unknowns") or [] if isinstance(u, dict)],
             "capture_concerns": concerns, "quality": {k: v for k, v in q.items() if k != "bad_lines"},
             "unverifiable": unverifiable, "rejected": len(rejected), "rejected_detail": rejected[:30],
@@ -581,6 +607,29 @@ def _hash(text):
     return hashlib.sha1((text or "").encode()).hexdigest()[:16]
 
 
+def _flat(text):
+    return [" ".join(line.split()) for line in (text or "").splitlines()]
+
+
+def _carry(store, dd, a):
+    """A rebuild that only changed spacing keeps the earlier deep review: the same statements on the same lines."""
+    prev = a.get("supersedes_id")
+    for _ in range(6):
+        if not prev:
+            return None
+        old = store.artifact(prev)
+        if not old:
+            return None
+        r = dd.get(str(prev))
+        if r and r.get("prompt_version") == PROMPT_VERSION and _flat(old.get("transcription")) == _flat(a.get("transcription")):
+            new = dict(r, artifact_id=a["id"], hash=_hash(a.get("transcription")), version=a.get("version"))
+            dd[str(a["id"])] = new
+            store.set_meta("deepdive", dd)
+            return new
+        prev = old.get("supersedes_id")
+    return None
+
+
 def pending(store) -> list:
     dd = store.get_meta("deepdive") or {}
     out = []
@@ -588,10 +637,20 @@ def pending(store) -> list:
         if not (a.get("transcription") or "").strip() or a.get("status") in ("captured", "failed") \
                 or a.get("artifact_type") in ("ui_screen", "document"):
             continue
-        r = dd.get(str(a["id"]))
+        r = dd.get(str(a["id"])) or _carry(store, dd, a)
         if not r or r.get("hash") != _hash(a.get("transcription")) or r.get("prompt_version") != PROMPT_VERSION:
+            if _has_open_problem(store, a, dd):
+                continue
             out.append(a)
     return out
+
+
+def _has_open_problem(store, a, dd) -> bool:
+    """The deep review waits until the file's capture problems are fixed or confirmed: one review, after the changes."""
+    try:
+        return capture_quality(store, a, current_concerns(store, a, dd))["status"] == "rescan"
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def synthesize(store, client, model=None) -> dict:
@@ -631,7 +690,8 @@ def program_stale(store) -> bool:
     return len(dd) >= 2 and (store.get_meta("deepdive_program") or {}).get("basis") != program_basis(store)
 
 
-def run(store, client, artifact_ids=None, progress=None, force=False, program=True) -> dict:
+def run(store, client, artifact_ids=None, progress=None, force=False, program=True, model=None, review=True,
+        review_model=None, claims=None, stage=None) -> dict:
     """Analyse every file that has no current deep analysis (or the ones given), then (with program=True, and only when
     a file changed since) the cross-file observations. The capture worker passes program=False: the observations are
     drawn once, when the report needs them, not after every file."""
@@ -644,14 +704,18 @@ def run(store, client, artifact_ids=None, progress=None, force=False, program=Tr
         with _META_LOCK:
             _set_active(store, a["id"], True)
         try:
-            return a, analyse_file(store, client, a), None
+            res = analyse_file(store, client, a, model=model, review=review, review_model=review_model,
+                               claims=(claims or {}).get(a["id"]))
+            if stage:
+                res["stage"] = stage
+            return a, res, None
         except Exception as exc:  # noqa: BLE001
             return a, None, f"{a['name']}: {type(exc).__name__}: {exc}"[:240]
         finally:
             with _META_LOCK:
                 _set_active(store, a["id"], False)
 
-    workers = max(1, min(len(todo), int(os.environ.get("CODESNAP_DEEP_WORKERS", "5"))))
+    workers = max(1, min(len(todo), int(os.environ.get("CODESNAP_DEEP_WORKERS", "12" if os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes") else "5"))))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for a, res, err in pool.map(one, todo) if workers == 1 else (f.result() for f in as_completed(
                 [pool.submit(one, a) for a in todo])):

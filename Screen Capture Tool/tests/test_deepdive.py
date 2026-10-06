@@ -10,6 +10,7 @@ import pytest
 from conftest import need_fixture
 
 from core import deepdive as DD
+from core.verify import REASONS
 from core.model import ProgramStore
 
 RUN1 = Path(__file__).resolve().parent / "fixtures" / "run1_program"
@@ -107,6 +108,13 @@ def test_cut_off_lines_produce_a_rescan_request_with_advice(store):
     assert "AIDPAYRN.cbl" in names and "AidPaymentController.cs" not in names
 
 
+def test_a_spacing_flag_is_reported_instead_of_crashing(store):
+    a = art(store, "AidPaymentController.cs")
+    store.set_verification(a["id"], {"flags": [{"line": 3, "reason": REASONS["spacing"]}]})
+    q = DD.capture_quality(store, a)
+    assert all(i["advice"] and i["reason"] for i in q["issues"])
+
+
 def test_model_capture_concerns_also_trigger_a_rescan(store):
     a = art(store, "AidPaymentController.cs")
     assert DD.capture_quality(store, a)["status"] != "rescan"
@@ -139,7 +147,8 @@ def test_analyse_file_end_to_end_with_review(store):
     assert store.runs()[-1]["step"] == "deepdive_review"
 
 
-def test_pending_tracks_changed_files_and_run_stores_results(store):
+def test_pending_tracks_changed_files_and_run_stores_results(store, monkeypatch):
+    monkeypatch.setattr(DD, '_has_open_problem', lambda *a: False)
     before = {a["name"] for a in DD.pending(store)}
     assert "AIDPAYRN.cbl" in before
     only = art(store, "AIDINQ.cbl")
@@ -183,12 +192,11 @@ def test_report_shows_the_review_with_line_citations_and_the_rescan(store):
     d = docx.Document(io.BytesIO(docx_bytes(store, rescan=True)))
     text = "\n".join(p.text for p in d.paragraphs)
     cells = "\n".join(c.text for t in d.tables for r in t.rows for c in r.cells)
-    assert "Approve sets dbo.PaymentBatch.Status to 'A' (line 28)." in text
-    assert "1 were rejected in these checks" in text and "Not yet reviewed line by line." in text
+    # The per-component review is not part of the template, so it is not printed.
+    assert "Approve sets dbo.PaymentBatch.Status" not in text
     assert "Blocks issue: Re-obtain a complete copy of AIDPAYRN.cbl" in cells and "copy incomplete (lines cut short" in cells
-    assert "A complete copy is needed" in text
     assert not __import__("re").search(r"\b(rescan|screenshot|captur\w*)\b", text + cells, __import__("re").I)
-    assert 'full count unconfirmed' in cells
+    assert 'full count not confirmed' in cells
 
 
 def test_app_endpoints_show_quality_and_run_the_analysis(tmp_path, monkeypatch):
@@ -224,3 +232,89 @@ def test_app_endpoints_show_quality_and_run_the_analysis(tmp_path, monkeypatch):
     assert detail["deep"]["facts"][0]["statement"] == "Receives map AIDMAP1" and detail["deep_current"]
     rep = api.get("/api/programs/live-test-09-29/report.docx")
     assert rep.status_code in (200, 409)
+
+
+def test_review_can_use_a_different_model_than_the_analysis(store, monkeypatch):
+    monkeypatch.delenv("CODESNAP_DEEP_MODEL", raising=False)
+    monkeypatch.delenv("CODESNAP_DEEP_REVIEW_MODEL", raising=False)
+    a = art(store, "AidPaymentController.cs")
+    analysis = {"purpose": "x", "facts": [fact("Approve updates dbo.PaymentBatch status to 'A'", [28, 28], "SET Status = 'A'", cat="data_write")]}
+    client = FakeClient(analysis, {"verdicts": [{"id": 1, "verdict": "supported"}]})
+    res = DD.analyse_file(store, client, a, model="m-deep", review_model="m-review")
+    assert client.calls[0]["model"] == "m-deep" and client.calls[-1]["model"] == "m-review"
+    assert store.runs()[-1]["step"] == "deepdive_review" and store.runs()[-1]["model"] == "m-review"
+    assert res["model"] == "m-deep" and res["review_model"] == "m-review"
+
+
+def test_deep_models_can_be_set_by_environment(store, monkeypatch):
+    monkeypatch.setenv("CODESNAP_DEEP_MODEL", "env-deep")
+    monkeypatch.setenv("CODESNAP_DEEP_REVIEW_MODEL", "env-review")
+    a = art(store, "AidPaymentController.cs")
+    analysis = {"purpose": "x", "facts": [fact("Approve updates dbo.PaymentBatch status to 'A'", [28, 28], "SET Status = 'A'", cat="data_write")]}
+    client = FakeClient(analysis, {"verdicts": [{"id": 1, "verdict": "supported"}]})
+    DD.analyse_file(store, client, a)
+    assert client.calls[0]["model"] == "env-deep" and client.calls[-1]["model"] == "env-review"
+
+
+def test_review_model_defaults_to_the_analysis_model(store, monkeypatch):
+    monkeypatch.delenv("CODESNAP_DEEP_MODEL", raising=False)
+    monkeypatch.delenv("CODESNAP_DEEP_REVIEW_MODEL", raising=False)
+    a = art(store, "AidPaymentController.cs")
+    analysis = {"purpose": "x", "facts": [fact("Approve updates dbo.PaymentBatch status to 'A'", [28, 28], "SET Status = 'A'", cat="data_write")]}
+    client = FakeClient(analysis, {"verdicts": [{"id": 1, "verdict": "supported"}]})
+    DD.analyse_file(store, client, a, model="only-one")
+    assert {c["model"] for c in client.calls} == {"only-one"}
+
+
+def test_analysis_without_facts_is_retried_once_and_both_calls_are_logged(store):
+    a = art(store, "AidPaymentController.cs")
+    good = {"purpose": "x", "facts": [fact("Approve updates dbo.PaymentBatch status to 'A'", [28, 28], "SET Status = 'A'", cat="data_write")]}
+    client = FakeClient({"purpose": "x"}, {"verdicts": [{"id": 1, "verdict": "supported"}]})
+    client.answers["record_analysis"].append(good)
+    res = DD.analyse_file(store, client, a)
+    assert len(res["facts"]) == 1
+    assert "left out the required 'facts' list" in client.calls[1]["messages"][0]["content"]
+    assert [r["step"] for r in store.runs() if r["step"].startswith("deepdive")].count("deepdive") == 2
+
+
+def test_analysis_that_never_returns_facts_fails_instead_of_looking_clean(store):
+    a = art(store, "AidPaymentController.cs")
+    client = FakeClient({"purpose": "x"})
+    client.answers["record_analysis"].append({"purpose": "x"})
+    with pytest.raises(ValueError):
+        DD.analyse_file(store, client, a)
+
+
+def test_the_analysis_request_says_up_front_that_facts_are_required(store):
+    a = art(store, "AidPaymentController.cs")
+    client = FakeClient({"purpose": "x", "facts": []})
+    DD.analyse_file(store, client, a, review=False)
+    assert "The 'facts' list is required" in client.calls[0]["messages"][0]["content"]
+
+
+def test_deep_review_defaults_to_sonnet_with_a_haiku_review(store, monkeypatch):
+    monkeypatch.delenv("CODESNAP_DEEP_MODEL", raising=False)
+    monkeypatch.delenv("CODESNAP_DEEP_REVIEW_MODEL", raising=False)
+    a = art(store, "AidPaymentController.cs")
+    analysis = {"purpose": "x", "facts": [fact("Approve updates dbo.PaymentBatch status to 'A'", [28, 28], "SET Status = 'A'", cat="data_write")]}
+    client = FakeClient(analysis, {"verdicts": [{"id": 1, "verdict": "supported"}]})
+    res = DD.analyse_file(store, client, a)
+    assert client.calls[0]["model"] == "claude-sonnet-5" and client.calls[-1]["model"] == "claude-haiku-4-5"
+    assert res["model"] == "claude-sonnet-5" and res["review_model"] == "claude-haiku-4-5"
+
+
+def test_one_environment_variable_returns_the_whole_deep_review_to_opus(store, monkeypatch):
+    monkeypatch.setenv("CODESNAP_DEEP_MODEL", "claude-opus-5-5")
+    monkeypatch.delenv("CODESNAP_DEEP_REVIEW_MODEL", raising=False)
+    a = art(store, "AidPaymentController.cs")
+    analysis = {"purpose": "x", "facts": [fact("Approve updates dbo.PaymentBatch status to 'A'", [28, 28], "SET Status = 'A'", cat="data_write")]}
+    client = FakeClient(analysis, {"verdicts": [{"id": 1, "verdict": "supported"}]})
+    DD.analyse_file(store, client, a)
+    assert {c["model"] for c in client.calls} == {"claude-opus-5-5"}
+
+
+def test_deep_review_waits_for_open_problems_then_runs_once(store, monkeypatch):
+    monkeypatch.setattr(DD, '_has_open_problem', lambda *a: True)
+    assert DD.pending(store) == []
+    monkeypatch.setattr(DD, '_has_open_problem', lambda *a: False)
+    assert DD.pending(store)

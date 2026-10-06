@@ -102,7 +102,7 @@ def _analyst_enrich(client, text: str, base: dict) -> dict:
         return out
     try:
         msg = client.messages.create(
-            model=TEXT_MODEL, max_tokens=2048, system=ANALYST_SYSTEM,
+            model=TEXT_MODEL, max_tokens=4096, system=ANALYST_SYSTEM,
             messages=[{"role": "user", "content": text}],
         )
         raw = "".join(getattr(b, "text", "") for b in msg.content).strip()
@@ -157,6 +157,16 @@ def _indent_sensitive(language, extension=None):
     return l in _INDENT_SENSITIVE_LANGS or e in {"py", "pyx", "yaml", "yml", "coffee", "hs", "nim", "fs"}
 
 
+_FIXED_FORMAT_EXT = {"cbl", "cob", "cobol", "cpy", "rpg", "rpgle", "sqlrpgle", "pli", "pl1"}
+
+
+def _fixed_format(language, extension=None):
+    """Column-based languages (COBOL, RPG, PL/I): the text is never auto-rewritten after a failed check."""
+    l = (language or "").strip().lower()
+    e = (extension or "").strip().lower().lstrip(".")
+    return e in _FIXED_FORMAT_EXT or any(k in l for k in ("cobol", "rpg", "pl/i", "pl1"))
+
+
 def _indent_caveat(errors: str) -> str:
     """If the compiler error is about indentation, flag it as lower-confidence \u2014
     indentation is read approximately from a screenshot and can drift a space,
@@ -203,6 +213,8 @@ def agent_decoder(client, code: str, extension: str, language: str) -> dict:
                 "error. If the code is complete on screen, re-capture and scroll to the end.")
         return {"errors": f"{note}\n(checker output: {errors})", "code": code, "checked": True,
                 "tool": res.get("tool", ""), "resolved": None, "truncated": True}
+    if _fixed_format(language, extension):
+        return {"errors": errors, "code": code, "checked": True, "tool": res.get("tool", ""), "resolved": None}
     try:
         fixed = outputs.strip_code_fences(analysis.fix_source(client, code, language, errors))
         problem = analysis.fix_looks_complete(code, fixed)

@@ -176,9 +176,8 @@ def _resolve_verification_line(store, artifact_id, line):
     verification = copy.deepcopy(store.verification(artifact_id))
     if not verification:
         return
-    resolved_reasons = {REASONS[k] for k in ("mismatch", "cut", "wrapped", "edited")}
     flags = verification.get("flags") or []
-    kept = [f for f in flags if not (f.get("line") == line and f.get("reason") in resolved_reasons)]
+    kept = [f for f in flags if f.get("line") != line]
     removed = len(flags) - len(kept)
     if not removed:
         return
@@ -209,6 +208,8 @@ def apply_one(store, c) -> str | None:
             p['_reviewed_artifact_id'] = art['id']
             store.update_correction(c['id'], payload=p)
             _resolve_verification_line(store, art["id"], n)
+            from core.model import confirmed
+            confirmed.add(store, art["name"], art.get("transcription"), n)
             return None
         if lines[n - 1] != p["old_text"]:
             return f"line {n} no longer matches the reviewed text"
@@ -224,6 +225,8 @@ def apply_one(store, c) -> str | None:
             store.fill_artifact(art["id"], artifact_type=art["artifact_type"], language=art["language"],
                                 transcription="\n".join(lines) + trailing)
         _resolve_verification_line(store, art["id"], n)
+        from core.model import confirmed
+        confirmed.add(store, art["name"], store.artifact(art["id"]).get("transcription"), n)
         changed = True
     elif op == "entity.rename":
         e = _entity(store, p["key"])
@@ -353,6 +356,8 @@ def undo(store, correction_id) -> dict:
             raise CorrectionError("this source line changed again, so it can't be safely undone")
     store.update_correction(correction_id, active=False)
     if op in ("artifact.replace_line", "artifact.confirm_line"):
+        from core.model import confirmed
+        confirmed.remove(store, art["name"], art.get("transcription"), p["line"])
         lines[p["line"] - 1] = p["old_text"]
         trailing = "\n" if (art.get("transcription") or "").endswith("\n") else ""
         store.fill_artifact(art["id"], artifact_type=art["artifact_type"], language=art["language"],

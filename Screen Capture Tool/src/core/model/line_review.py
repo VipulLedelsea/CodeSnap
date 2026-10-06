@@ -5,7 +5,11 @@ from pathlib import Path
 from PIL import Image
 from core import colfix, deepdive
 from core.analysis import clean_source, source_mode, _normalize_extract, _SOURCE_LABEL
-from core.verify import _line_map
+from core.verify import _line_map, REASONS
+from core.model import confirmed
+
+# Spacing-only and compile-fix flags never change what the program does; do not make the person answer them.
+_SKIP = {REASONS['spacing'], REASONS['edited']}
 
 
 def items(store, art):
@@ -14,16 +18,19 @@ def items(store, art):
     concerns = deepdive.current_concerns(store, art) or []
     by_line = {}
     for flag in [*flags, *concerns]:
+        if flag.get('reason') in _SKIP:
+            continue
         n = flag.get('line')
         if isinstance(n, int) and 0 < n <= len(lines):
             by_line.setdefault(n, []).append(flag.get('reason') or 'Text needs review')
-    if art.get('validation_ok') == 0:
-        for n in re.findall(r'(?:line|:)\s*(\d{1,5})\b', art.get('validation_errors') or ''):
-            n = int(n)
-            if 0 < n <= len(lines):
-                by_line.setdefault(n, []).append('Source check reports an error here; confirm what the screenshot actually says.')
-    return [{'line': n, 'text': lines[n - 1], 'reasons': list(dict.fromkeys(reasons))}
-            for n, reasons in sorted(by_line.items())]
+    out = []
+    for n, reasons in sorted(by_line.items()):
+        reasons = list(dict.fromkeys(reasons))
+        gap = REASONS['break'] in reasons
+        if reasons == [REASONS['break']] and confirmed.is_marked_missing(store, art.get('name'), art.get('transcription'), n):
+            continue
+        out.append({'line': n, 'text': lines[n - 1], 'reasons': reasons, 'gap': gap})
+    return out
 
 
 def _locate(code, clean, line):
@@ -87,6 +94,11 @@ def _band(path, raw, index):
     return [y+y_offset for y in measurement['bands'][row]]
 
 
+GAP_QUESTION = ('The screenshots did not overlap just before this line. Is any line missing between the line above '
+                'and this one? If nothing is missing, confirm it. If a line is missing, choose "Lines are missing" '
+                'and record that part of the screen again.')
+
+
 def question(text, readings):
     current = text.split()
     for reading in readings:
@@ -140,9 +152,11 @@ def detail(store, art, line):
         screenshots.append({'id': evidence['id'], 'frame': evidence['ord']+1, 'width': width, 'height': height,
                             'band': band, 'text': observed})
     screenshots.sort(key=lambda e: e['band'] is None)
+    gap_only = next((i['reasons'] == [REASONS['break']] for i in items(store, art) if i['line'] == line), False)
     return {'artifact_id': art['id'], 'name': art['name'], 'line': line, 'old_text': lines[line-1],
-            'text_hash': deepdive._hash(code), 'question': question(lines[line-1], readings),
+            'text_hash': deepdive._hash(code), 'question': GAP_QUESTION if gap_only else question(lines[line-1], readings),
             'context': [{'line': n, 'text': lines[n-1], 'focus': n == line}
                         for n in range(max(1, line-1), min(len(lines), line+1)+1)],
             'screenshots': screenshots[:6], 'readings': readings,
-            'reasons': next((i['reasons'] for i in items(store, art) if i['line'] == line), [])}
+            'reasons': next((i['reasons'] for i in items(store, art) if i['line'] == line), []),
+            'gap': next((i['gap'] for i in items(store, art) if i['line'] == line), False)}

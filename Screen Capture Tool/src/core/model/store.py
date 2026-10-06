@@ -305,6 +305,15 @@ class ProgramStore:
     def set_verification(self, artifact_id, v):
         with self.transaction():
             allv = self.get_meta("verification") or {}
+            if v and v.get("flags"):
+                try:
+                    from core.model import confirmed
+                    art = self.artifact(artifact_id)
+                    kept = confirmed.keep_unconfirmed(self, art["name"], art.get("transcription"), v["flags"])
+                    if len(kept) != len(v["flags"]):
+                        v = dict(v, flags=kept, flagged=max(0, int(v.get("flagged") or 0) - (len(v["flags"]) - len(kept))))
+                except Exception:
+                    pass
             if v:
                 allv[str(artifact_id)] = v
             else:

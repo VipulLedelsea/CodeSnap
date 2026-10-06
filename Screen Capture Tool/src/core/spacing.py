@@ -59,9 +59,9 @@ def bind(path, calibration):
                     or abs(pitch-calibration['pitch']*ratio)>0.04*pitch):
                 raise ValueError('The capture size or font changed. Set the source margin again.')
             source_x=calibration['origin']*w
+            # a click lands anywhere inside a character cell; the column edge is the nearest grid line
             cell=source_x/pitch-phase
-            if abs(cell-round(cell))>0.3:
-                raise ValueError('The source margin no longer matches the character grid.')
+            source_x=(round(cell)+phase)*pitch
             record.update(confirmed=True,size=[w,h],source_x=source_x,box=[0,0,w,h],pitch=pitch,
                           reference_sha256=calibration['reference_sha256'])
         except (ValueError,KeyError,TypeError) as exc:
@@ -151,6 +151,19 @@ def reconcile(code,parts,metas):
             seen[i].add(rows[j])
             if evidence.get('calibrated') is True and j<len(states) and states[j]=='measured':
                 votes[i].add(rows[j])
+    from core.verify import _line_map, _norm
+    for part,meta in zip(parts,metas):
+        evidence=(meta or {}).get('spacing') or {}
+        states=evidence.get('line_status') or []
+        if evidence.get('calibrated') is not True:
+            continue
+        rows=part.split('\n')
+        for i,j in enumerate(_line_map(part,code)):
+            if (j is None or j>=len(states) or states[j]!='measured' or i in protected or '[CUT OFF]' in lines[i]
+                    or '\t' in lines[i] or not lines[i].strip()):
+                continue
+            if _norm(lines[i])==_norm(rows[j]):
+                seen[i].add(rows[j]); votes[i].add(rows[j])
     status=['' if not line.strip() else 'unmeasured' for line in lines]
     conflicts=[]
     for i,readings in seen.items():
@@ -161,4 +174,57 @@ def reconcile(code,parts,metas):
             conflicts.append(i+1); status[i]='conflict'
         elif active:
             status[i]='unmeasured'
+    shifted={}
+    for part,meta in zip(parts,metas):
+        if ((meta or {}).get('spacing') or {}).get('calibrated') is True:
+            continue
+        rows=part.split('\n'); mapping=_line_map(part,code)
+        pairs=[(i,j) for i,j in enumerate(mapping) if j is not None and lines[i].strip() and _norm(lines[i])==_norm(rows[j])
+               and i not in protected and '[CUT OFF]' not in lines[i] and '\t' not in lines[i]]
+        deltas=[len(lines[i])-len(lines[i].lstrip())-(len(rows[j])-len(rows[j].lstrip())) for i,j in pairs if status[i]=='measured']
+        if len(deltas)<3:
+            continue
+        d=max(set(deltas),key=deltas.count)
+        if d==0 or deltas.count(d)<0.8*len(deltas):
+            continue
+        for i,j in pairs:
+            if status[i]=='measured':
+                continue
+            lead=len(rows[j])-len(rows[j].lstrip())+d
+            if lead<0:
+                continue
+            new=' '*lead+rows[j].lstrip()
+            if shifted.get(i,new)!=new:
+                conflicts.append(i+1); status[i]='conflict'; continue
+            shifted[i]=new
+    for i,new in shifted.items():
+        if status[i]!='conflict':
+            lines[i]=new; status[i]='measured'
     return '\n'.join(lines), {'spacing_statuses':status,'spacing_conflicts':conflicts} if active else {'spacing_conflicts':conflicts}
+
+
+INDICATOR_INDEX = 6
+
+
+def anchored_origin(path, raw):
+    """Source column one, in pixels, from the screenshot alone. In fixed-format COBOL a comment's '*' always sits in
+    column 7, so every comment row says where column one is. Returns None unless every comment row agrees."""
+    try:
+        m = colfix._measure(path, raw.replace('[CUT OFF]', ''))
+    except Exception:
+        return None
+    if not m:
+        return None
+    votes = {}
+    for ri, li in m['pairs']:
+        t = m['plain'][li].lstrip()
+        if t.startswith('*') and not t.startswith('*>') and m['measured'][ri]:
+            d = INDICATOR_INDEX - m['measured'][ri][0][0]
+            votes[d] = votes.get(d, 0) + 1
+    if not votes:
+        return None
+    base = max(votes, key=votes.get)
+    if votes[base] < 0.8 * sum(votes.values()):
+        return None
+    x = (m['offset'] - base) * m['pitch']
+    return float(x) if 0 <= x < Image.open(path).size[0] else None

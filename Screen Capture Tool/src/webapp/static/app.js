@@ -600,6 +600,17 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
     closeModal();
     toast("Code area set — the next capture will use this box on the selected screen.");
   });
+  (async () => {
+    try {
+      const saved = await _json("/api/session/settings");
+      if (saved && saved.region && !pickedRegion) {
+        pickedRegion = saved.region;
+        pickedRegionDisplay = saved.display ? String(saved.display) : (_display || "");
+        statusEl.textContent = saved.margin ? "Code area and source margin set" : "Capturing a selected area only — source margin unconfirmed";
+        clearBtn.style.display = "";
+      }
+    } catch (error) {}
+  })();
   clearBtn.addEventListener("click", async () => {
     try {
       await _json("/api/session/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({region: null, display: _display}) });
@@ -1816,7 +1827,7 @@ async function openLineReview(base, artifactId, queue) {
       <div class="lr-context-label">Edit line ${d.line} below · the neighbouring lines stay read-only</div>
       <div class="lr-code-block" role="group" aria-label="Edit source line with previous and following lines"><div class="lr-code-lines">${(d.context || [{line:d.line, text:d.old_text, focus:true}]).map(row => `<div class="lr-code-row${row.focus ? " focus" : ""}"><span class="lr-line-number">${row.line}</span>${row.focus ? `<textarea class="lr-text" aria-label="Complete source line" rows="1" wrap="off" spellcheck="false"></textarea>` : `<code>${escapeHtml(row.text) || " "}</code>`}</div>`).join("")}</div></div>
       <p class="project-hint">Selecting an option only previews it. Apply saves your answer; it can be undone.</p>
-      <div class="lr-actions"><button class="btn-primary lr-save" type="button">Confirm selected text</button><button class="btn-link lr-skip" type="button">Can't tell — next</button></div>
+      <div class="lr-actions"><button class="btn-primary lr-save" type="button">Confirm selected text</button>${d.gap ? '<button class="btn-secondary lr-missing" type="button">Lines are missing here</button>' : ""}<button class="btn-link lr-skip" type="button">Can't tell — next</button></div>
       <div class="lr-result" role="status" aria-live="polite"></div>`;
     dialog.querySelector(".lr-close").onclick = () => dialog.close();
     const input = dialog.querySelector(".lr-text"); input.value = d.old_text;
@@ -1856,6 +1867,16 @@ async function openLineReview(base, artifactId, queue) {
     };
     display(0);
     dialog.querySelector(".lr-skip").onclick = () => advance(false);
+    const missingButton = dialog.querySelector(".lr-missing");
+    if (missingButton) missingButton.onclick = async () => {
+      try {
+        const answer = await _json(`${base}/artifacts/${artifactId}/review/${d.line}/missing`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text_hash: d.text_hash }) });
+        toast(answer.message || "Marked. Record that part of the screen again.");
+        _progSig = "";
+        await loadProgram();
+        await advance(true);
+      } catch (error) { dialog.querySelector(".lr-result").textContent = error.message; }
+    };
     const save = async (text) => {
       const buttons = dialog.querySelectorAll(".lr-actions button"); buttons.forEach(button => button.disabled = true);
       const result = dialog.querySelector(".lr-result"); result.textContent = "Saving your answer and checking the file…";

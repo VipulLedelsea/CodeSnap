@@ -7,7 +7,7 @@ from core.diagrams import all_diagrams, drawio, vsdx
 from . import html
 from .content import build
 
-REPORT_REVISION = "2026-10-02-concise-report-v13"
+REPORT_REVISION = "2026-10-05-template-fit-v15"
 
 
 def _redactor(store):

@@ -244,6 +244,11 @@ def api_session_start(single: bool = False, idle_stop: float | None = None, regi
 _SPACING_REFERENCE = {}
 
 
+@app.get('/api/session/settings')
+def api_session_settings_get():
+    return _session.saved()
+
+
 @app.post('/api/session/settings')
 def api_session_settings(payload: dict = Body(...)):
     try:
@@ -262,7 +267,7 @@ def api_session_settings(payload: dict = Body(...)):
             settings = _session.configure(cfg['region'],cfg['display'])
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {'ok': True, 'applies': 'next_capture', **settings}
+    return {'ok': True, 'applies': 'now' if _session.running() else 'next_capture', **settings}
 
 
 def _program_exists(slug: str) -> bool:
@@ -378,8 +383,12 @@ def _deep_start(slug: str, artifact_ids=None) -> dict:
         from core.model import ProgramStore
         try:
             with ProgramStore.open(slug) as st:
-                res = deepdive.run(st, client, artifact_ids=artifact_ids, force=bool(artifact_ids),
-                                   progress=lambda d, t: job.update(done=d, total=t))
+                from core import pipeline
+                if pipeline.staged() and not artifact_ids:
+                    res = pipeline.run_staged(st, client, progress=lambda d, t: job.update(done=d, total=t))
+                else:
+                    res = deepdive.run(st, client, artifact_ids=artifact_ids, force=bool(artifact_ids),
+                                       progress=lambda d, t: job.update(done=d, total=t))
                 job["errors"] = res["errors"]
         except Exception as exc:  # noqa: BLE001
             job["errors"].append(f"{type(exc).__name__}: {exc}")
@@ -388,6 +397,27 @@ def _deep_start(slug: str, artifact_ids=None) -> dict:
             job["finished"] = time.time()
     threading.Thread(target=work, daemon=True).start()
     return job
+
+
+def _deep_when_ready(slug: str):
+    """Start the deep review as soon as the last open problem is resolved: runs after the answering request ends."""
+    def go():
+        try:
+            from core import deepdive
+            job = _DEEP.get(slug) or {}
+            if job.get("running") or slug in _REBUILDS or not api_key_status()["has_key"]:
+                return
+            with _open_program(slug) as store:
+                if any(store.capture_progress(a["id"]).get("analysing") for a in store.artifacts()):
+                    return
+                todo = deepdive.pending(store)
+            if todo:
+                _deep_start(slug)
+        except Exception:  # noqa: BLE001
+            pass
+    timer = threading.Timer(1.0, go)
+    timer.daemon = True
+    timer.start()
 
 
 @app.post("/api/programs/{slug}/deepdive")
@@ -563,7 +593,9 @@ def api_program_artifact_rebuild(slug: str, artifact_id: int):
             job = {"name": store.artifact(artifact_id)["name"], "stage": "Reading saved screenshots", "done": 0, "total": 0}
             _REBUILDS[slug] = job
         try:
-            return rebuild_saved_capture(store, artifact_id, progress=lambda **values: job.update(values))
+            out = rebuild_saved_capture(store, artifact_id, progress=lambda **values: job.update(values))
+            _deep_when_ready(slug)
+            return out
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
         finally:
@@ -667,8 +699,28 @@ def api_line_review_answer(slug: str, artifact_id: int, line: int, payload: dict
             raise HTTPException(status_code=400, detail=str(exc))
         from core.model.line_review import items
         remaining = items(store, store.artifact(artifact_id))
+        _deep_when_ready(slug)
         return {'ok': True, **result, 'review_status': 'completed', 'review_lines': remaining,
                 'remaining_issues': [item for item in remaining if item['line'] == line]}
+
+
+@app.post("/api/programs/{slug}/artifacts/{artifact_id}/review/{line}/missing")
+def api_line_review_missing(slug: str, artifact_id: int, line: int, payload: dict = Body(...)):
+    from core import deepdive
+    from core.model import confirmed
+    from core.model.line_review import items
+    with _open_program(slug) as store:
+        art = store.artifact(artifact_id)
+        if not art or not art['is_current']:
+            raise HTTPException(status_code=404, detail="This file was removed or replaced. Refresh the review.")
+        lines = (art.get('transcription') or '').splitlines()
+        if payload.get('text_hash') != deepdive._hash(art.get('transcription')) or not 0 < line <= len(lines):
+            raise HTTPException(status_code=409, detail="This source changed. Refresh the screenshot question before answering.")
+        confirmed.mark_missing(store, art['name'], art.get('transcription'), line)
+        remaining = items(store, art)
+        _deep_when_ready(slug)
+        return {'ok': True, 'review_lines': remaining,
+                'message': f'Lines are missing before line {line}. Record that part of the screen again with Add screenshots.'}
 
 
 @app.post("/api/programs/{slug}/artifacts/{artifact_id}/rename")
@@ -988,7 +1040,9 @@ def api_program_correct(slug: str, payload: dict = Body(...)):
         return JSONResponse({"error": "Send an op or a list of ops."}, status_code=400)
     with _open_program(slug) as store:
         try:
-            return {"ok": True, **feedback.apply(store, ops, str(payload.get("note", "")), client=_LazyClient(slug))}
+            out = {"ok": True, **feedback.apply(store, ops, str(payload.get("note", "")), client=_LazyClient(slug))}
+            _deep_when_ready(slug)
+            return out
         except CorrectionError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -999,7 +1053,9 @@ def api_program_correction_undo(slug: str, correction_id: int):
     from core.model.corrections import CorrectionError
     with _open_program(slug) as store:
         try:
-            return {"ok": True, **feedback.undo(store, correction_id, client=_LazyClient(slug))}
+            out = {"ok": True, **feedback.undo(store, correction_id, client=_LazyClient(slug))}
+            _deep_when_ready(slug)
+            return out
         except CorrectionError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 

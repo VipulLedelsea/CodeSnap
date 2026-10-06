@@ -61,7 +61,7 @@ def render_document(data: bytes, diagrams: dict) -> str:
             if rid in document.part.related_parts:
                 part = document.part.related_parts[rid]
                 images.append(f'<img alt="Assessment figure" style="max-width:100%" src="data:{part.content_type};base64,{base64.b64encode(part.blob).decode()}">')
-        ink = "996300" if p.text.startswith("Needs changes —") else {"RED": "B42318", "YELLOW": "996300", "GREEN": "176B3A"}.get(p.text.split(" ", 1)[0])
+        ink = "996300" if p.text.startswith("Needs changes") else {"RED": "B42318", "YELLOW": "996300", "GREEN": "176B3A"}.get(p.text.split(" ", 1)[0])
         status_style = f' style="color:#{ink};font-weight:700"' if ink else ''
         return f'<{tag}{status_style}>{text}</{tag}>' + ''.join(images) if text or images else ""
 

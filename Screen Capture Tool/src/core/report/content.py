@@ -344,7 +344,6 @@ def build(store, *, rescan=True, client=None, prepared_by=None, today=None) -> d
 def _health_blocks(h: dict) -> list:
     rows = [[p["name"], "Incomplete source", "; ".join(p["reasons"])[:220]] for p in h.get("partial") or []]
     rows += [[p["name"], "Not reviewed", "The source could not be read."] for p in h.get("failed") or []]
-    rows += [[p["name"], "Does not compile", p["error"]] for p in h.get("invalid") or []]
     if not rows:
         return []
     return [{"type": "h", "text": "Files to confirm"},

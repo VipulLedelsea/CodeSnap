@@ -147,7 +147,7 @@ class UsageTracker:
     def set_thread_bucket(self, bucket):
         self._local.bucket = bucket
 
-    def record(self, step, model, usage, ms, ok=True, error=None):
+    def record(self, step, model, usage, ms, ok=True, error=None, discount=1.0):
         input_tokens = getattr(usage, "input_tokens", None) if usage is not None else None
         output_tokens = getattr(usage, "output_tokens", None) if usage is not None else None
         created = getattr(usage, 'cache_creation_input_tokens', 0) or 0
@@ -158,6 +158,8 @@ class UsageTracker:
         hour = min(hour, created)
         billed_cost = cost(model, input_tokens, output_tokens, cache_write_tokens=created-hour,
                            cache_write_1h_tokens=hour, cache_read_tokens=read)
+        if billed_cost is not None and discount != 1.0:
+            billed_cost = round(billed_cost * discount, 6)
         if input_tokens is not None:
             input_tokens += created + read
         import uuid
@@ -224,7 +226,7 @@ class _TrackedMessages:
                                  ok=False, error=f"{type(exc).__name__}: {exc}")
             raise
         record = self._tracker.record(step, getattr(msg, "model", None) or kwargs.get("model"), getattr(msg, "usage", None),
-                             int((time.monotonic() - began) * 1000),
+                             int((time.monotonic() - began) * 1000), discount=0.5 if getattr(self._messages, "is_batch", False) else 1.0,
                              ok=getattr(msg, "stop_reason", None) != "max_tokens",
                              error="output truncated (max_tokens)" if getattr(msg, "stop_reason", None) == "max_tokens" else None)
         if self._tracker.on_record:
@@ -279,7 +281,8 @@ class TrackedClient:
     def __init__(self, client, tracker):
         self._client = client
         self.tracker = tracker
-        self.messages = _TrackedMessages(client.messages, tracker)
+        from core import batching
+        self.messages = _TrackedMessages(batching.BatchMessages.shared(client) if batching.enabled() else client.messages, tracker)
 
     def __getattr__(self, name):
         return getattr(self._client, name)

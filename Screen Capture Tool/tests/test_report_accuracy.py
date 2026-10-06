@@ -45,8 +45,16 @@ def _blocks(d):
 def rep(tmp_path_factory):
     root = tmp_path_factory.mktemp("demo")
     shutil.copytree(DEMO, root / "demo930")
-    with ProgramStore.open("demo930", root=root) as st:
-        d = docx.Document(io.BytesIO(docx_bytes(st, rescan=True)))
+    # These tests pin generator facts that live in sections the final report trims
+    # to the template, so read the report before that trim.
+    from core.report import template_fit
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(template_fit, "remove_extras", lambda document: [])
+        from core.report import editorial
+        mp.setattr(editorial, "KEY_FINDINGS_MAX", 99)
+        mp.setattr(editorial, "PROSE_LINES", 10_000)
+        with ProgramStore.open("demo930", root=root) as st:
+            d = docx.Document(io.BytesIO(docx_bytes(st, rescan=True)))
     lines = _blocks(d)
     return {"lines": lines, "text": "\n".join(lines)}
 
@@ -368,7 +376,7 @@ def test_migration_entity_copies_match_ownership(rep):
 
 def test_unconfirmed_versions_match_displayed_stack(rep):
     stack = rows_after(rep, "3.2", "3.3")
-    count = sum(r.split(" | ")[1].count("version not confirmed)") for r in stack)
+    count = sum(r.split(" | ")[1].count("version unknown)") for r in stack)
     confidence = next(l for l in section(rep, "13.3", "13.4") if l.startswith("Assessment confidence"))
     assert count > 0
     assert int(re.search(r"(\d+) technology versions?", confidence).group(1)) == count

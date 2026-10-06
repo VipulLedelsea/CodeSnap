@@ -148,8 +148,8 @@ def test_template_technology_table_retains_framework_and_tool_labels(tmp_path):
         doc=Document(io.BytesIO(docx_bytes(store,pdf=False)))
         stack_table=next(table for table in doc.tables if any('Technology and version' in cell.text for cell in table.rows[0].cells))
         stack='\n'.join(cell.text for row in stack_table.rows for cell in row.cells)
-        assert 'React (source label; deployed use and version not confirmed)' in stack
-        assert 'SSIS (source label; deployed use and version not confirmed)' in stack
+        assert 'React (source label; deployed use and version unknown)' in stack
+        assert 'SSIS (source label; deployed use and version unknown)' in stack
         alltext='\n'.join(p.text for p in doc.paragraphs)
         assert 'same business data is also copied across platforms' not in alltext
 

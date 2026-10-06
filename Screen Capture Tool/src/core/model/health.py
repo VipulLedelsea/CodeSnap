@@ -31,13 +31,11 @@ def pipeline_health(store) -> dict:
         text = a.get("transcription") or ""
         if not text.strip():
             continue
-        if a.get("validation_ok") == 0 and (a.get("validation_errors") or "").strip() not in ("", "None"):
-            invalid.append({"id": a["id"], "name": a["name"], "tool": a.get("validation_tool") or "",
-                            "error": _first_line(a["validation_errors"])})
-        elif a.get("validation_ok") is None and a["artifact_type"] in ("code",):
-            unverified.append(a["name"])
-        c = completeness(text, a["name"], a.get("language") or "",
-                         a.get("validation_errors") if a.get("validation_ok") == 0 else "")
+        c = completeness(text, a["name"], a.get("language") or "")
+        if c["partial"]:
+            from .completeness import end_reached, drop_end_reasons
+            if end_reached(store, a):
+                c = drop_end_reasons(c)
         if c["partial"]:
             partial.append({"id": a["id"], "name": a["name"], "reasons": c["reasons"]})
     parsers = ("cobol-parser", "ts-parser", "extractors", "langpacks")

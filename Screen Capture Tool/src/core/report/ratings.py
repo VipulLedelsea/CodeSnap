@@ -287,7 +287,7 @@ def scorecard(comps, AM, sec_rating, sec_text, facts) -> dict:
         rs = _reasons(c, dims)
         avg = condition(_avg(mat, dims))
         txt = (f"Rated on the weakest material component, {c['name']} ({words(rating)})"
-               + (f"; the average across {len(mat)} components would be {avg}" if avg and avg != rating else "")
+               + (f"; the average across {len(mat)} component{'s' if len(mat) != 1 else ''} would be {avg}" if avg and avg != rating else "")
                + (f", mainly because {P.sentence(rs)}." if rs else ". No deductions."))
         for bump, why in (extra or []):
             if bump and rating:
@@ -315,7 +315,11 @@ def scorecard(comps, AM, sec_rating, sec_text, facts) -> dict:
             st_txt += (f" The line-by-line review found {len(hi)} high-severity defect{'s' if len(hi) > 1 else ''} "
                        f"(3.6), for example: {hi[0]}. Rating moved from {st} to {floor}.")
             st = floor
-        out["Stability and reliability"] = (st, st_txt)
+    sus = facts.get("capture_suspect") or []
+    if sus and st:
+        st_txt += (f" Findings in {P.sentence(sus)} that look like duplicated, truncated or garbled lines were not counted; "
+                   "recapture those files to confirm.")
+    out["Stability and reliability"] = (st, st_txt)
     out["Performance and scalability"] = (None, "Insufficient evidence: needs run times, batch window and peak volumes "
                                                 "from operations (see 6.3). Not included in the overall rating.")
     out["Security posture"] = (sec_rating, sec_text)

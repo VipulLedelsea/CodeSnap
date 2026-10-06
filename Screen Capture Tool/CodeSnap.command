@@ -21,6 +21,11 @@ fi
 # Make sure web deps are present (quiet; only installs if missing)
 python -c "import fastapi, uvicorn" 2>/dev/null || python -m pip install -q -r requirements.txt
 
+# Run all model calls through the Batch API (half price, slower). Set to 0 for instant results.
+export CODESNAP_BATCH="${CODESNAP_BATCH:-1}"
+# Staged run: transcribe, Haiku draft report, then Sonnet line-by-line review and final report. Set to "" for the old flow.
+export CODESNAP_PIPELINE="${CODESNAP_PIPELINE-staged}"
+
 # Launch the web app (opens the browser itself)
 python src/main.py
 

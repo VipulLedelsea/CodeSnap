@@ -155,7 +155,8 @@ def test_max_tokens_truncation_is_logged_as_a_failure(store):
 
 # ── invalidation and one job at a time ─────────────────────────────────────────────────────────────────────────
 
-def test_changed_file_invalidates_its_analysis_and_deleted_files_are_pruned(store):
+def test_changed_file_invalidates_its_analysis_and_deleted_files_are_pruned(store, monkeypatch):
+    monkeypatch.setattr(DD, '_has_open_problem', lambda *a: False)
     a = art(store, "AIDINQ.cbl")
     DD.run(store, FakeClient(INQ, {"verdicts": []}), artifact_ids=[a["id"]], force=True)
     assert a["name"] not in {x["name"] for x in DD.pending(store)}
@@ -236,11 +237,10 @@ def test_incomplete_file_asks_for_a_rescan():
     assert q["status"] == "rescan" and any(i["kind"] == "partial" for i in q["issues"])
 
 
-def test_compile_errors_ask_for_a_rescan_with_the_error_lines():
+def test_compile_errors_are_not_reading_problems():
     q = DD.capture_quality(Store({"lines": 5, "flags": []}),
                            _art(GOOD_COBOL, validation_ok=0, validation_errors="x.cbl:4: syntax error near DISPLAY"))
-    comp = next(i for i in q["issues"] if i["kind"] == "compile")
-    assert q["status"] == "rescan" and comp["lines"] == ["4"]
+    assert q["status"] != "rescan" and not any(i["kind"] == "compile" for i in q["issues"])
 
 
 def test_model_flagged_lines_ask_for_a_rescan():
@@ -270,12 +270,9 @@ def test_report_section_cites_every_statement_and_lists_the_rescan_once(store):
     d = docx.Document(io.BytesIO(docx_bytes(store, rescan=True)))
     paras = [p.text for p in d.paragraphs]
     cells = "\n".join(c.text for t in d.tables for r in t.rows for c in r.cells)
-    start = paras.index("Notes for 3.6 Code analysis by component — complete component reviews")
-    end = next((i for i, p in enumerate(paras[start + 1:], start + 1) if p.startswith("Notes for ")), len(paras))
-    section = paras[start:end]
-    bullets = [p for p in section if p.startswith(("Receives", "Links"))]
-    assert bullets and all(re.search(r"\((line|lines) \d+(–\d+)?\)\.$", b) for b in bullets)
-    assert not re.search(r"\b(rescan|screenshots?|captur\w*|scann\w*)\b", "\n".join(section), re.I)
+    # The report follows the template, so the per-component review section is not part of it.
+    assert not any(p.startswith(("3.6 ", "Notes for ", "Appendix H", "Appendix I")) for p in paras)
+    assert not re.search(r"\b(rescan|screenshots?|captur\w*|scann\w*)\b", "\n".join(paras), re.I)
     assert cells.count("Re-obtain a complete copy of AIDPAYRN.cbl") == 1
 
 
@@ -328,3 +325,9 @@ def test_capture_concerns_on_blank_or_missing_lines_are_ignored(store):
     res = DD.analyse_file(store, FakeClient({"purpose": "", "facts": [], "capture_concerns": [
         {"line": blank, "reason": "trailing newline"}, {"line": 9999, "reason": "x"}, {"reason": "no line"}]}), a)
     assert res["capture_concerns"] == [] and res["quality"]["status"] != "rescan"
+
+
+def test_column_based_languages_are_never_auto_rewritten():
+    import team
+    assert team._fixed_format("COBOL", "cbl") and team._fixed_format("", ".rpgle") and team._fixed_format("PL/I")
+    assert not team._fixed_format("Python", "py")

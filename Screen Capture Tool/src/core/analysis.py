@@ -220,6 +220,18 @@ FINALIZE_SYSTEM_PROMPT = (
 )
 
 
+_FIXED_COLUMN_CLAUSE = (
+    "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. Count spaces exactly, both leading spaces and runs of spaces inside a line (aligned PIC/VALUE clauses must land in the same column as on screen); in assembler/BMS keep continuation characters in the columns actually shown, even when nonstandard. Preserve observed Unicode characters and quotes. "
+)
+
+_PANE_CLAUSE = (
+    "Do NOT include the editor's line-number gutter, fold arrows, breakpoint dots, minimaps, "
+    "scrollbars, tab bars, or status bars \u2014 only the content itself. If several windows are "
+    "visible, transcribe ONLY the primary focused editor pane; ignore other windows, the dock, and "
+    "menu bars. If a line is cut off at the screen edge or truly unreadable, transcribe what is "
+    "visible and end that line's string with the marker [CUT OFF] \u2014 never guess the hidden part. "
+)
+
 EXTRACT_JSON_SYSTEM_PROMPT = (
     "You are a LITERAL OCR engine, not a programmer. Copy the exact characters visible on "
     "screen \u2014 like a photocopier. You do NOT understand or improve code; you transcribe it "
@@ -234,19 +246,33 @@ EXTRACT_JSON_SYSTEM_PROMPT = (
     'written>, "suggested": <what you think it should be>}. This is where your instinct to fix '
     "things goes: note it HERE, but do NOT change raw_transcription. Empty array if nothing looked "
     "off.\n"
-    "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. Count spaces exactly, both leading spaces and runs of spaces inside a line (aligned PIC/VALUE clauses must land in the same column as on screen); in assembler/BMS keep continuation characters in the columns actually shown, even when nonstandard. Preserve observed Unicode characters and quotes. "
+    + _FIXED_COLUMN_CLAUSE
     + _LEGACY_FORMAT_CLAUSE +
-    "Do NOT include the editor's line-number gutter, fold arrows, breakpoint dots, minimaps, "
-    "scrollbars, tab bars, or status bars \u2014 only the content itself. If several windows are "
-    "visible, transcribe ONLY the primary focused editor pane; ignore other windows, the dock, and "
-    "menu bars. If a line is cut off at the screen edge or truly unreadable, transcribe what is "
-    "visible and end that line's string with the marker [CUT OFF] \u2014 never guess the hidden part. "
+    _PANE_CLAUSE +
     'If there is no meaningful text, return {"raw_transcription": [], "corrections_applied": []}.\n'
     'Also return a third key "line_numbers": when the editor shows a line-number gutter, an array with the gutter '
     "number of each entry of raw_transcription (same length and order; null for a row with no number, such as the "
     "continuation of a word-wrapped line). Use [] when no line numbers are visible. These numbers go ONLY in "
     "line_numbers, never in raw_transcription. COBOL/RPG sequence numbers typed in the source are text, not line numbers."
 )
+
+
+EXTRACT_PLAIN_SYSTEM_PROMPT = (
+    "You are a LITERAL OCR engine, not a programmer. Copy the exact characters visible on screen, like a "
+    "photocopier. You do NOT understand or improve code; you transcribe it verbatim, mistakes included.\n"
+    "Output ONLY the transcription as plain text: one output line per visible line, each copied EXACTLY as shown. "
+    "Preserve wrong indentation space-for-space, keep missing colons/brackets/quotes and misspellings. Never add, "
+    "remove, or re-align anything. No JSON, no code fences, no commentary, no corrections.\n"
+    + _FIXED_COLUMN_CLAUSE
+    + _LEGACY_FORMAT_CLAUSE
+    + _PANE_CLAUSE
+    + "If there is no meaningful text, output nothing."
+)
+
+READER = _os.environ.get("CODESNAP_READER", "plain").lower()
+PLAIN_MODEL = _os.environ.get("CODESNAP_PLAIN_MODEL", "claude-sonnet-5")
+PLAIN_MAX_BAD = float(_os.environ.get("CODESNAP_PLAIN_MAX_BAD", "0.10"))
+PLAIN_REQUIRE_CALIBRATION = _os.environ.get("CODESNAP_PLAIN_REQUIRE_CALIBRATION", "1") != "0"
 
 
 
@@ -388,7 +414,7 @@ def _accepts_temperature(model: str) -> bool:
     return not str(model or "").startswith("claude-opus-5-5")
 
 
-def extract_structured(client, path: Path, *, calibration=None) -> dict:
+def extract_json(client, path: Path, *, calibration=None) -> dict:
     """Send ONE image; return {'raw': verbatim text, 'corrections': [ {line, saw, suggested} ]}.
 
     Asking for the transcription as a JSON array of line strings nudges the model into
@@ -402,7 +428,7 @@ def extract_structured(client, path: Path, *, calibration=None) -> dict:
         temp = None   # newer models reject sampling parameters outright
     msg = client.messages.create(
         model=EXTRACT_MODEL,
-        max_tokens=4096,
+        max_tokens=8192,
         **({"temperature": float(temp)} if temp else {}),
         system=EXTRACT_JSON_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": [
@@ -422,14 +448,91 @@ def extract_structured(client, path: Path, *, calibration=None) -> dict:
     return out
 
 
+def _plain_unverified(out: dict):
+    verify = out["verify"]
+    rows = [s for s, l in zip(verify.get("status") or [], out["raw"].split("\n")) if l.strip()]
+    bad = sum(1 for s in rows if s in ("mismatch", "unchecked"))
+    return "unverified" if rows and bad / len(rows) > PLAIN_MAX_BAD else None
+
+
+def extract_plain(client, path: Path, *, calibration=None):
+    """Cheap first read: PLAIN_MODEL, plain lines, then the same pixel spacing and verification as the JSON path.
+    Returns (result, None) or (None, reason) when the frame must go to the JSON reader."""
+    from core import spacing
+    if PLAIN_REQUIRE_CALIBRATION:
+        with spacing.frame(path, calibration) as (_, origin, _evidence):
+            if origin is None:
+                return None, "uncalibrated"
+    b64 = base64.standard_b64encode(_robust.read_bytes(path)).decode()
+    msg = client.messages.create(
+        model=PLAIN_MODEL,
+        max_tokens=8192,
+        system=EXTRACT_PLAIN_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": _media_type(path), "data": b64}},
+            {"type": "text", "text": "Transcribe this screenshot as plain text."},
+        ]}],
+    )
+    if getattr(msg, "stop_reason", None) == "max_tokens":
+        return None, "truncated"
+    text = "".join(getattr(b, "text", "") for b in msg.content).strip("\r\n")
+    raw = "\n".join(l for l in text.splitlines() if not l.strip().startswith("```")).strip("\n")
+    if not raw.strip():
+        return None, "empty"
+    out = {"raw": raw, "observed_raw": raw, "corrections": []}
+    out["raw"], out["verify"], out["respaced_lines"] = measured_frame(client, path, raw, calibration=calibration)
+    out["verify"].update(numbers=[], numbers_seen=False, numbers_rejected=0, reader=PLAIN_MODEL)
+    reason = _plain_unverified(out)
+    return (None, reason) if reason else (out, None)
+
+
+def extract_structured(client, path: Path, *, calibration=None) -> dict:
+    """One screenshot -> {'raw', 'corrections', 'verify', ...}. With CODESNAP_READER=plain the frame is read by
+    PLAIN_MODEL first and only goes to the JSON reader (EXTRACT_MODEL) when that read is not trustworthy."""
+    reason = None
+    if READER == "plain":
+        try:
+            out, reason = extract_plain(client, path, calibration=calibration)
+        except Exception as exc:
+            out, reason = None, "error:" + type(exc).__name__
+        if out is not None:
+            return out
+    result = extract_json(client, path, calibration=calibration)
+    if reason:
+        result.setdefault("verify", {})["reader_fallback"] = reason
+    return result
+
+
+def _left_edge_cut(raw):
+    """A row with nothing visible before the marker, away from the top and bottom of the frame.
+
+    Rows clipped by the top or bottom of the screenshot also read as a bare marker, but they say nothing
+    about the left edge, so they must not discard the measured margin for the whole frame."""
+    rows = raw.splitlines()
+    first = next((i for i, r in enumerate(rows) if r.strip()), 0)
+    last = max((i for i, r in enumerate(rows) if r.strip()), default=0)
+    return any(r.lstrip().startswith('[CUT OFF]') and first + 3 <= i <= last - 3 for i, r in enumerate(rows))
+
+
 def measured_frame(client,path,raw,*,calibration=None):
     """One spacing path for fresh OCR, cached frames and saved rebuilding."""
     from core import spacing, colfix
     from core.text import literal_continuations
     with spacing.frame(path,calibration) as (image,origin,evidence):
-        if any(line.lstrip().startswith('[CUT OFF]') for line in raw.splitlines()):
+        if _left_edge_cut(raw):
             origin=None
             evidence.update(calibrated=False,reason='The left edge is cut off; source column one is not visible.')
+        if not _left_edge_cut(raw):
+            auto=spacing.anchored_origin(image,raw)
+            if auto is not None and origin is not None:
+                pitch=(evidence.get('calibration') or {}).get('pitch') or 9
+                if abs(auto-origin)<0.5*pitch:
+                    auto=None
+                else:
+                    origin=None
+            if auto is not None:
+                origin=auto
+                evidence.update(calibrated=True,reason='',auto=True,calibration={'source_x':auto,'box':[0,0]+list(__import__('PIL.Image',fromlist=['Image']).open(image).size)})
         fixed,changed=(colfix.respace(image,raw,source_x=origin) if origin is not None else colfix.respace(image,raw)) if _os.environ.get('CODESNAP_COLUMN_FIX','1')!='0' else (raw,0)
         verified=verify_screenshot(client,image,fixed,source_x=origin)
         result=verified.pop('text')
@@ -641,7 +744,7 @@ def _mostly_contained(b: list, merged: list) -> bool:
     """True if every non-blank line of b already appears exactly in merged —
     i.e. b is a re-capture of content we already have, so it adds nothing."""
     # OCR may add whitespace immediately after a legacy comment indicator.
-    norm = lambda line: _re.sub(r'^\*\s+', '* ', line.strip())
+    norm = lambda line: _re.sub(r'^\*\s+', '* ', line.replace('[CUT OFF]', '').strip())
     bl = [norm(l) for l in b if l.strip()]
     if not bl:
         return True
@@ -650,10 +753,16 @@ def _mostly_contained(b: list, merged: list) -> bool:
         return False
     # b must reappear as a contiguous run, not just as lines scattered through merged —
     # otherwise a short last frame ("    }" / "end-proc;") is thrown away as "already seen"
-    for o in range(len(ms) - len(bl) + 1):
-        # A frame cannot be discarded when even one of its source lines is new.
-        if all(x == y for x, y in zip(bl, ms[o:o + len(bl)])):
-            return True
+    sticky = _re.compile(r"(?:[\w-]+:\s*(?:PROC|PROCEDURE)\b.*|DCL\s+1\s+\w+[,;]?|SELECT\s*\(.*)", _re.I)
+    runs = [bl]
+    # editors with sticky scroll pin the enclosing header on top of the screen, away from the lines that follow it
+    if len(bl) > 4 and sticky.fullmatch(bl[0]) and bl[0] in ms:
+        runs.append(bl[1:])
+    for run in runs:
+        for o in range(len(ms) - len(run) + 1):
+            # A frame cannot be discarded when even one of its source lines is new.
+            if all(x == y for x, y in zip(run, ms[o:o + len(run)])):
+                return True
     return False
 
 
@@ -921,6 +1030,7 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     from core import verify
     metas = list(metas or [])
     metas += [{}] * (len(raw_parts) - len(metas))
+    raw_parts = _drop_margin_offset(raw_parts, metas)
     mode = source_mode(raw_parts)
     statuses = verify.lookup(raw_parts, metas)
     from core.cobol import is_column_sensitive
@@ -968,21 +1078,68 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     # Conflicting reads are evidence of uncertainty even if either isolated row
     # happened to match a pixel grid. Preserve the selected text and flag its join.
     final_lines = final.splitlines()
+    disagreed = set()
+    if notes.get("overlap_conflicts"):
+        flat = lambda text: " ".join(text.split())
+        for part in cleaned:
+            rows = part.split("\n")
+            mapping = verify._line_map(part, final, carry_replacements=True)
+            for i, j in enumerate(mapping):
+                if j is None and i and mapping[i - 1] is not None:
+                    j = mapping[i - 1] + 1
+                    after = mapping[i + 1] if i + 1 < len(mapping) else None
+                    if j >= len(rows) or (j + 1 < len(rows) and after != j + 1) or (j + 1 >= len(rows) and after is not None):
+                        j = None
+                    elif j is not None and flat(final_lines[i]).startswith(flat(rows[j])):
+                        j = None
+                if (j is not None and final_lines[i].strip() and rows[j].strip() and "[CUT OFF]" not in final_lines[i] + rows[j]
+                        and flat(final_lines[i]) != flat(rows[j])):
+                    disagreed.add(i)
     for context in notes.get("overlap_conflicts", []):
-        for i in range(len(context) - 1, len(final_lines)):
-            if [l.strip() for l in final_lines[i - len(context) + 1:i + 1]] == context:
+        hits = [i for i in range(len(context) - 1, len(final_lines))
+                if [l.strip() for l in final_lines[i - len(context) + 1:i + 1]] == list(context)]
+        ordinal = getattr(context, "ordinal", 0)
+        for i in (hits[ordinal:ordinal + 1] or hits[:1]):
+            if i in disagreed:
                 notes["line_statuses"][i] = "mismatch"
     return final, parts, notes, statuses
+
+
+def _drop_margin_offset(raw_parts, metas):
+    """A click placed one column left of the text leaves every line one space too far right. Source files have
+    something at column one (a label, a comment, a declaration), so a whole capture whose leftmost line sits at
+    exactly column two is that click offset. Fixed-format sources start at column 6 or later and are untouched."""
+    shown = [m for m in metas if m]
+    clicked = [m for m in shown if (m.get('spacing') or {}).get('calibrated') is True and not (m.get('spacing') or {}).get('auto')]
+    if not clicked or len(clicked) < 0.8 * len(shown):
+        return raw_parts
+    body = [l for r in raw_parts for l in r.split('\n') if l.strip() and '[CUT OFF]' not in l and '\t' not in l]
+    indents = [len(l) - len(l.lstrip(' ')) for l in body]
+    if len(body) < 20 or sum(i == 0 for i in indents) > 0.02 * len(indents) or sum(i == 1 for i in indents) < 3:
+        return raw_parts
+    return ['\n'.join(l[1:] if l.startswith(' ') and l.strip() and '[CUT OFF]' not in l else l for l in r.split('\n'))
+            for r in raw_parts]
+
+
+class _Context(list):
+    ordinal = 0
+
+
+_OWNER = _re.compile(r"(?:\d{2,}-[\w-]+\.|[\w$#@.-]+:\s*(?:PROC\b.*)?|[\w-]+\s+BEGSR)", _re.I)
 
 
 def _conflict_context(lines, at):
     """Keep the owning paragraph in a warning so repeated statements don't inherit it."""
     start = max(0, at - 5)
-    for index in range(at, -1, -1):
-        if _re.fullmatch(r"\d{2,}-[\w-]+\.", lines[index].strip()):
+    for index in range(at, max(-1, at - 60), -1):
+        if _OWNER.fullmatch(lines[index].strip()):
             start = index
             break
-    return [line.strip() for line in lines[start:at + 1]]
+    context = _Context(line.strip() for line in lines[start:at + 1])
+    size = len(context)
+    context.ordinal = sum(1 for i in range(size - 1, at)
+                          if [l.strip() for l in lines[i - size + 1:i + 1]] == list(context))
+    return context
 
 
 def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8, prefer=frozenset(), notes=None) -> "list | None":
@@ -1116,7 +1273,8 @@ def _anchored_frame(merged, incoming, prefer, notes):
     sticky = _re.compile(r"(?:[\w-]+:\s*(?:PROC|PROCEDURE)\b.*|DCL\s+1\s+\w+[,;]?|SELECT\s*\(.*)", _re.I)
     candidates = []
     for offset, anchor in enumerate(new):
-        if len(anchor) < 12 or sum(c.isalnum() for c in anchor) < 6 or old.count(anchor) != 1 or new.count(anchor) != 1:
+        if ((len(anchor) < 12 and not sticky.fullmatch(anchor)) or sum(c.isalnum() for c in anchor) < 6
+                or old.count(anchor) != 1 or new.count(anchor) != 1):
             continue
         pos = old.index(anchor)
         if pos < max(0, len(old)-100):
@@ -1244,6 +1402,28 @@ def _upgrade_cut(merged: list, b: list) -> list:
     return out
 
 
+def _bridge(merged: list, incoming: list):
+    """A screenshot added later can fill the gap where two screens never overlapped: it holds the line that starts the
+    far side of the gap, and ends on the line that follows it. Returns (merged, resolved_break) or None."""
+    norm = lambda line: line.replace('[CUT OFF]', '').strip()
+    inc = [norm(l) for l in incoming]
+    for b in range(1, len(merged) - 2):
+        if merged[b].strip() or not merged[b-1].strip() or not merged[b+1].strip():
+            continue
+        head, after = norm(merged[b+1]), norm(merged[b+2])
+        if len(head) < 4 or len(after) < 4 or inc.count(head) != 1:
+            continue
+        h = inc.index(head)
+        if h < 1:
+            continue
+        ends = [j for j in range(h+1, len(inc)) if inc[j] and after.startswith(inc[j]) and (inc[j] == after or '[CUT OFF]' in incoming[j])]
+        if not ends:
+            continue
+        j = ends[-1]
+        return merged[:b] + incoming[:j] + merged[b+2:], (merged[b-1].rstrip(), merged[b+1].rstrip())
+    return None
+
+
 def stitch_parts(parts: list) -> str:
     """Join per-image text, merging the overlap between consecutive chunks so
     scroll captures don't repeat their shared lines."""
@@ -1253,12 +1433,19 @@ def stitch_parts(parts: list) -> str:
 def _stitch(parts: list, prefer, notes: dict) -> str:
     from core.verify import sideways_merge_ex, sideways_views
     frames = []
-    for part in parts:
+    for k, part in enumerate(parts):
         lines = part.split("\n")
         while lines and not lines[0].strip():
             lines.pop(0)
         while lines and not lines[-1].strip():
             lines.pop()
+        # a row clipped by the top or bottom of a screenshot is only a marker; the neighbouring screenshot shows it
+        # whole, so it is dropped unless it is the very start or end of the capture
+        if len(parts) > 1:
+            while len(lines) > 1 and k < len(parts) - 1 and lines[-1].strip() == "[CUT OFF]":
+                lines.pop()
+            while len(lines) > 1 and k > 0 and lines[0].strip() == "[CUT OFF]":
+                lines.pop(0)
         if lines:
             frames.append(lines)
     # screens taken after scrolling right show pieces of lines: stitch the whole-line screens first, then join the
@@ -1298,6 +1485,11 @@ def _stitch(parts: list, prefer, notes: dict) -> str:
             stitched = _anchored_frame(merged, lines, prefer, notes)
         if stitched is None:
             stitched = _prepend(merged, lines)   # a screenshot added later can show an earlier part of the file
+        if stitched is None:
+            bridged = _bridge(merged, lines)
+            if bridged is not None:
+                stitched = bridged[0]
+                notes["breaks"] = [x for x in notes.get("breaks", []) if tuple(x) != bridged[1]]
         if stitched is None:
             # no overlap with anything read so far: lines between these two screens may never have been on screen
             prev = next((l for l in reversed(merged) if l.strip()), "")

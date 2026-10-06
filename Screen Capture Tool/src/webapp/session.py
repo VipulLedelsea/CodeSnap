@@ -39,7 +39,37 @@ class SessionManager:
         self._pending = None
         self.program = None
         self._mode = (False, False, None)
-        self._settings = capture_settings()
+        self._settings = self._load_saved()
+
+    @staticmethod
+    def _saved_path():
+        return PROJECT / 'captures' / '.last_area.json'
+
+    def _load_saved(self):
+        try:
+            saved = json.loads(self._saved_path().read_text())
+            settings = capture_settings(saved.get('region'), saved.get('display'))
+            if saved.get('spacing') and settings['region']:
+                from core.spacing import validate_profile
+                settings['spacing'] = validate_profile(saved['spacing'])
+            return settings
+        except (OSError, ValueError, TypeError):
+            return capture_settings()
+
+    def _save(self):
+        path = self._saved_path()
+        try:
+            if not self._settings.get('region'):
+                path.unlink(missing_ok=True)
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._settings))
+        except OSError:
+            pass
+
+    def saved(self):
+        return {'region': ','.join(str(x) for x in self._settings['region']) if self._settings.get('region') else None,
+                'display': self._settings.get('display'), 'margin': bool(self._settings.get('spacing'))}
 
     def configure(self, region=None, display=None, spacing=_UNSET):
         settings = capture_settings(region, display)
@@ -52,6 +82,7 @@ class SessionManager:
             from core.spacing import validate_profile
             settings['spacing']=validate_profile(spacing)
         self._settings = settings
+        self._save()
         if self.running():
             directory = PROJECT / 'captures'
             directory.mkdir(parents=True, exist_ok=True)

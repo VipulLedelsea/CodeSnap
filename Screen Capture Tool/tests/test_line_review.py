@@ -77,9 +77,9 @@ def test_confirmation_is_audited_undoable_and_keeps_unrelated_warnings(reviewed)
     assert store.artifact(aid)['transcription'] == SOURCE
     assert hashlib.sha256(path.read_bytes()).hexdigest() == checksum
     flags = store.verification(aid)['flags']
-    assert len(flags) == 2
+    assert len(flags) == 1
     assert any(f['line'] == 21 for f in flags)
-    assert any(f['line'] == 20 and f['reason'] == REASONS['break'] for f in flags)
+    assert not any(f['line'] == 20 for f in flags)
     assert deepdive.current_concerns(store, store.artifact(aid)) == [{'line': 21, 'reason': 'wrong character'}]
     correction = store.corrections()[0]
     assert correction['op'] == 'artifact.confirm_line'
@@ -166,4 +166,25 @@ def test_confirmation_rechecks_source_and_completes_review_with_separate_gap(rev
     assert answer['review_status'] == 'completed'
     assert store.artifact(aid)['validation_tool'] != 'stale checker'
     assert 'stale source error' not in store.artifact(aid)['validation_errors']
-    assert answer['remaining_issues'] == [{'line': 20, 'text': d['old_text'], 'reasons': [REASONS['break']]}]
+    assert answer['remaining_issues'] == []
+
+
+def test_compile_errors_do_not_create_review_questions():
+    from core.model import line_review
+    class S:
+        def verification(self, _): return {"flags": []}
+        def get_meta(self, _): return {}
+    art = {"id": 1, "transcription": "A\nB\nC", "validation_ok": 0, "validation_errors": "x.cbl:2: error"}
+    assert line_review.items(S(), art) == []
+
+
+def test_gap_only_line_is_asked_as_a_gap_and_marked_missing(reviewed):
+    from webapp import server
+    store, aid, _ = reviewed
+    client = TestClient(server.app)
+    base = f'/api/programs/{store.info["slug"]}/artifacts/{aid}/review/20'
+    d = client.get(base).json()
+    assert d['gap'] is True
+    r = client.post(base + '/missing', json={'text_hash': d['text_hash']})
+    assert r.status_code == 200, r.text
+    assert any(f['line'] == 20 and f['reason'] == REASONS['break'] for f in store.verification(aid)['flags'])
