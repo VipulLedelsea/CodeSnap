@@ -70,7 +70,7 @@ BG_WORKERS = int(os.environ.get("CODESNAP_WORKERS", "12" if os.environ.get("CODE
 DUP_THRESHOLD = 3                 # perceptual-hash distance treated as a near-duplicate
 MAX_FIX_ITERS = 3                 # max auto-fix passes when a code check fails
 BURST_INTERVAL = 0.8              # seconds between burst captures
-BURST_IDLE_STOP = 10.0            # stop after this many seconds with no new frame
+BURST_IDLE_STOP = 0.0             # stop after this many seconds with no new frame
 BURST_KEEP_DIST = 6              # phash distance above which a frame counts as 'changed'
 BURST_MAX_FRAMES = int(os.environ.get("CODESNAP_BURST_MAX_FRAMES", "5000"))   # effectively unlimited; the idle-stop and Esc end a burst
 BURST_MAX_WAIT = 20              # stop if scrolling never starts (still 1 frame)
@@ -373,6 +373,8 @@ class App:
         capture_error = None
         last_change = time.monotonic()
         started = time.monotonic()
+        rejected = 0
+        stop_reason = "stopped manually"
         while self.running and kept < BURST_MAX_FRAMES:
             if self._own_window_in_front():
                 time.sleep(BURST_INTERVAL)
@@ -387,8 +389,11 @@ class App:
             except Exception as exc:  # noqa: BLE001
                 print(f"Capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
                 capture_error = f"Screen capture stopped unexpectedly: {exc}. Recapture the file to confirm completeness."
+                stop_reason = "screen capture error"
                 break
             changed = (last_frame is None) or content_changed(last_frame, data)
+            if not changed:
+                rejected += 1
             if changed:
                 try:
                     out = next_png_path(session_dir)
@@ -428,15 +433,18 @@ class App:
             if self.idle_stop > 0:
                 idle = time.monotonic() - last_change
                 if kept >= 2 and idle >= self.idle_stop:
+                    stop_reason = f"no screen change for {self.idle_stop:g}s"
                     break
                 if kept < 2 and (time.monotonic() - started) >= BURST_MAX_WAIT:
+                    stop_reason = "scrolling never started"
                     break
             # manual mode (idle_stop <= 0): never auto-stop — ends via Cmd+Shift+1 or the frame cap
             time.sleep(BURST_INTERVAL)
         status.publish(
             "Only one screenshot saved. If you scrolled, check the selected display and code area, "
             "then recapture; choose manual stop for a long file." if kept == 1 else
-            f"Scrolling stopped — {kept} unique frame(s), analysing", "info")
+            f"Capture ended ({stop_reason}) — {kept} unique frame(s), {rejected} skipped as unchanged, analysing", "info")
+        print(f"[burst] ended: {stop_reason}; kept {kept}, skipped {rejected} unchanged")
         from core.notify import notify
         notify("CodeSnap", f"Capture complete — {kept} frame(s), analysing")
         artifact_id = self._register_capture(session_dir)
