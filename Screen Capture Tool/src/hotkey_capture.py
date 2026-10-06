@@ -72,7 +72,7 @@ MAX_FIX_ITERS = 3                 # max auto-fix passes when a code check fails
 BURST_INTERVAL = 0.8              # seconds between burst captures
 BURST_IDLE_STOP = 3.0             # stop after this many seconds with no new frame
 BURST_KEEP_DIST = 6              # phash distance above which a frame counts as 'changed'
-BURST_MAX_FRAMES = 80            # safety cap on burst frames (raised for longer files)
+BURST_MAX_FRAMES = int(os.environ.get("CODESNAP_BURST_MAX_FRAMES", "5000"))   # effectively unlimited; the idle-stop and Esc end a burst
 BURST_MAX_WAIT = 20              # stop if scrolling never starts (still 1 frame)
 
 #Hashing of images for near-duplicate detection. If difference is below a threshold, the capture is skipped.
