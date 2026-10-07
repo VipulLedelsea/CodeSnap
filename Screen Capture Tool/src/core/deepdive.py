@@ -429,11 +429,45 @@ def _norm(s):
     return re.sub(r"\s+", " ", s or "").strip()
 
 
-def listing(text, bad=()):
+def listing(text, bad=(), start=1, end=None):
     lines = text.split("\n")
     w = len(str(len(lines)))
     bad = set(bad)
-    return "\n".join(f"{'⚠' if i in bad else ' '}{str(i).rjust(w)}| {l}" for i, l in enumerate(lines, 1))
+    end = len(lines) if end is None else min(end, len(lines))
+    return "\n".join(f"{'⚠' if i in bad else ' '}{str(i).rjust(w)}| {lines[i - 1]}" for i in range(max(start, 1), end + 1))
+
+
+# A long file is read in windows so no answer outgrows the output limit. Files up to 1.25 windows are read whole.
+SEGMENT_LINES = int(os.environ.get("CODESNAP_SEGMENT_LINES", "600"))
+SEGMENT_CONTEXT = 30
+REVIEW_BATCH = 80
+MIN_SPLIT = 120
+
+
+def segments(n_lines, size=None):
+    size = size or SEGMENT_LINES
+    if n_lines <= size * 1.25:
+        return [(1, max(n_lines, 1))]
+    parts = -(-n_lines // size)
+    step = -(-n_lines // parts)
+    return [(1 + i * step, min((i + 1) * step, n_lines)) for i in range(parts)]
+
+
+def _merge_reads(reads):
+    """One result from the windows of a file: facts and lists joined, first real answer for the single-valued fields."""
+    out = {"facts": [], "unknowns": [], "capture_concerns": [], **{k: [] for k in ROLLUPS}}
+    for r in reads:
+        for k in ("purpose", "file_role", "run_mode"):
+            if r.get(k) and r[k] != "not shown" and not out.get(k):
+                out[k] = r[k]
+        for k in ("facts", "unknowns", "capture_concerns", *ROLLUPS):
+            seen = {json.dumps(x, sort_keys=True, default=str) for x in out[k]}
+            for x in r.get(k) or []:
+                key = json.dumps(x, sort_keys=True, default=str)
+                if key not in seen:
+                    seen.add(key)
+                    out[k].append(x)
+    return out
 
 
 def _tool(message, name):
@@ -615,13 +649,38 @@ def analyse_file(store, client, art, model=None, review=True, review_model=None,
                    "the code. Record it as a finding with an exact quote only if the code supports it, correct it if it is "
                    "only partly right, and leave it out if the code does not show it. Then do your own full review; do not "
                    "limit yourself to these claims.\nClaims:\n" + "\n".join("- " + c for c in claims) + "\n")
-    msg, ms = _analysis_call(store, client, art["id"], "deepdive", model, header + "\n" + listing(text, q0["bad_lines"]))
-    _log(store, "deepdive", art["id"], model, msg, ms)
-    if getattr(msg,'stop_reason',None)=='max_tokens':
-        raise ValueError('Detailed source analysis was truncated; review remains incomplete.')
-    data = _tool(msg, ANALYSIS_TOOL["name"])
-    if data is None or not isinstance(data.get("facts"), list):
-        raise ValueError('Detailed source analysis did not return its required result; review remains incomplete.')
+    n_lines = len(text.split("\n"))
+
+    def read_window(a, b, step, only=None):
+        """One call for lines a-b; a window whose answer is cut off is read again as two halves."""
+        part = ""
+        if (a, b) != (1, n_lines):
+            part = (f"\nThis call covers lines {a}-{b} of {n_lines}. Review ONLY those lines; the numbered lines outside them "
+                    f"are context so you can follow the code, and any fact you record must cite lines inside {a}-{b}.\n")
+        if only:
+            part += (f"A first pass recorded findings for the rest of the file. Within these lines, these have NO findings yet: "
+                     f"{', '.join(only)}. Review ONLY those lines (the rest is context) and record everything they show, including defects.\n")
+        content = header + part + "\n" + listing(text, q0["bad_lines"], a - SEGMENT_CONTEXT, b + SEGMENT_CONTEXT) if part else \
+            header + "\n" + listing(text, q0["bad_lines"])
+        msg_, ms_ = _analysis_call(store, client, art["id"], step, model, content)
+        _log(store, step, art["id"], model, msg_, ms_)
+        if getattr(msg_, "stop_reason", None) == "max_tokens":
+            if b - a + 1 <= MIN_SPLIT:
+                raise ValueError('Detailed source analysis was truncated; review remains incomplete.')
+            mid = (a + b) // 2
+            return read_window(a, mid, step, only) + read_window(mid + 1, b, step, only)
+        d_ = _tool(msg_, ANALYSIS_TOOL["name"])
+        if d_ is None or not isinstance(d_.get("facts"), list):
+            raise ValueError('Detailed source analysis did not return its required result; review remains incomplete.')
+        if (a, b) != (1, n_lines):     # a fact belongs to the window its first line is in
+            d_["facts"] = [f for f in d_["facts"] if isinstance(f, dict) and isinstance(f.get("lines"), list) and f["lines"]
+                           and isinstance(f["lines"][0], int) and a <= f["lines"][0] <= b]
+        return [d_]
+
+    reads = []
+    for a_, b_ in segments(n_lines):
+        reads += read_window(a_, b_, "deepdive")
+    data = reads[0] if len(reads) == 1 else _merge_reads(reads)
     lines_ = text.split("\n")
     concerns = [c for c in data.get("capture_concerns") or [] if isinstance(c, dict) and isinstance(c.get("line"), int)
                 and 0 < c["line"] <= len(lines_) and lines_[c["line"] - 1].strip()]
@@ -629,14 +688,15 @@ def analyse_file(store, client, art, model=None, review=True, review_model=None,
     kept, corrected, rejected, unverifiable = check_facts(data.get("facts"), text, q["bad_lines"])
     gaps = uncovered(text, kept + unverifiable, q["bad_lines"])
     if gaps:
-        more_msg, mms = _analysis_call(store, client, art["id"], "deepdive_gaps", model,
-                              header + f"\nA first pass recorded findings for the rest of the file. These lines have NO findings "
-                                       f"yet: {', '.join(gaps)}. Review ONLY those lines (the rest is context) and record "
-                                       f"everything they show, including defects.\n\n" + listing(text, q["bad_lines"]))
-        _log(store, "deepdive_gaps", art["id"], model, more_msg, mms)
-        if getattr(more_msg,'stop_reason',None)=='max_tokens':
-            raise ValueError('Detailed source gap analysis was truncated; review remains incomplete.')
-        more = _tool(more_msg, ANALYSIS_TOOL["name"]) or {}
+        def run_of(g):
+            lo, hi = (int(x) for x in re.split("[–-]", g))
+            return lo, hi
+        more_reads = []
+        for a_, b_ in segments(n_lines):
+            inside = [g for g in gaps if a_ <= run_of(g)[0] <= b_]
+            if inside:
+                more_reads += read_window(a_, b_, "deepdive_gaps", only=inside)
+        more = _merge_reads(more_reads)
         seen = {(f["category"], _norm(f["quote"])) for f in kept}
         k2, c2, r2, u2 = check_facts(more.get("facts"), text, q["bad_lines"])
         kept += [f for f in k2 if (f["category"], _norm(f["quote"])) not in seen]
@@ -649,14 +709,17 @@ def analyse_file(store, client, art, model=None, review=True, review_model=None,
     if review and kept:
         for i, f in enumerate(kept, 1):
             f["id"] = i
-        payload = "\n".join(f"{f['id']}. [{f['category']}] {f['statement']} (lines {f['lines'][0]}-{f['lines'][1]})" for f in kept)
-        rmsg, rms = _call(client, review_model, REVIEW_SYSTEM, REVIEW_TOOL,
-                          context + f"File: {art['name']}\n\n{listing(text, q['bad_lines'])}\n\nFindings:\n{payload}")
-        _log(store, "deepdive_review", art["id"], review_model, rmsg, rms)
-        if getattr(rmsg,'stop_reason',None)=='max_tokens':
-            raise ValueError('Independent source review was truncated; review remains incomplete.')
-        verdicts = {int(v["id"]): v for v in (_tool(rmsg, REVIEW_TOOL["name"]) or {}).get("verdicts") or []
-                    if isinstance(v, dict) and str(v.get("id", "")).isdigit()}
+        verdicts = {}
+        for i0 in range(0, len(kept), REVIEW_BATCH):
+            batch = kept[i0:i0 + REVIEW_BATCH]
+            payload = "\n".join(f"{f['id']}. [{f['category']}] {f['statement']} (lines {f['lines'][0]}-{f['lines'][1]})" for f in batch)
+            rmsg, rms = _call(client, review_model, REVIEW_SYSTEM, REVIEW_TOOL,
+                              context + f"File: {art['name']}\n\n{listing(text, q['bad_lines'])}\n\nFindings:\n{payload}")
+            _log(store, "deepdive_review", art["id"], review_model, rmsg, rms)
+            if getattr(rmsg,'stop_reason',None)=='max_tokens':
+                raise ValueError('Independent source review was truncated; review remains incomplete.')
+            verdicts.update({int(v["id"]): v for v in (_tool(rmsg, REVIEW_TOOL["name"]) or {}).get("verdicts") or []
+                             if isinstance(v, dict) and str(v.get("id", "")).isdigit()})
         final = []
         for f in kept:
             v = verdicts.get(f["id"])
