@@ -56,7 +56,7 @@ def test_html_is_self_contained_and_masks_secrets(program):
     page = html_report(program, today=TODAY)
     assert page.startswith("<!doctype html>") and "data:image/png;base64," in page
     assert "<script src" not in page and not re.search(r"""(?:src|href)=["']https?://""", page)
-    assert page.count("<svg") >= 4 and "Executive summary" in page and "Ledelsea" in page
+    assert page.count("<svg") >= 4 and "Application summary" in page and "Ledelsea" in page
     for secret in ("Summer2009!", "db2admin", "AIDPW01", "sa2005", "admin1"):
         assert secret not in page
 
@@ -66,12 +66,12 @@ def test_docx_opens_with_images_and_tables(program):
     d = docx.Document(io.BytesIO(data))
     text = "\n".join(p.text for p in d.paragraphs)
     cells = "\n".join(c.text for t in d.tables for row in t.rows for c in row.cells)
-    assert "SFAID Payments" in cells and "1. Executive summary" in text and "12. Modernization options" in text
+    assert "SFAID Payments" in cells and "1. Application summary" in text and "12. Modernization options" in text
     assert len(d.tables) >= 40 and len(d.inline_shapes) >= 2
     assert "How to use this template" not in text and "Completion guidance" not in text
     assert not re.search(r"\[[A-Z][^\]]{1,80}\]", text + cells)          # every template placeholder is filled
     assert "Rated on the weakest" in cells and "out of 100" not in cells and "OI-001-01" in cells  # reasons, one scale
-    assert 'does not establish source completeness' in text + cells
+    assert 'Analysis covers visible material only' in text + cells
     for banned in ("screenshot", "captured", " scan ", "MNIT", "Minnesota", "Ledelsea should"):
         assert banned not in (text + cells), banned
     assert not re.search(r"\bMDE\b(?![._])", text + cells)
