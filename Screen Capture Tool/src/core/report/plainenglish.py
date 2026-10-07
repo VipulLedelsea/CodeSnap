@@ -49,7 +49,7 @@ REWRITES = (
 )
 
 PHRASES = (
-    (r"\bTo confirm \(read only in the supplied code\)", "Unknown (only the code was read)"),
+    (r"\bTo confirm \(read only in the supplied code\)", "<insert information here> (only the code was read)"),
     (r"\bTo confirm \(([^)]*)\)", r"Not confirmed (\1)"),
     (r"\bto confirm \(([^)]*)\)", r"not confirmed (\1)"),
     (r"\b(is|are) to confirm\b", "must be confirmed"),

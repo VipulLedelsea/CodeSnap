@@ -134,7 +134,8 @@ def test_analyse_file_end_to_end_with_review(store, monkeypatch):
                           fact("Approve sends an email to the district", [26, 26], "SendMail(district)", cat="interface")],
                 "unknowns": [{"what": "PaymentService is not provided", "line": 11}]}
     review = {"verdicts": [{"id": 1, "verdict": "supported"},
-                           {"id": 2, "verdict": "partly", "corrected": "Approve has no [Authorize] attribute on the method or class"},
+                           {"id": 2, "verdict": "partly", "corrected": "Approve has no [Authorize] attribute on the method or class",
+                            "corrected_quote": "public ActionResult Approve"},
                            {"id": 3, "verdict": "unsupported", "why": "test"}]}
     client = FakeClient(analysis, review)
     res = DD.analyse_file(store, client, a)
@@ -293,15 +294,27 @@ def test_the_analysis_request_says_up_front_that_facts_are_required(store):
     assert "The 'facts' list is required" in client.calls[0]["messages"][0]["content"]
 
 
-def test_deep_review_defaults_to_sonnet_with_a_haiku_review(store, monkeypatch):
+def test_deep_review_defaults_to_sonnet_for_both_passes(store, monkeypatch):
     monkeypatch.delenv("CODESNAP_DEEP_MODEL", raising=False)
     monkeypatch.delenv("CODESNAP_DEEP_REVIEW_MODEL", raising=False)
     a = art(store, "AidPaymentController.cs")
     analysis = {"purpose": "x", "facts": [fact("Approve updates dbo.PaymentBatch status to 'A'", [28, 28], "SET Status = 'A'", cat="data_write")]}
     client = FakeClient(analysis, {"verdicts": [{"id": 1, "verdict": "supported"}]})
     res = DD.analyse_file(store, client, a)
-    assert client.calls[0]["model"] == "claude-sonnet-5" and client.calls[-1]["model"] == "claude-haiku-4-5"
-    assert res["model"] == "claude-sonnet-5" and res["review_model"] == "claude-haiku-4-5"
+    assert client.calls[0]["model"] == "claude-sonnet-5" and client.calls[-1]["model"] == "claude-sonnet-5"
+    assert res["model"] == "claude-sonnet-5" and res["review_model"] == "claude-sonnet-5"
+
+
+def test_a_partial_correction_without_a_quote_is_rejected(store, monkeypatch):
+    monkeypatch.setattr(DD, 'NO_THINKING', set())
+    a = art(store, "AidPaymentController.cs")
+    analysis = {"purpose": "x", "facts": [fact("Approve has no [Authorize] attribute", [24, 25], "public ActionResult Approve",
+                                                cat="security", severity="high")]}
+    for verdict in ({"id": 1, "verdict": "partly", "corrected": "Approve has no [Authorize] on the method"},
+                    {"id": 1, "verdict": "partly", "corrected": "Approve has no [Authorize] on the method", "corrected_quote": "not in the file"},
+                    {"id": 1, "verdict": "partly"}):
+        res = DD.analyse_file(store, FakeClient(analysis, {"verdicts": [verdict]}), a)
+        assert res["facts"] == [] and res["rejected"] == 1
 
 
 def test_one_environment_variable_returns_the_whole_deep_review_to_opus(store, monkeypatch):

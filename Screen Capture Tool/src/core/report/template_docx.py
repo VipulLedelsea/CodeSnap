@@ -25,6 +25,18 @@ from .settings import app_number, get as get_settings
 
 TEMPLATE = Path(__file__).with_name("assets") / "Application_Assessment_Report_Template.docx"
 UNKNOWN = "Unknown"
+PLACEHOLDER = "<insert {} information here>"
+
+
+def _specific(label):
+    t = re.sub(r"\s*\([^)]*\d[^)]*\)", "", " ".join((label or "").split())).strip(" :-")
+    t = t[:70].rstrip()
+    return (t[:1].lower() + t[1:]) if t[1:2].islower() else t
+
+
+def placeholder(label=""):
+    t = _specific(label)
+    return PLACEHOLDER.format(t) if t else "<insert missing information here>"
 log = logging.getLogger(__name__)
 INK = RGBColor(0x1F, 0x29, 0x37)
 SEV = ["critical", "high", "medium", "low", "info"]
@@ -77,7 +89,7 @@ class Doc:
 
     def unknown(self, what, section, owner="Business owner"):
         self.open_items.append((what, section, owner))
-        return UNKNOWN
+        return placeholder(what)
 
     def new_para(self, text, after_el, bullet=False, italic=False, bold=None):
         el = deepcopy(self.bullet_proto if bullet and self.bullet_proto is not None else self.proto)
@@ -361,7 +373,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
             techs.append(t)
     sessions = store._all("SELECT MIN(started) AS a FROM capture_session") if _has_col(store, "capture_session", "started") else []
     start = (sessions[0]["a"] if sessions and sessions[0]["a"] else store.info.get("created") or "")[:10]
-    period = f"{start or UNKNOWN} to {today.isoformat()}"
+    period = f"{start or placeholder('engagement start date')} to {today.isoformat()}"
     from . import architecture as A_
     AM = A_.build(store, a, techs)
     personal = EV.personal_entities(store, findings)
@@ -520,7 +532,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                             "data migration" if multi_copies else "") if x]
     no_path_names = sorted({f"{t.get('name')}" for t in techs if t.get("status") in ("eol", "legacy")
                             and any(k.lower() in (t.get("name") or "").lower() for k in OP.NO_PATH)})
-    OPTS = OP.scores({"no_path": no_path_names, "platforms": len(HP), "program_code": PR["code"],
+    OPTS = OP.scores({"no_path": no_path_names, "platforms": len(HP), "program_code": PR["code"], "fixes": len(CF),
                       "posting": sum(1 for c in CD if c["code"] == "consolidate") + (1 if any(c["code"] == "retain" and "Batch" in
                                      next((x["role"] for x in AM["components"] if x["name"] == c["name"]), "") for c in CD) else 0)})
     if OPTS[0][0].split(" (")[0].lower() != PR["label"].split(" (")[0].lower():
@@ -2247,9 +2259,30 @@ def _header_footer(doc, name):
                         r.text = r.text.replace("[Application Name]", name)
 
 
+def _label_unknowns(doc):
+    """A cell that still says Unknown becomes an insert prompt named after its row and column."""
+    lead = re.compile(r"^Unknown\b")
+    for table in doc.d.tables:
+        rows = table.rows
+        if len(rows) < 2:
+            continue
+        head = [c.text.strip() for c in rows[0].cells]
+        for row in rows[1:]:
+            cells = row.cells
+            for i, cell in enumerate(cells):
+                text = cell.text.strip()
+                if not lead.match(text):
+                    continue
+                row_label = cells[0].text.strip() if i else ""
+                col_label = head[i] if i < len(head) and head[i] != row_label else ""
+                label = row_label if len(cells) == 2 else " ".join(x for x in (_specific(row_label), _specific(col_label)) if x)
+                set_cell(cell, lead.sub(placeholder(label or col_label), text, count=1))
+
+
 def _no_placeholders(doc):
-    """Anything still in [brackets] is a template placeholder nobody filled: say Unknown instead."""
+    """Anything still in [brackets] is a template placeholder nobody filled: ask for the specific information."""
+    _label_unknowns(doc)
     rx = re.compile(r"\[[A-Z][^\]]{1,80}\]")
     for p in doc.body.iter(qn("w:t")):
         if p.text and rx.search(p.text) and "CUT OFF" not in p.text:
-            p.text = rx.sub(UNKNOWN, p.text)
+            p.text = rx.sub(lambda m: placeholder(m.group(0)[1:-1]), p.text)

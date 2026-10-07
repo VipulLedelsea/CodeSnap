@@ -42,6 +42,13 @@ def _draft_bytes(store):
     return f.read_bytes() if f.exists() else None
 
 
+def _final_bytes(store):
+    from core import report
+    out = Path(report.cached_package(store)["dir"])
+    f = out / f"{store.info['slug']}_assessment_report.docx"
+    return f.read_bytes() if f.exists() else None
+
+
 def _job(store, state, **extra):
     store.set_meta("pipeline_job", {**(store.get_meta("pipeline_job") or {}), "state": state,
                                     "updated": time.strftime("%Y-%m-%dT%H:%M:%S"), **extra})
@@ -120,6 +127,15 @@ def _run_staged(store, client, progress=None, report=True) -> dict:
             final_pkg = _build(store, draft=not complete)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"final report: {type(exc).__name__}: {exc}"[:240])
+    inconsistencies = []
+    final_docx = _final_bytes(store) if final_pkg else None
+    if final_docx:
+        try:
+            from core import report_consistency
+            inconsistencies = report_consistency.run(store, client, final_docx, model=FINAL_MODEL)["items"]
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"report consistency: {type(exc).__name__}: {exc}"[:240])
     return {"draft_files": first["analysed"], "final_files": second["analysed"], "errors": errors,
+            "inconsistencies": inconsistencies,
             "rescan": deepdive.rescan_requests(store), "complete": complete,
             "report_review": store.get_meta("report_review") and len(store.get_meta("report_review")), "draft_report": bool(draft_pkg), "final_report": bool(final_pkg)}

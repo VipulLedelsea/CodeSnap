@@ -68,7 +68,7 @@ def test_report_review_verdicts_filter_report(store, monkeypatch):
         RR.claim_key("Real debt"): {"verdict": "partly", "correction": "x"}}})
     v = RR.verdicts(store)
     assert v[RR.claim_key("Fake risk")]["verdict"] == "unsupported"
-    assert "1 not shown" in RR.summary_line(store)
+    assert "1 contradicted or not shown" in RR.summary_line(store)
 
 
 def test_unfinished_run_is_found_for_resume(store, tmp_path):

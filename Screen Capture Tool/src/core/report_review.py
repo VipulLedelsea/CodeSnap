@@ -19,22 +19,57 @@ TOOL = {
         "quote": {"type": "string", "description": "Exact text copied from the source that decides the verdict"},
         "lines": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
         "correction": {"type": "string", "description": "What the code actually shows, when the claim is partly right"},
+        "absent_term": {"type": "string", "description": "For unsupported without a contradicting quote: a name, value or identifier the claim depends on that occurs nowhere in the file"},
+        "finding": {"type": "integer", "description": "Claims spanning files: number of the finding that proves, corrects or contradicts the claim"},
         "why": {"type": "string"}}, "required": ["id", "verdict"]}}}, "required": ["verdicts"]},
 }
 SYSTEM = """You check claims from a draft assessment report against the source code they cite.
 For each numbered claim decide:
 - supported: the code shows it. Copy an exact quote from the code that proves it.
 - partly: some of it holds. Say in `correction` what the code really shows, with an exact quote.
-- unsupported: the code contradicts it, or the behaviour it describes is not in the file. Quote the contradicting code if there is any.
+- unsupported: the code contradicts it (copy the contradicting code as the quote), or it depends on a specific name, value or identifier that occurs nowhere in the file (put that exact term, as written in the claim, in absent_term). If you can do neither, use cannot_check.
 - cannot_check: the claim is about something outside the code (staff, owners, tests that were not supplied, run schedules, deployed versions, data volumes). Never mark these unsupported.
 Lines marked with a warning sign were not read reliably; do not rest a verdict on them.
 Judge only what the code shows. Do not invent behaviour.
 Claims can be any statement the report makes about the program: what a file does, counts, dependencies, data flow, risks, recommendations that rest on code facts. Statements that are generic advice or about the people and process around the code are cannot_check."""
+PROGRAM_SYSTEM = """You check claims from a draft assessment report against findings that were already verified against the source code of several files. The findings are a partial list.
+For each numbered claim decide:
+- supported: the findings show it. Give the finding's number in `finding`.
+- partly: some of it holds. Say in `correction` what the findings show and give the finding's number in `finding`.
+- unsupported: a finding contradicts it. Give that finding's number in `finding` and say in `why` how it contradicts. If no finding contradicts it, use cannot_check.
+- cannot_check: the findings neither show nor contradict it, or it is about something outside the code (staff, owners, tests that were not supplied, run schedules, deployed versions, data volumes).
+Judge only what the findings show. Do not invent behaviour."""
 TABLES = (("Risk ID", "risk"), ("Debt ID", "debt"), ("Vuln ID", "vuln"))
 
 
 def claim_key(text) -> str:
     return hashlib.sha1(re.sub(r"\s+", " ", text or "").strip().lower().encode()).hexdigest()[:16]
+
+
+def _norm(text):
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _absent(term, claim, text):
+    t = _norm(term).lower()
+    return len(t) >= 4 and t in _norm(claim).lower() and t not in _norm(text).lower()
+
+
+def gate(v, claim, text=None, findings=0):
+    verdict = v.get("verdict", "cannot_check")
+    if verdict not in ("supported", "partly", "unsupported"):
+        return "cannot_check"
+    if text is None:
+        finding = v.get("finding")
+        return verdict if isinstance(finding, int) and 1 <= finding <= findings else "cannot_check"
+    if verdict == "unsupported":
+        return verdict if _quote_ok(v.get("quote"), text) or _absent(v.get("absent_term"), claim, text) else "cannot_check"
+    return verdict if _quote_ok(v.get("quote"), text) else "cannot_check"
+
+
+def claim_line(i, c):
+    para = (c.get("para") or "").strip()
+    return f"{i}. {c['text']}" + (f"\n   (paragraph: {para[:300]})" if para and para != c["text"] else "")
 
 
 def risk_text(title, comps):
@@ -64,12 +99,12 @@ def extract_claims(docx_bytes, file_names):
     names = sorted(file_names, key=len, reverse=True)
     out, seen = [], set()
 
-    def add(kind, cid, text, files):
+    def add(kind, cid, text, files, para=""):
         k = claim_key(text)
         if k in seen or not text:
             return
         seen.add(k)
-        out.append({"key": k, "kind": kind, "id": cid, "text": text, "files": files[:1]})
+        out.append({"key": k, "kind": kind, "id": cid, "text": text, "files": files, "para": para})
 
     plain = []
     for table in doc.tables:
@@ -97,7 +132,7 @@ def extract_claims(docx_bytes, file_names):
     for t in texts:
         for sent in sentences(t):
             if _keep(sent):
-                add("text", "", sent[:MAX_TEXT], _named(sent, names))
+                add("text", "", sent[:MAX_TEXT], _named(sent, names), t)
     return out
 
 
@@ -110,7 +145,7 @@ def _ask(store, client, model, art, claims):
     text = art.get("transcription") or ""
     q = D.capture_quality(store, art)
     body = (f"File: {art['name']}\nLanguage: {art.get('language') or 'unknown'}\n\n{D.listing(text, q['bad_lines'])}\n\nClaims:\n"
-            + "\n".join(f"{i}. {c['text']}" for i, c in enumerate(claims, 1)))
+            + "\n".join(claim_line(i, c) for i, c in enumerate(claims, 1)))
     msg, ms = D._call(client, model, SYSTEM, TOOL, body)
     D._log(store, "report_review", art["id"], model, msg, ms)
     got = {int(v["id"]): v for v in (D._tool(msg, TOOL["name"]) or {}).get("verdicts") or []
@@ -118,9 +153,7 @@ def _ask(store, client, model, art, claims):
     out = {}
     for i, c in enumerate(claims, 1):
         v = got.get(i) or {"verdict": "cannot_check"}
-        verdict = v.get("verdict", "cannot_check")
-        if verdict in ("supported", "partly") and not _quote_ok(v.get("quote"), text):
-            verdict = "cannot_check"
+        verdict = gate(v, c["text"], text=text)
         out[c["key"]] = {"verdict": verdict, "correction": (v.get("correction") or "")[:300], "why": (v.get("why") or "")[:300],
                          "file": art["name"], "lines": v.get("lines"), "id": c["id"], "kind": c["kind"]}
     return out
@@ -133,21 +166,19 @@ def _ask_program(store, client, model, claims):
     for k, r in dd.items():
         for f in (r.get("facts") or [])[:40]:
             lines = f.get("lines") or [0, 0]
-            facts.append(f"{names.get(k, k)} lines {lines[0]}-{lines[-1]}: {f.get('statement', '')}")
-    body = ("Source findings already checked against quotes in the code:\n" + "\n".join(facts[:600])
+            facts.append(f"[{len(facts) + 1}] {names.get(k, k)} lines {lines[0]}-{lines[-1]}: {f.get('statement', '')}")
+    facts = facts[:600]
+    body = ("Source findings already checked against quotes in the code:\n" + "\n".join(facts)
             + "\n\nClaims (these span several files; decide from the findings above):\n"
-            + "\n".join(f"{i}. {c['text']}" for i, c in enumerate(claims, 1)))
-    msg, ms = D._call(client, model, SYSTEM.replace("Copy an exact quote from the code that proves it.", "Cite the finding that proves it in `why`.")
-                      .replace("with an exact quote", ""), TOOL, body)
+            + "\n".join(claim_line(i, c) for i, c in enumerate(claims, 1)))
+    msg, ms = D._call(client, model, PROGRAM_SYSTEM, TOOL, body)
     D._log(store, "report_review", None, model, msg, ms)
     got = {int(v["id"]): v for v in (D._tool(msg, TOOL["name"]) or {}).get("verdicts") or []
            if isinstance(v, dict) and str(v.get("id", "")).isdigit()}
     out = {}
     for i, c in enumerate(claims, 1):
         v = got.get(i) or {}
-        verdict = v.get("verdict", "cannot_check")
-        if verdict == "unsupported":
-            verdict = "cannot_check"
+        verdict = gate(v, c["text"], findings=len(facts))
         out[c["key"]] = {"verdict": verdict, "correction": (v.get("correction") or "")[:300], "why": (v.get("why") or "")[:300],
                          "file": None, "lines": None, "id": c["id"], "kind": c["kind"]}
     return out
@@ -162,7 +193,7 @@ def run(store, client, report_docx, model=None) -> dict:
     claims = extract_claims(report_docx, list(arts))
     by_file, spanning = {}, []
     for c in claims:
-        (by_file.setdefault(c["files"][0], []) if c["files"] else spanning).append(c)
+        (by_file.setdefault(c["files"][0], []) if len(c["files"]) == 1 else spanning).append(c)
     verdicts, errors = {}, []
     with ThreadPoolExecutor(max_workers=12) as pool:
         jobs = [pool.submit(_ask, store, client, model, arts[n], cs[i:i + CHUNK])
@@ -192,9 +223,9 @@ def summary_line(store):
     c = {}
     for x in v.values():
         c[x["verdict"]] = c.get(x["verdict"], 0) + 1
-    return (f"Every statement in the draft report was re-read against the code: {c.get('supported', 0)} confirmed, "
-            f"{c.get('partly', 0)} partly right (corrected), {c.get('unsupported', 0)} not shown by the code (removed), "
-            f"{c.get('cannot_check', 0)} cannot be checked from code alone.")
+    return (f"{sum(c.values())} statements in the draft report were checked against the code: {c.get('supported', 0)} confirmed, "
+            f"{c.get('partly', 0)} partly right (corrected), {c.get('unsupported', 0)} contradicted or not shown by the code (removed), "
+            f"{c.get('cannot_check', 0)} could not be checked from the code alone (people, schedules, volumes or other files).")
 
 
 def apply_to_docx(document, store):

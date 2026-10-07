@@ -1,5 +1,5 @@
 """Per-program report details (client, engagement, IDs, reviewers). Nothing client-specific is built in: anything not
-entered is reported as "Unknown" and listed as an open item."""
+entered is reported as an "<insert … information here>" prompt and listed as an open item."""
 
 from core.diagrams.xmlsafe import xml_safe
 

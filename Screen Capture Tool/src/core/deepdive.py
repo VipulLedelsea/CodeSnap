@@ -19,11 +19,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-PROMPT_VERSION = "deepdive-v2-screen-formats"
+PROMPT_VERSION = "deepdive-v3-scope-rules"
 MAX_TOKENS = 20000   # the SDK refuses non-streamed calls much above this
 THINKING = 8000
 DEFAULT_DEEP_MODEL = "claude-sonnet-5"
-DEFAULT_REVIEW_MODEL = "claude-haiku-4-5"
+DEFAULT_REVIEW_MODEL = "claude-sonnet-5"
 CATEGORIES = ["purpose", "business_rule", "calculation", "data_read", "data_write", "interface", "control_flow",
               "error_handling", "security", "data_integrity", "defect", "dependency", "configuration", "ui"]
 SEVERITIES = ["high", "medium", "low", "info"]
@@ -37,7 +37,9 @@ reliably from the screen capture: do not base any fact only on them.
 
 Read EVERY line. Then call the record_analysis tool once with:
 
-purpose: what this file does, in two or three plain sentences, with line references like "(lines 5-40)".
+purpose: what this file does, in two or three plain sentences, with line references like "(lines 5-40)". Say how it
+runs: interactive when it displays or accepts screen input, batch when it reads files or parameters and writes
+output with no screen, a called routine, or "not shown" when the file does not settle it.
 
 facts: an exhaustive list. Cover every program section, paragraph, function or method; every file, table, record or
 screen read or written (with the fields where shown); every calculation, formula, constant, rate and threshold;
@@ -56,8 +58,8 @@ cases. Each fact has:
   - severity: for security, data_integrity and defect facts (high, medium, low or info)
 
 unknowns: things this file depends on but does not show (programs it calls, tables it uses whose definitions are
-not here, values set elsewhere), each with the line where it is referenced. Put anything you are unsure of here
-instead of in facts.
+not here, values set elsewhere), each with the line where it is referenced. Put what you cannot decide from this
+file here. A defect the code plainly shows is a fact even when other files are not visible.
 
 capture_concerns: ONLY lines whose text itself looks mis-read or cut off (characters that cannot be right, a
 statement visibly truncated mid-token, an unclosed quote or bracket on that line), with the line and the reason.
@@ -69,21 +71,45 @@ Rules:
 - Do not guess what other programs do. Do not describe typical behaviour of a language or product as a fact about
   this file.
 - If two readings are possible, say so in the statement or leave the fact out.
-- Prefer many precise facts to a few general ones."""
+- Prefer precise facts to general ones. Record one issue once, under the category of its main consequence; do not
+  repeat it per line or per category.
+- You see this file only. A statement that something is never used, never written, never called or never reached in
+  the application is a conclusion about code you cannot see: write "in this file", set basis to "inferred" and say in
+  reasoning what elsewhere would disprove it. Only code proven unreachable, or a condition proven never true, from this
+  file alone is "observed".
+- Use "inferred" only for conclusions that follow from the lines you cite. Never infer what other programs, people,
+  schedules or data do.
+- Comments, headers, names and message text say what the author intended, not what the code does. Describe what the
+  executable statements do. When a comment contradicts the code, record that as a defect and quote the code line.
+- Severity: high = money or data can be lost, corrupted or exposed, or a control bypassed, by a path visible in this
+  file; medium = a wrong result or failure on a reachable path under a condition the file shows; low = poor practice
+  or dead code with no visible effect; info = an observation. Do not use high without a visible path.
+- Before recording valid-but-wrong code as a defect, ask whether a one-character misread (O/0, l/1, a dropped or
+  doubled character, a wrong digit) would make it correct. If so, put it in capture_concerns, not in facts.
+- Never put a password, key, token, account number or personal identifier in a statement: say what kind of value it
+  is and cite the lines. Choose a quote that does not contain the value when the line allows it.
+- Before you finish, confirm the last section of the file has findings."""
 
 REVIEW_SYSTEM = """You are checking another reviewer's findings about ONE source file, as an independent auditor.
 You receive the numbered file and a list of findings, each with an id, a statement and the lines it cites.
+First read the cited lines and decide for yourself what they do. Only then compare your reading with the statement.
 For each finding decide, from the cited lines and the rest of the file only:
   - "supported": the statement is fully correct as written
-  - "partly": part of it is wrong or overstated; give a corrected statement that is fully supported
+  - "partly": part of it is wrong or overstated. Give a corrected statement that the code fully supports, and
+    corrected_quote: text copied EXACTLY from the file that proves the corrected statement
   - "unsupported": the code does not show it
-Be strict: names, values, conditions and what happens must match the code exactly. Call record_review once."""
+A statement about code outside this file is unsupported unless it is worded as limited to this file. Comments and
+names are not evidence of behaviour. Be strict: names, values, conditions and what happens must match the code exactly. Call record_review once."""
 
 SYNTH_SYSTEM = """You combine verified findings from several source files of one application into cross-file
 observations for an enterprise architect: the same business rule or constant implemented in more than one place
 (and whether the values agree), data handed from one component to another, inconsistent handling of the same
 entity, and end-to-end flows. You may ONLY use the findings given; every observation must cite the ids of the
-findings it rests on, and must not add facts that are not in them. If nothing crosses files, return no observations.
+findings it rests on, and must not add facts that are not in them. Match rules and constants only when the same
+identifier or the same value appears in the cited findings of both files; similar names alone are not a match. Every
+observation must rest on findings from at least two files. Give each a basis: "observed" when the cited findings
+themselves state the hand-off, the shared value or the disagreement, "inferred" when you joined findings to reach it
+(end-to-end flows are always inferred). If nothing crosses files, return no observations.
 Call record_program once."""
 
 ANALYSIS_TOOL = {
@@ -115,7 +141,7 @@ REVIEW_TOOL = {
     "description": "Record the verdict on each finding.",
     "input_schema": {"type": "object", "properties": {"verdicts": {"type": "array", "items": {"type": "object", "properties": {
         "id": {"type": "integer"}, "verdict": {"type": "string", "enum": ["supported", "partly", "unsupported"]},
-        "corrected": {"type": "string"}, "why": {"type": "string"}}, "required": ["id", "verdict"]}}},
+        "corrected": {"type": "string"}, "corrected_quote": {"type": "string"}, "why": {"type": "string"}}, "required": ["id", "verdict"]}}},
         "required": ["verdicts"]},
 }
 PROGRAM_TOOL = {
@@ -123,8 +149,9 @@ PROGRAM_TOOL = {
     "description": "Record the cross-file observations.",
     "input_schema": {"type": "object", "properties": {"observations": {"type": "array", "items": {"type": "object", "properties": {
         "title": {"type": "string"}, "statement": {"type": "string"},
+        "basis": {"type": "string", "enum": ["observed", "inferred"]},
         "facts": {"type": "array", "items": {"type": "string"}, "minItems": 1}},
-        "required": ["title", "statement", "facts"]}}}, "required": ["observations"]},
+        "required": ["title", "statement", "basis", "facts"]}}}, "required": ["observations"]},
 }
 
 
@@ -484,6 +511,11 @@ def uncovered(text, facts, bad=(), min_run=3):
     return [f"{r[0]}–{r[-1]}" for r in runs]
 
 
+def correction_backed(verdict, text):
+    q = _norm(verdict.get("corrected_quote"))
+    return len(q) >= 4 and bool(_occurrences(q, text.split("\n")))
+
+
 def check_facts(facts, text, bad=()):
     """Hold each fact to the file: the quote must be in the file. Returns (kept, corrected, rejected, unverifiable)."""
     lines = text.split("\n")
@@ -590,7 +622,10 @@ def analyse_file(store, client, art, model=None, review=True, review_model=None,
             if v["verdict"] == "unsupported":
                 rejected.append({**f, "why": "the independent review found it unsupported: " + (v.get("why") or "")})
                 continue
-            if v["verdict"] == "partly" and (v.get("corrected") or "").strip():
+            if v["verdict"] == "partly":
+                if not (v.get("corrected") or "").strip() or not correction_backed(v, text):
+                    rejected.append({**f, "why": "partly wrong, and the correction was not backed by a quote from the file"})
+                    continue
                 f = {**f, "statement": v["corrected"].strip(), "review": "corrected"}
             else:
                 f["review"] = v["verdict"]
@@ -677,7 +712,10 @@ def synthesize(store, client, model=None) -> dict:
         if not ids or not o.get("statement"):
             continue
         files = sorted({index[x][0] for x in ids})
+        if len(files) < 2:
+            continue
         obs.append({"title": o.get("title", "").strip(), "statement": o["statement"].strip(), "facts": ids,
+                    "basis": "observed" if o.get("basis") == "observed" else "inferred",
                     "cites": [f"{index[x][0]} lines {index[x][1]['lines'][0]}–{index[x][1]['lines'][1]}" for x in ids],
                     "files": files})
     return {"observations": obs, "ran_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "model": model}

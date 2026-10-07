@@ -480,5 +480,5 @@ def code_analysis(doc, T, arts, DD, DPROG, RQ, RD=lambda x: x):
     if obs:
         a = _p(doc, "Across components", a, bold=True)
         for o in obs:
-            a = _p(doc, f"{o['title']}: {_dashes(o['statement'].rstrip('.'))} ({'; '.join(o['cites'][:6])}).", a, bullet=True)
+            a = _p(doc, f"{'Inferred: ' if o.get('basis') == 'inferred' else ''}{o['title']}: {_dashes(o['statement'].rstrip('.'))} ({'; '.join(o['cites'][:6])}).", a, bullet=True)
     return a
