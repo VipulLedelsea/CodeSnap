@@ -375,6 +375,8 @@ class App:
         started = time.monotonic()
         rejected = 0
         stop_reason = "stopped manually"
+        from core import capture_gate
+        capture_gate.begin()
         while self.running and kept < BURST_MAX_FRAMES:
             if self._own_window_in_front():
                 time.sleep(BURST_INTERVAL)
@@ -440,6 +442,7 @@ class App:
                     break
             # manual mode (idle_stop <= 0): never auto-stop — ends via Cmd+Shift+1 or the frame cap
             time.sleep(BURST_INTERVAL)
+        capture_gate.end()
         status.publish(
             "Only one screenshot saved. If you scrolled, check the selected display and code area, "
             "then recapture; choose manual stop for a long file." if kept == 1 else

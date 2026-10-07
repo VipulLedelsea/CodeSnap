@@ -592,7 +592,8 @@ def verify_screenshot(client, path: Path, raw: str, *, source_x=None) -> dict:
     character count are fixed for free when only the spacing was wrong; otherwise only those lines are cropped, zoomed
     and read again, and a re-read is kept only if it now matches the pixels. Returns
     {"text", "grid", "status": [per line], "reread": n}. Never raises: a failed check leaves the lines "unchecked"."""
-    from core import colfix
+    from core import capture_gate, colfix
+    capture_gate.wait()
     lines = raw.split("\n")
     try:
         chk = colfix.check(path, raw, source_x=source_x) if source_x is not None else colfix.check(path, raw)
@@ -1586,6 +1587,8 @@ def _publish_cache(path, text):
 
 def extract_to_cache(client, path: Path, cache_dir: Path) -> None:
     """Share one in-flight extraction per cache entry and publish complete text atomically."""
+    from core import capture_gate
+    capture_gate.wait()
     cf = cache_path_for(path, cache_dir)
     key = str(cf.resolve())
     with _cache_locks_guard:

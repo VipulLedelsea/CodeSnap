@@ -214,6 +214,8 @@ class _TrackedMessages:
         self._tracker = tracker
 
     def create(self, **kwargs):
+        from core import capture_gate
+        capture_gate.wait()
         if self._tracker.budget is not None:
             self._tracker.budget.check(self._tracker)
         began = time.monotonic()
@@ -236,6 +238,8 @@ class _TrackedMessages:
 
     def stream(self, **kwargs):
         """Budget-checked, usage-recorded streaming (used for large outputs)."""
+        from core import capture_gate
+        capture_gate.wait()
         if self._tracker.budget is not None:
             self._tracker.budget.check(self._tracker)
         step = step_for(kwargs.get("system"))
