@@ -407,8 +407,16 @@ def _deep_when_ready(slug: str):
             job = _DEEP.get(slug) or {}
             if job.get("running") or slug in _REBUILDS or not api_key_status()["has_key"]:
                 return
+            from core.model.line_review import items
             with _open_program(slug) as store:
                 if any(store.capture_progress(a["id"]).get("analysing") for a in store.artifacts()):
+                    return
+                def has_questions(a):
+                    try:
+                        return bool(a.get("is_current", 1)) and bool(items(store, a))
+                    except Exception:  # noqa: BLE001
+                        return False
+                if any(has_questions(a) for a in store.artifacts()):
                     return
                 todo = deepdive.pending(store)
             if todo:
@@ -555,13 +563,17 @@ def api_program_artifact_screenshots(slug: str, artifact_id: int, payload: dict 
         return {**out, "artifact_id": new_id, "frames": frames, "added": len(paths)}
 
 
-def _analysis_busy(slug: str) -> bool:
-    if slug in _REBUILDS or (_DEEP.get(slug) or {}).get("running"):
-        return True
+def _claims_alive(slug: str) -> bool:
     from core.model.store import _owner_alive
     with _open_program(slug) as store:
         pending = store.pending_captures() or {}
     return any((v.get("claim") or {}).get("owner") and _owner_alive(v["claim"]["owner"]) for v in pending.values())
+
+
+def _analysis_busy(slug: str) -> bool:
+    if slug in _REBUILDS or (_DEEP.get(slug) or {}).get("running"):
+        return True
+    return _claims_alive(slug)
 
 
 def _stop_analysis(slug: str, wait: float = 30.0) -> bool:
@@ -709,6 +721,9 @@ def api_line_review(slug: str, artifact_id: int, line: int):
 def api_line_review_answer(slug: str, artifact_id: int, line: int, payload: dict = Body(...)):
     from core import feedback, deepdive
     from core.model.corrections import CorrectionError
+    if (_DEEP.get(slug) or {}).get('running') and slug not in _REBUILDS and not _claims_alive(slug):
+        if not _stop_analysis(slug):
+            raise HTTPException(status_code=409, detail="The code review is still stopping. Try again in a few seconds.")
     with _open_program(slug) as store:
         art = store.artifact(artifact_id)
         if not art or not art['is_current']:
