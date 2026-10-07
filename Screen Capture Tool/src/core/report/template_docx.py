@@ -669,7 +669,13 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         + (f"; {len(missing_all)} referenced components were not provided" if missing_all else "")
         + ". This is not a delivery forecast or budget. Validate scope, staffing and business policy before accepting the estimates or changing production behavior.",
     ]
-    doc.replace("Summarize in three to five", [Q.QUALIFICATION] + findings_txt)
+    from core import exec_summary as ES
+    _es = ES.current(store)
+    if _es:
+        findings_txt = ES.paragraphs(_es)
+    _last = doc.replace("Summarize in three to five", [Q.QUALIFICATION] + findings_txt)
+    if _es and _last is not None:
+        _fact_table(doc, T, store, _es, _last._p)
     doc.replace("List any condition that warrants action", "Validate the source findings and approved business policy before production change. Prioritize any confirmed unintended control override or exposure:")
     imm = []
     owner_it = s["it_reviewer"] or "IT application owner (to be named)"
@@ -1726,7 +1732,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     from . import editorial
     editorial.apply(doc, a, evidence_quality, s, metadata=metadata, analysis_stage=store.get_meta("analysis_stage"),
                     security_counts={severity: sum(f["severity"] == severity for f in sec_f) for severity in SEV},
-                    priority_reasons=[r_["title"] for r_ in BR[:2]])
+                    priority_reasons=[r_["title"] for r_ in BR[:2]], full_summary=bool(_es))
     RRV.apply_to_docx(doc.d, store)
     _fill_toc(doc)
     buf = io.BytesIO()
@@ -2206,6 +2212,24 @@ def _quality_appendix(doc, tables, store):
             anchor = doc.new_para(block['text'], anchor)._p
 
 
+def _fact_table(doc, tables, store, summary, anchor):
+    """The findings the executive summary cites, so every [file:F12] can be looked up. Kept under 1.2: the report
+    layout drops any heading that is not in the template."""
+    from core import exec_summary as ES
+    index = ES.finding_index(store)
+    cited = {f for r in summary.get("risks") or [] for f in r["facts"]}
+    for text in ES.paragraphs(summary):
+        for name, ids in ES._CITE.findall(text):
+            cited |= {f"{name.strip()}:{i}" for i in re.findall(r"F\d+", ids)}
+    cited = sorted(cited & set(index), key=lambda k: (k.rsplit(":F", 1)[0], int(k.rsplit(":F", 1)[1])))
+    if not cited:
+        return
+    rows_ = [[k, index[k].get("severity") or index[k].get("category") or "",
+              f"{index[k]['lines'][0]}-{index[k]['lines'][-1]}", index[k].get("statement") or ""] for k in cited]
+    table = _table_after(doc, tables[26], anchor, ["Fact ID", "Severity or type", "Lines", "Finding"], rows_)
+    _col_widths(table, [1.9, 1.0, .7, 3.4])
+
+
 def _glossary(doc):
     """Appendix G: every technical term the report uses, explained in one line."""
     from .plain import glossary
@@ -2283,6 +2307,7 @@ def _no_placeholders(doc):
     """Anything still in [brackets] is a template placeholder nobody filled: ask for the specific information."""
     _label_unknowns(doc)
     rx = re.compile(r"\[[A-Z][^\]]{1,80}\]")
+    CITE = re.compile(r"\[[^\[\]:]{1,80}:F\d+\]")     # a finding reference such as [FILE.cbl:F12] is not a placeholder
     for p in doc.body.iter(qn("w:t")):
         if p.text and rx.search(p.text) and "CUT OFF" not in p.text:
-            p.text = rx.sub(lambda m: placeholder(m.group(0)[1:-1]), p.text)
+            p.text = rx.sub(lambda m: m.group(0) if CITE.fullmatch(m.group(0)) else placeholder(m.group(0)[1:-1]), p.text)

@@ -121,6 +121,12 @@ def _run_staged(store, client, progress=None, report=True) -> dict:
     dd = store.get_meta("deepdive") or {}
     complete = bool(ids) and all((dd.get(str(i)) or {}).get("stage") == "final" for i in ids)
     store.set_meta("analysis_stage", "final" if complete else "draft")
+    if complete:
+        try:
+            from core import exec_summary
+            exec_summary.run(store, client, model=FINAL_MODEL)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"executive summary: {type(exc).__name__}: {exc}"[:240])
     final_pkg = None
     if report:
         try:

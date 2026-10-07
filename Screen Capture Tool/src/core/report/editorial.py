@@ -107,7 +107,7 @@ def _next_steps_diagram():
     return out.getvalue()
 
 
-def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts=None, priority_reasons=(), analysis_stage=None):
+def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts=None, priority_reasons=(), analysis_stage=None, full_summary=False):
     document = doc.d
     from docx.enum.style import WD_STYLE_TYPE
     for name in ("Normal", "Body Text", "List Paragraph"):
@@ -213,6 +213,8 @@ def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts
             if i == 0 and text.startswith("This assessment describes"):
                 text = ("This report covers only the source code that was reviewed. "
                         "Ratings are temporary until the open items are closed.")
+            elif full_summary:
+                pass   # the written executive summary is kept whole: it was already limited to what executives need
             else:
                 out, used = [], 0
                 for sentence in sentences:
@@ -229,7 +231,7 @@ def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts
             if label in FINDING_ORDER:
                 return 2 + FINDING_ORDER.index(label)
             return 1 if len(label.split()) > 3 else 20
-        ordered = sorted(keep, key=rank)[:KEY_FINDINGS_MAX - 1]
+        ordered = keep[1:] if full_summary else sorted(keep, key=rank)[:KEY_FINDINGS_MAX - 1]
         for e in body_ps:
             if e not in ordered:
                 e.getparent().remove(e)
