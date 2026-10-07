@@ -49,9 +49,9 @@ def components(AM, techs, sec_f, texts=None, fin=False, legacy_ui=(), copies=Fal
             skill = "Web front end"
         elif role == "Database definition":
             ims = "IMS" in lang or "Assembl" in lang or "DBD" in _text(c)
-            d, why = ("retain", "keep until the system-of-record decision (5.5); then migrate the data to the chosen store"
+            d, why = ("retain", "keep until the system-of-record decision (5.5); then decide whether to consolidate the data into one store"
                       + (" and evaluate IMS retirement" if ims else "")) if copies else ("retain", "provisionally retain; confirm constraints, data semantics and deployed usage")
-            skill = "IMS / data migration" if ims else "Data migration"
+            skill = "IMS / data migration" if ims else "Database / SQL"
         elif c in posting and len(posting) > 1 and plat not in ("IBM mainframe (z/OS)",):
             others = [p["name"] for p in posting if p is not c]
             d, why = "consolidate", f"one of {len(posting)} components that post or calculate payments (also {', '.join(others[:3])}); " \
@@ -199,11 +199,20 @@ def estimate(cds, facts) -> dict:
         add("Test and QA", "parallel runs over at least two payment cycles", 3, 6,
             "old and new results compared line by line before cutover")
     if facts["copies"]:
-        add("Data migration and reconciliation", f"system-of-record decision, reconciliation and migration of "
-                                                 f"the {facts['copies']} copies of "
-                                                 + (P_sentence(facts.get("copy_names") or []) or "the shared entities")
-                                                 + " data", 1.5 * facts["copies"], 3 * facts["copies"],
-            "1.5–3 person-weeks per data copy to map, reconcile and migrate")
+        if facts.get("migrate", True):
+            add("Data migration and reconciliation", f"system-of-record decision, reconciliation and migration of "
+                                                     f"the {facts['copies']} copies of "
+                                                     + (P_sentence(facts.get("copy_names") or []) or "the shared entities")
+                                                     + " data", 1.5 * facts["copies"], 3 * facts["copies"],
+                "1.5–3 person-weeks per data copy to map, reconcile and migrate")
+        else:
+            add("Data reconciliation", f"system-of-record decision and reconciliation of the {facts['copies']} copies of "
+                                       + (P_sentence(facts.get("copy_names") or []) or "the shared entities")
+                                       + " data; any migration is a later decision", 1 * facts["copies"], 2 * facts["copies"],
+                "1–2 person-weeks per data copy to map and reconcile")
+    if not changing and facts.get("fixes"):
+        add("Test and QA", "tests that record today's results before the findings are fixed in place",
+            1 + 0.25 * facts["fixes"], 2 + 0.5 * facts["fixes"], "a test harness is a prerequisite for fixing business logic")
     add("Architecture and delivery management", "target design, decisions, coordination across teams", 0, 0,
         "15% of the build effort")
     g = lines["Architecture and delivery management"]

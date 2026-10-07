@@ -369,9 +369,9 @@ def test_migration_entity_copies_match_ownership(rep):
     ownership = rows_after(rep, "System of record by entity", "6. Application health")
     counts = [int(r.split(" | ")[1]) for r in ownership if r.split(" | ")[1].isdigit()]
     copies = sum(n for n in counts if n >= 2)
-    migration = [l for l in rep["lines"] if re.search(r"migration of the \d+ copies", l)]
+    migration = [l for l in rep["lines"] if re.search(r"(?:migration|reconciliation) of the \d+ copies", l)]
     assert copies > 0 and migration
-    assert int(re.search(r"migration of the (\d+) copies", migration[0]).group(1)) == copies
+    assert int(re.search(r"(?:migration|reconciliation) of the (\d+) copies", migration[0]).group(1)) == copies
 
 
 def test_unconfirmed_versions_match_displayed_stack(rep):

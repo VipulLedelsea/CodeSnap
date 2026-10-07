@@ -475,11 +475,11 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     from . import codefindings as CFM
     CF = CFM.select(store, code_arts, DDV.review_facts(store))
     for cf_ in CF:
-        high_ = cf_["severity"] == "high"
-        BR.append({"title": CFM.short(cf_["text"]), "cat": "Code finding", "L": 3, "I": 4 if high_ else 3,
-                   "score": 12 if high_ else 9,
-                   "why_L": "3: the line-by-line review observed this in the source; production reachability is to confirm",
-                   "why_I": "3: effect on payments depends on how the business uses this path; to confirm with the business owner",
+        L_, I_, why_l_, why_i_ = CFM.rate(cf_)
+        BR.append({"title": CFM.short(cf_["text"]), "brief": CFM.short(cf_["text"], 120), "cat": "Code finding", "L": L_, "I": I_,
+                   "score": L_ * I_,
+                   "why_L": why_l_,
+                   "why_I": why_i_,
                    "comps": [cf_["file"]], "owner": owner_it, "existing": "None visible in the code",
                    "mit": "Confirm the intended rule with the business owner, correct the source, and add a test that records the new behavior"})
     BR.sort(key=lambda r_: -r_["score"])
@@ -509,7 +509,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                        cics=CICS, screen_copies=COPIES)
     PR = OP.program(CD, len(HP))
     multi_copies = sum(len(g["copies"]) for g in DM["entities"] if len(g["copies"]) >= 2)
-    EST = OP.estimate(CD, {"fin": fin, "copies": multi_copies,
+    EST = OP.estimate(CD, {"fin": fin, "copies": multi_copies, "fixes": len(CF), "migrate": PR["code"] in ("rearchitect", "replace", "replatform", "rebuild"),
                            "copy_names": [g["name"].lower() for g in DM["entities"] if len(g["copies"]) >= 2]})
     phased = PR["code"] in ("rearchitect", "replace")
     span = OP.months({"phased": phased, "platforms": len(HP), "fin": fin}, EST)
@@ -584,11 +584,12 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                                     f"unconfirmed calculation test coverage. Maintainability alone: {R.explain_program(a, 'tech_debt')}",
             "Open critical or high vulnerabilities": f"{crit_high} ({sum(1 for f in sec_f if f['severity'] == 'critical')} critical, "
                                                      f"{sum(1 for f in sec_f if f['severity'] == 'high')} high); register in 8.3",
-            "Highest risk score": (f"{top['score']} of 25, {top['rating']} ({top['id']}: {top['title']}); "
+            "Highest risk score": (f"{top['score']} of 25, {top['rating']} ({top['id']}: {top.get('brief') or top['title']}); "
                                    f"{sum(1 for r_ in BR if r_['rating'] == 'High')} risk{'s' if sum(1 for r_ in BR if r_['rating'] == 'High') != 1 else ''} rated High in 9.1" if top else "None"),
             "End-of-life exposure": "; ".join(f"{t.get('name')} {t.get('version') or t.get('cycle') or ''}".strip()
                                               + (f" (ended {t['eol']})" if t.get("eol") else f" ({_status_word(t).lower()})")
-                                              for t in eol[:5]) or "None identified",
+                                              for t in eol[:5]) or ("None identified; deployed versions are not confirmed (3.2), so exposure is not ruled out"
+                                                    if any(not t.get("version") for t in techs) else "None identified"),
             "Recommended disposition": f"{disposition}: {_disp_plain(v)}",
             "Recommended timing": horizon}
     kv(T[5], snap)
@@ -610,7 +611,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     poor_fc = [r_ for r_ in FCR if r_[3] and r_[3] >= 4]
     reviewed = [x for x in code_arts if str(x["id"]) in DD]
     n_facts = sum(len((DD.get(str(x["id"])) or {}).get("facts") or []) for x in reviewed)
-    lead = P.sentence([f"{r_['title'][:1].lower() + r_['title'][1:]}" for r_ in BR[:3]])
+    lead = P.sentence([f"{_lc(r_.get('brief') or r_['title'])}" for r_ in BR[:3]])
     findings_txt = [
         ({1: "One problem stands out: ", 2: "Two problems stand out: "}.get(len(BR[:3]), "Three problems stand out: ")
          + lead + ". " if BR else "")
@@ -619,7 +620,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         + (", and technology lifecycle concerns need attention (6.2)" if eol else "")
         + f". {_recommend(disposition, _disp_plain(v))}",
         (f"Financial controls (Section 8.6). Rated poor or worse: "
-         + P.sentence([r_[0][:1].lower() + r_[0][1:] for r_ in poor_fc]) + ". For a payment system these touch "
+         + P.sentence([_lc(r_[0]) for r_ in poor_fc]) + ". For a payment system these touch "
          + P.sentence(list(dict.fromkeys(CONCERN.get(r_[0], "financial accuracy") for r_ in poor_fc))) + ".")
         if poor_fc else "",
         ("Evidence quality (Section 13.2). "
@@ -648,7 +649,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
          f"receives security fixes, so its known weaknesses stay open until it is upgraded or replaced.")
         if eol else "Supportability (Section 6.2). No end-of-support technology was identified; support for unconfirmed versions remains to confirm.",
         (f"Risk (Section 9). {sum(1 for r_ in BR if r_['rating'] == 'High')} of {len(BR)} risks are rated High. The highest: "
-         + P.sentence([f"{r_['title'][:1].lower() + r_['title'][1:]} ({r_['score']} of 25)" for r_ in BR[:3]]) + ".") if top else "",
+         + P.sentence([f"{_lc(r_.get('brief') or r_['title'])} ({r_['score']} of 25)" for r_ in BR[:3]]) + ".") if top else "",
         f"Effort (Section 12.4). The unvalidated planning scenario is {EST['low']}–{EST['high']} person-weeks across "
         f"{len(EST['lines'])} skill set(s); {elapsed}" + (f", because the order of work and the {cyc}, not the effort, set "
         f"the pace" if phased else "") + ". "
@@ -731,17 +732,21 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     jobs = _jobs(store)
     for jb in jobs[:6]:
         steps.append([str(len(steps) + 1), "Scheduler", f"Runs batch job {jb['name']}", "Automated", UNKNOWN, UNKNOWN, ""])
-    if not steps:
+    if not (flows.get("journeys") or [])[:3]:
         from .figures import STAGES, _stage, _step
         order = [k for k, _ in STAGES]
-        for c in sorted((c for c in AM["components"] if c["name"] not in COPIES and c["role"] != "Database definition"),
+        job_names_ = {jb["name"].lower() for jb in jobs}
+        for c in sorted((c for c in AM["components"] if c["name"] not in COPIES and c["role"] != "Database definition"
+                         and c["name"].rsplit(".", 1)[0].lower() not in job_names_),
                         key=lambda c: order.index(_stage(c))):
+            if jobs and c["role"] not in ("Batch program", "Program"):
+                continue
             verb, ins, outs = _step(c, DM)
             batch = "Batch" in c["role"] or "procedures" in c["role"]
             job = not batch and bool(c["writes"]) and c["layer"] == "Application"
-            steps.append([str(len(steps) + 1), "Scheduled run (to confirm)" if batch else "User-started program" if job
-                          else "Business user", f"{c['name']}: {verb}",
-                          "Automated" if batch else "Automated, started by a user" if job else "Manual (screen entry)",
+            steps.append([str(len(steps) + 1), "Scheduled run (to confirm)" if batch else "Program run (trigger to confirm)" if jobs
+                          else "User-started program" if job else "Business user", f"{c['name']}: {verb}",
+                          "Automated" if batch else "To confirm" if jobs else "Automated, started by a user" if job else "Manual (screen entry)",
                           ", ".join(ins[:4]) or "–", ", ".join(outs[:4]) or "–", ""])
     rows(T[9], steps, empty="No process steps could be derived from the source; to be mapped with stakeholders.")
     cycles = []
@@ -753,8 +758,17 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                                doc.unknown(f"Schedule of the {m_.group(1).lower()} run of {x['name']}", "2.4", "IT"),
                                "High", UNKNOWN])
                 break
-    rows(T[10], [[f"Batch job {jb['name']}", doc.unknown(f"Schedule of batch job {jb['name']}", "2.4", "IT"),
-                             "High", UNKNOWN] for jb in jobs[:6]] + cycles,
+    job_rows, used_cycles = [], set()
+    for jb in jobs[:6]:
+        hit = next((i_ for i_, c_ in enumerate(cycles) if jb["name"].lower() in c_[0].lower()), None)
+        if hit is not None:
+            used_cycles.add(hit)
+            cm_ = re.match(r"(\w+) run of .*line (\d+)\)", cycles[hit][0])
+            job_rows.append([f"Batch job {jb['name']} ({cm_.group(1).lower()}; stated in a code comment, line {cm_.group(2)})" if cm_
+                             else f"Batch job {jb['name']}", cycles[hit][1], "High", UNKNOWN])
+        else:
+            job_rows.append([f"Batch job {jb['name']}", doc.unknown(f"Schedule of batch job {jb['name']}", "2.4", "IT"), "High", UNKNOWN])
+    rows(T[10], job_rows + [c_ for i_, c_ in enumerate(cycles) if i_ not in used_cycles],
          empty="No scheduled cycles were identified in the source; business calendar to be confirmed with the business owner.")
     ux_issues = [f for f in findings if f["category"] in ("usability", "accessibility")]
     pain_ = _pain_points(ux_issues)
@@ -819,9 +833,13 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         {"title": f"path {m_.group(1)} in {x['name']}"} for x in code_arts
         for m_ in re.finditer(r"[\"']([A-Za-z]:\\[^\"'\n]{2,60})[\"']", x.get("transcription") or "")] + [
         {"title": fct["text"]} for c in comps for fct in c["scores"]["coupling"]["factors"] if "hard" in fct["text"].lower()]
+    cfg_ = [CFM.short(f_["statement"], 120) for fs_ in DDV.review_facts(store).values() for f_ in fs_
+            if f_.get("category") == "configuration" and f_.get("review") in (None, "supported", "partly_supported", "corrected")]
+    hard += [{"title": t_} for t_ in cfg_[:6]]
     doc.replace("Describe hard-coded business rules", [
         (f"Business rates and run parameters held in the code rather than in a maintained table: {'; '.join(rates[:4])}.")
-        if rates else "The rule-based scan did not match its rate patterns. This does not establish that hard-coded business values are absent; review thresholds, dates, receipt rules and dataset literals in Section 3.6.",
+        if rates else ("The rule-based scan did not match its rate patterns, but the line-by-line review found values fixed in the code: "
+                       + "; ".join(cfg_[:3]) + ". Policy owners should confirm whether these should live in a maintained table.") if cfg_ else "The rule-based scan did not match its rate patterns. This does not establish that hard-coded business values are absent; review thresholds, dates, receipt rules and dataset literals in Section 3.6.",
         f"{creds_n} hard-coded credential(s) were also found; they are security findings (8.3), not configuration." if creds_n else "",
         "Where routine policy or rate changes require a code change, the item appears in the technical debt register (7.3)."])
 
@@ -1116,14 +1134,15 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         "Average and maximum cyclomatic complexity": [f"File-level estimate: average {metrics['avg']}, maximum {metrics['max']} ({metrics['max_file']}); routine-level complexity not measured",
                                                       "Routine-level target to confirm", "Decision-point count per file", "Validate with a control-flow analysis per routine"],
         "Code duplication": ["Not measured", "Under 5%", "", "Not assessed in this review"],
-        "Maintainability rating": [f"{R.condition(debt_w)[0]} ({R.condition(debt_w)[1]}), weakest file", "2 (Good) or better", "Technical debt rating",
-                                   "Deductions in 7.1"],
+        "Maintainability rating": [f"{RT.words(cq)}, rated on the weakest material component" if cq else f"{R.condition(debt_w)[0]} ({R.condition(debt_w)[1]}), weakest file",
+                                   "2 (Good) or better", "Health scorecard, code quality (6.1)",
+                                   "Same rating as 6.1, which includes the line-by-line review findings"],
         "Automated test coverage": ["Not measured; no test files identified in the supplied source" if not metrics["tests"] else f"{metrics['tests']} test file(s)",
                                     "Coverage target to confirm", "Source code review", "No test suite provided" if not metrics["tests"] else ""],
         "Outdated third-party dependencies": [str(len(eol_names)), "0", "Version and support-date review", ", ".join(eol_names)],
         "Dead or unused code": ["Not measured", "", "", "Not assessed in this review"],
         "Share of machine-translated": ["Not measured", "Not applicable", "", "Source appearance does not establish how code was generated"],
-        "Hard-coded values": [str(len(hard)), "Policy to confirm", "Scanner matches only; full count unconfirmed", "; ".join(h_["title"] for h_ in hard[:8])],
+        "Hard-coded values": [str(len(hard)), "Policy to confirm", "Scanner matches plus line-by-line review findings; full count unconfirmed", "; ".join(h_["title"] for h_ in hard[:8])],
     })
     reg = []
     SECURITY_CONSTRUCTS = re.compile(r"EXECUTE IMMEDIATE|QCMDEXC|WHEN OTHERS THEN NULL|Resume Next", re.I)
@@ -1152,7 +1171,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                     impact, "Retire through the component disposition (12.3)" if strategic else
                     "Fix when the file is next changed" if trivial else "Refactor",
                     "L" if strategic else "S" if trivial else "M", "High" if strategic else "Low" if trivial else "Medium"])
-    for cf_ in [c_ for c_ in CF if c_["category"] in ("defect", "calculation", "data_integrity", "error_handling")][:6]:
+    for cf_ in [c_ for c_ in CF if c_["category"] in ("defect", "calculation", "data_integrity", "error_handling")][:14]:
         reg.append([f"{CFM.short(cf_['text'])} ({cf_['file']})", "Code", "Defect or fragile rule in the source as written",
                     "Wrong results or hard-to-change behavior if left as is; business effect to confirm",
                     "Correct the source after the rule is confirmed, and cover it with a test",
@@ -1175,12 +1194,14 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     stab = [i["title"] for i in (phases.get("stabilize") or {}).get("items", [])]
     changing_components = any(c_["code"] not in ("retain", "retire") for c_ in CD)
     mod = [i["title"] for i in (phases.get("modernize") or {}).get("items", [])] if changing_components else []
+    small_ = [r_[0] for r_ in reg if r_[-2] == "S"]
     doc.replace("Separate remediation that can be addressed independently", [
         ("Quick wins that reduce risk now, whatever is decided about modernization: "
-         + _and([x[:1].lower() + x[1:] for x in stab[:6]]) + ".") if stab else
+         + _and([_lc(x) for x in stab[:6]]) + ".") if stab else
+        (f"Quick wins that can be done now, each a small fix after the rule is confirmed: {_and(small_[:6])} in 7.3.") if small_ else
         "There are no quick wins separate from the modernization work.",
         (f"Debt that is better retired through the recommended {_noun(disposition)} (Section 12) than fixed now: "
-         + _and([x[:1].lower() + x[1:] for x in mod[:6]]) + ".") if mod else
+         + _and([_lc(x) for x in mod[:6]]) + ".") if mod else
         ("Debt in the components that are rebuilt or replaced (12.3) is retired with them; the rest of 7.3 can be fixed "
          "directly." if PR["code"] in ("rearchitect", "replace") else
          ("Debt in the components that are rebuilt or retired (12.3) goes with them; the rest of 7.3 can be fixed directly."
@@ -1274,6 +1295,18 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         if f.get("reviewed"):
             txt += f" Note: {f['reviewed']}."
         anchor = doc.new_para(txt, anchor, bullet=True)._p
+    risk_ids_ = {r_["title"]: r_["id"] for r_ in BR}
+    sec_cf_ = [c_ for c_ in CF if c_["category"] == "security"]
+    if sec_cf_:
+        anchor = doc.new_para("No scanner rule produced the register above, but the line-by-line review recorded security-relevant "
+                              "items that are tracked as risks in 9.1: "
+                              + "; ".join(f"{risk_ids_.get(CFM.short(c_['text']), 'risk')}: {CFM.short(c_['text'])} ({c_['file']})"
+                                          for c_ in sec_cf_[:4]) + "." if not vgroups else
+                              "The line-by-line review also recorded security-relevant items that are tracked as risks in 9.1: "
+                              + "; ".join(f"{risk_ids_.get(CFM.short(c_['text']), 'risk')}: {CFM.short(c_['text'])} ({c_['file']})"
+                                          for c_ in sec_cf_[:4]) + ".", anchor, bullet=True)._p
+    elif not vgroups:
+        anchor = doc.new_para("No vulnerabilities were identified in the material reviewed.", anchor, bullet=True)._p
     unsup = [t for t in techs if t.get("status") in ("eol", "legacy")]
     doc.replace("List components that can no longer receive security patches", [
         (f"{t.get('name')} {t.get('version') or t.get('cycle') or ''}".strip() + f": {_status_word(t).lower()}"
@@ -1466,9 +1499,10 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                                                  "confirm business criticality",
                                                  "name the system of record for each entity (5.5)" if multi_copies else "",
                                                  "build characterization tests for the calculations" if fin else ""])) + ".",
-               "Key risks of the recommended option": (("Regression in payment calculations and data loss during migration; mitigated "
-                                                       "by characterization tests, reconciliation and parallel runs over at least "
-                                                       "two payment cycles") if fin else
+               "Key risks of the recommended option": (("Regression in payment calculations when findings are fixed in place" + (
+                                                           " and data loss during migration" if PR["code"] in ("rearchitect", "replace", "replatform", "rebuild") else "")
+                                                       + "; mitigated by tests that record today's results, reconciliation and parallel "
+                                                       "runs over at least two payment cycles") if fin else
                                                       "Regression in business logic during change; mitigated by characterization "
                                                       "tests and running old and new side by side until results agree"),
                "Interim risk mitigation": "The immediate actions in 1.3" + (" and the control fixes in 8.6" if FCR else "")})
@@ -1763,17 +1797,20 @@ def _infer_stack(stack, arts, DM, AM, store, jobs=()):
         _add_stack(stack, "Database", "SQL database definition (database engine and version to confirm)", UNKNOWN)
     if not has_sql_ and any((x.get("language") or "").upper().startswith("RPG") for x in arts):
         _add_stack(stack, "Database", "RPG file access (database engine to confirm)", "IBM")
-    batch = []
+    batch, cobol_batch = [], []
+    supplied_jcl = [j['name'] for j in arts if j['name'].lower().endswith('.jcl') or (j.get('language') or '').upper() == 'JCL']
     for x in arts:
         t = x.get("transcription") or ""
         dds = __import__("re").findall(r"ASSIGN\s+TO\s+([A-Z0-9-]+)", t)
         if dds and "cobol" in (x.get("language") or "").lower() and "CICS" not in t:
-            supplied_jcl = [j['name'] for j in arts if j['name'].lower().endswith('.jcl') or (j.get('language') or '').upper() == 'JCL']
-            batch.append(f"COBOL batch program {x['name']} (DD names {', '.join(dds[:6])}); "
-                         + (f"JCL supplied: {', '.join(supplied_jcl)}; job-to-program mapping and scheduler to confirm" if supplied_jcl
-                            else "JCL and scheduler not provided"))
+            cobol_batch.append(f"{x['name']} (DD names {', '.join(dict.fromkeys(dds[:6]))})")
+    if cobol_batch:
+        batch.append(f"COBOL batch program{'s' if len(cobol_batch) > 1 else ''} {_and(cobol_batch)}; "
+                     + (f"JCL supplied: {', '.join(supplied_jcl)}; job-to-program mapping and scheduler to confirm" if supplied_jcl
+                        else "JCL and scheduler not provided"))
     for jb in jobs:
-        batch.append(f"Scheduled job {jb['name']}; scheduler to confirm")
+        if not any(jb['name'].lower() in j.lower() for j in supplied_jcl) or not cobol_batch:
+            batch.append(f"Scheduled job {jb['name']}; scheduler to confirm")
     for b in batch:
         _add_stack(stack, "Batch and scheduling", b, "IBM" if "COBOL" in b else UNKNOWN)
     rpt = [e["name"] for e in store.entities() if __import__("re").search(r"REPORT|RPT", e["name"], __import__("re").I)
@@ -1948,6 +1985,12 @@ def _col_widths(t, inches):
             cell.width = Inches(w)
 
 
+def _lc(t):
+    t = t or ""
+    first = t.split(" ", 1)[0]
+    return t if sum(ch.isupper() for ch in first) >= 2 else t[:1].lower() + t[1:]
+
+
 def _cap(t):
     return t[:1].upper() + t[1:] if t else t
 
@@ -1995,7 +2038,7 @@ def _recommend(disposition, plain):
     if "component by component" in plain:
         how = how.replace(", component by component", "")
     return (f"Our recommendation is to {verb.lower()}" + (f" {how}" if how else "") + f" (Section 12): "
-            f"{plain[:1].lower() + plain[1:]}.")
+            f"{_lc(plain)}.")
 
 
 def _disp_plain(v):
