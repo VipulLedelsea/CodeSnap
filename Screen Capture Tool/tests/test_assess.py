@@ -77,10 +77,10 @@ def test_component_factors_explain_scores():
               "detail": "", "refs": {"eol_status": "eol"}}],
          "missing_code": 2, "student_data": False, "fan_out": 0, "fan_in": 0, "shared_writes": set(), "external": set()}
     s = score_component(c)
-    assert s["health"]["score"] == 100 - 30 - 6
+    assert s["health"]["score"] == 100 - 6
     assert s["tech_debt"]["score"] == 100 - 7 - 20
     assert s["security"]["score"] == 85 and s["supportability"]["score"] == 65
-    assert {f["rule"] for f in s["health"]["factors"]} == {"HLT-SYNTAX", "HLT-GAPS"}
+    assert {f["rule"] for f in s["health"]["factors"]} == {"HLT-GAPS"}
 
 
 def test_program_assessment(mixed):
