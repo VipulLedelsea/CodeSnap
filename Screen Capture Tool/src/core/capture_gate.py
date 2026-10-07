@@ -1,9 +1,11 @@
+import json
 import os
 import threading
 import time
 from pathlib import Path
 
 FLAG = Path(__file__).resolve().parents[2] / "captures" / ".capturing"
+CANCEL = FLAG.with_name(".cancel_analysis")
 STALE = 15.0
 _state = {"stop": None}
 _guard = threading.Lock()
@@ -54,9 +56,42 @@ def capturing():
         return False
 
 
+class AnalysisCancelled(RuntimeError):
+    pass
+
+
+def cancel_analysis(seconds=90):
+    try:
+        CANCEL.parent.mkdir(parents=True, exist_ok=True)
+        CANCEL.write_text(json.dumps({"until": time.time() + seconds}))
+    except OSError:
+        pass
+
+
+def clear_cancel():
+    try:
+        CANCEL.unlink()
+    except OSError:
+        pass
+
+
+def cancelled():
+    try:
+        return json.loads(CANCEL.read_text())["until"] > time.time()
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def check():
+    if cancelled():
+        raise AnalysisCancelled("Analysis was stopped.")
+
+
 def wait(poll=0.5):
+    check()
     if not capturing():
         return False
     while capturing():
         time.sleep(poll)
+        check()
     return True

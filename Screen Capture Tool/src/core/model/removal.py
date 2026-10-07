@@ -9,7 +9,7 @@ from .store import _owner_alive
 CAPTURE_ROOT = Path(__file__).resolve().parents[3] / "captures"
 
 
-def remove_file(store, artifact_id):
+def remove_file(store, artifact_id, force=False):
     paths, screenshots = [], {}
     with store.transaction() as db:
         def meta(key, default=None):
@@ -23,10 +23,10 @@ def remove_file(store, artifact_id):
         if not artifact:
             raise KeyError(artifact_id)
         pending = meta('pending_captures', {}) or {}
-        if any((v.get('claim') or {}).get('owner') and _owner_alive(v['claim']['owner']) for v in pending.values()):
+        if not force and any((v.get('claim') or {}).get('owner') and _owner_alive(v['claim']['owner']) for v in pending.values()):
             raise RuntimeError('Wait for the current file analysis to finish before removing a file.')
         active = meta('deepdive_active', {}) or {}
-        if any(time.time() - stamp < 1800 for stamp in active.values()):
+        if not force and any(time.time() - stamp < 1800 for stamp in active.values()):
             raise RuntimeError('Wait for the current code review to finish before removing a file.')
         names = {artifact['name']}
         ids = {r[0] for r in db.execute('SELECT id FROM artifact WHERE name = ?', (artifact['name'],))}

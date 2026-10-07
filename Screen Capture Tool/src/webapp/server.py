@@ -555,17 +555,52 @@ def api_program_artifact_screenshots(slug: str, artifact_id: int, payload: dict 
         return {**out, "artifact_id": new_id, "frames": frames, "added": len(paths)}
 
 
+def _analysis_busy(slug: str) -> bool:
+    if slug in _REBUILDS or (_DEEP.get(slug) or {}).get("running"):
+        return True
+    from core.model.store import _owner_alive
+    with _open_program(slug) as store:
+        pending = store.pending_captures() or {}
+    return any((v.get("claim") or {}).get("owner") and _owner_alive(v["claim"]["owner"]) for v in pending.values())
+
+
+def _stop_analysis(slug: str, wait: float = 30.0) -> bool:
+    from core import capture_gate
+    capture_gate.cancel_analysis(wait + 30)
+    began = time.time()
+    terminated = False
+    while time.time() - began < wait:
+        if not _analysis_busy(slug):
+            break
+        if not terminated and time.time() - began > 8:
+            _session.stop_pending()
+            terminated = True
+        time.sleep(0.5)
+    stopped = not _analysis_busy(slug)
+    capture_gate.clear_cancel()
+    return stopped
+
+
+@app.post("/api/programs/{slug}/analysis/stop")
+def api_program_analysis_stop(slug: str):
+    if not _stop_analysis(slug):
+        return JSONResponse({"error": "Analysis is still stopping. Try again in a few seconds."}, status_code=409)
+    return {"ok": True}
+
+
 @app.delete("/api/programs/{slug}/artifacts/{artifact_id}")
-def api_program_artifact_delete(slug: str, artifact_id: int):
+def api_program_artifact_delete(slug: str, artifact_id: int, force: bool = False):
+    if force and not _stop_analysis(slug):
+        return JSONResponse({"error": "Analysis is still stopping. Try again in a few seconds."}, status_code=409)
     with _open_program(slug) as store:
         if not store.artifact(artifact_id):
             return JSONResponse({"error": "File not found"}, status_code=404)
-        if slug in _REBUILDS or store.capture_progress(artifact_id).get("analysing") or (_DEEP.get(slug) or {}).get("running"):
+        if not force and (slug in _REBUILDS or store.capture_progress(artifact_id).get("analysing") or (_DEEP.get(slug) or {}).get("running")):
             return JSONResponse({"error": "This program is being analysed. Wait for analysis to finish before removing the file."},
                                 status_code=409)
         from core.model.removal import remove_file
         try:
-            removed = remove_file(store, artifact_id)
+            removed = remove_file(store, artifact_id, force=force)
         except RuntimeError as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
         from core.model.linker import link_program

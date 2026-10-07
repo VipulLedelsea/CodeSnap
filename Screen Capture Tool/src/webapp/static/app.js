@@ -941,8 +941,20 @@ function renderProgress(d) {
       <b>${p.finished} of ${p.total} files processed</b>
       <span>${busy ? bits.join(" · ") + ` — ${p.to_go} to go` : "Nothing left to process"}${attn ? ` · <em>${attn} need${attn > 1 ? "" : "s"} recapture</em>` : ""}</span>
     </div>
+    ${busy ? `<button class="btn-link" data-stop-analysis type="button">Stop analysis</button>` : ""}
     <div class="pp-bar">${seg(p.done, "ok")}${seg(p.needs_recapture + p.failed, "bad")}${seg(p.reviewing + p.reading, "busy")}${seg(p.waiting, "wait")}</div>`;
 }
+document.addEventListener("click", async (ev) => {
+  const b = ev.target.closest && ev.target.closest("[data-stop-analysis]");
+  if (!b) return;
+  if (!window.confirm("Stop the analysis now? Spending stops immediately; unfinished files can be processed again later.")) return;
+  toast("Stopping analysis…");
+  try {
+    await _json(`/api/programs/${encodeURIComponent(_program)}/analysis/stop`, { method: "POST" });
+    _progSig = "";
+    toast("Analysis stopped.");
+  } catch (err) { toast(err.message); }
+});
 function _fileRow(a, pendingFor) {
   const st = a.rebuild ? "reading" : pendingFor ? pendingFor.state : a.state;
   const [label, cls] = a.rebuild ? ["Processing again", "busy"] : STATE[st] || [a.status, ""];
@@ -1149,7 +1161,14 @@ async function fileAction(el, act, targetId) {
       return;
     } else if (act === "remove") {
       if (!window.confirm(`Remove ${name} and its capture history from analysis? Its findings, screenshots and old report exports will be removed. Your original source file will stay on disk.`)) return;
-      await _json(`${actionBase}/artifacts/${id}`, { method: "DELETE" });
+      try {
+        await _json(`${actionBase}/artifacts/${id}`, { method: "DELETE" });
+      } catch (err) {
+        if (!/analys/i.test(err.message)) throw err;
+        if (!window.confirm("Analysis is still running. Stop it now and remove this file? Spending stops immediately; files still waiting can be processed again later.")) return;
+        toast("Stopping analysis…");
+        await _json(`${actionBase}/artifacts/${id}?force=true`, { method: "DELETE" });
+      }
       _progSig = "";
       toast("File removed. The report will rebuild from the remaining files.");
     } else if (act === "rename") {

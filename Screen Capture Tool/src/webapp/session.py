@@ -149,6 +149,17 @@ class SessionManager:
         self._pending = subprocess.Popen(base + ["--program", program, "--process-pending"], cwd=str(PROJECT))
         return True
 
+    def stop_pending(self) -> bool:
+        with self._lock:
+            proc = self._pending
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    return True
+                except OSError:
+                    pass
+            return False
+
     def stop(self) -> bool:
         """Terminate the capture session and any background pending-analysis worker."""
         with self._lock:
