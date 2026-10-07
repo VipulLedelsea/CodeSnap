@@ -270,7 +270,7 @@ EXTRACT_PLAIN_SYSTEM_PROMPT = (
 )
 
 READER = _os.environ.get("CODESNAP_READER", "plain").lower()
-PLAIN_MODEL = _os.environ.get("CODESNAP_PLAIN_MODEL", "claude-sonnet-5")
+PLAIN_MODEL = _os.environ.get("CODESNAP_PLAIN_MODEL", "claude-haiku-5-5")  # bake-off 10/07: 99.5% content, 0.19 extra lines/frame on 144 frames; Opus re-reads flagged lines
 PLAIN_MAX_BAD = float(_os.environ.get("CODESNAP_PLAIN_MAX_BAD", "0.10"))
 PLAIN_REQUIRE_CALIBRATION = _os.environ.get("CODESNAP_PLAIN_REQUIRE_CALIBRATION", "1") != "0"
 

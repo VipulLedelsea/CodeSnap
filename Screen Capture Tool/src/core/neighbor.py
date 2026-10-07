@@ -7,7 +7,7 @@ from pathlib import Path
 from core import verify
 from core import analysis as A
 
-MODEL = os.environ.get("CODESNAP_NEIGHBOR_MODEL", A.PLAIN_MODEL)
+MODEL = os.environ.get("CODESNAP_NEIGHBOR_MODEL", "claude-sonnet-5")
 BAD = ("mismatch", "cut", "rows")
 MAX_LINES = int(os.environ.get("CODESNAP_NEIGHBOR_MAX_LINES", "60"))
 TOOL = {
