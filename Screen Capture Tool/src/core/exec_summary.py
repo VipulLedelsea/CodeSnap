@@ -84,7 +84,16 @@ Rule for creation of this report: Make sure you write this as some human is writ
 
 SCOPE = ("Write only output item 1, the executive summary. Work through steps 1 to 6 yourself, but do not write them "
          "out. Cite fact IDs exactly as given in the findings, in the form [filename:F12], and cite only IDs that "
-         "appear below. Call record_exec_summary once.")
+         "appear below. Call record_exec_summary once.\n"
+         "Be brief and direct: the whole summary under 300 words, no filler, no repeating the same point in two fields. "
+         "what_it_does is one sentence. Each reason, risk, the lifecycle status and the decision is one sentence of at most "
+         "30 words. Use exact names and values from the findings and leave out anything vague. Fill every field the findings "
+         "and inputs support. Where a field needs something they do not give you, write the placeholder "
+         "<insert {specific item} information here>, naming the specific item, for example "
+         "<insert user and volume information here> or <insert hosting cost information here>. Never guess, and never "
+         "leave a field empty.")
+WORD_LIMITS = {"what_it_does": 45, "reason": 32, "risk": 32, "lifecycle": 40, "decision": 35, "confidence": 32}
+_PLACEHOLDER = re.compile(r"<\s*insert\s+([^<>]{1,70}?)(?:\s+information)?\s+here\s*>", re.I)
 
 TOOL = {
     "name": "record_exec_summary",
@@ -216,11 +225,32 @@ def check_citations(text, index, dropped):
     return re.sub(r"\s+([.,;])", r"\1", re.sub(r"[ \t]{2,}", " ", out)).strip()
 
 
+def brief(text, limit):
+    """Whole sentences only, as many as fit in the word limit; the first sentence is always kept."""
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z<\[])", (text or "").strip())
+    out, words = [], 0
+    for sent in parts:
+        n = len(sent.split())
+        if out and words + n > limit:
+            break
+        out.append(sent)
+        words += n
+    return " ".join(out)
+
+
+def _ph(label):
+    return f"<insert {label} information here>"
+
+
 def validate(data, index) -> dict:
     dropped = []
 
-    def one(t):
-        return check_citations(clean_style(t), index, dropped)
+    def one(t, limit=None, label=None):
+        text = check_citations(clean_style(t), index, dropped)
+        text = _PLACEHOLDER.sub(lambda m: _ph(m.group(1).strip()), text)
+        if limit:
+            text = brief(text, limit)
+        return text or (_ph(label) if label else "")
 
     risks = []
     for r in data.get("risks") or []:
@@ -232,17 +262,21 @@ def validate(data, index) -> dict:
             (ids if raw in index else dropped).append(raw)
         if not ids:       # a risk with no matching finding behind it is not reported
             continue
-        risks.append({"text": one(r["text"]), "severity": r.get("severity") if r.get("severity") in SEVERITIES else "Medium",
+        risks.append({"text": one(r["text"], WORD_LIMITS["risk"]), "severity": r.get("severity") if r.get("severity") in SEVERITIES else "Medium",
                       "facts": ids})
     verdict = data.get("verdict") if data.get("verdict") in VERDICTS else None
+    reasons = [one(x, WORD_LIMITS["reason"]) for x in (data.get("reasons") or [])[:3] if str(x).strip()]
+    reasons += [_ph("reason for the verdict")] * (3 - len(reasons))
     return {"verdict": verdict, "provisional": bool(data.get("provisional")) or not verdict,
-            "what_it_does": one(data.get("what_it_does")),
-            "reasons": [one(x) for x in (data.get("reasons") or [])[:3] if str(x).strip()],
-            "risks": risks[:5], "lifecycle": one(data.get("lifecycle")), "lifecycle_verified": bool(data.get("lifecycle_verified")),
-            "decision": one(data.get("decision")),
+            "what_it_does": one(data.get("what_it_does"), WORD_LIMITS["what_it_does"], "business purpose and users"),
+            "reasons": reasons,
+            "risks": risks[:5], "lifecycle": one(data.get("lifecycle"), WORD_LIMITS["lifecycle"], "technology support dates"),
+            "lifecycle_verified": bool(data.get("lifecycle_verified")),
+            "decision": one(data.get("decision"), WORD_LIMITS["decision"], "decision needed from executives"),
             "confidence": data.get("confidence") if data.get("confidence") in ("high", "medium", "low") else "low",
-            "confidence_and_coverage": one(data.get("confidence_and_coverage")),
-            "needed_to_finalize": [clean_style(x) for x in (data.get("needed_to_finalize") or []) if str(x).strip()][:12],
+            "confidence_and_coverage": one(data.get("confidence_and_coverage"), WORD_LIMITS["confidence"], "coverage"),
+            "needed_to_finalize": [_PLACEHOLDER.sub(lambda m: _ph(m.group(1).strip()), clean_style(x))
+                                   for x in (data.get("needed_to_finalize") or []) if str(x).strip()][:6],
             "dropped_citations": sorted(set(dropped))}
 
 
@@ -277,7 +311,7 @@ def paragraphs(s: dict) -> list:
     """The summary as report paragraphs, in the order the prompt lists them."""
     head = f"Verdict: {s['verdict']}" + (" (provisional)." if s.get("provisional") else ".")
     if s.get("provisional") and s.get("needed_to_finalize"):
-        head += " To finalize it we need: " + "; ".join(s["needed_to_finalize"]) + "."
+        head += " Needed to finalize: " + "; ".join(s["needed_to_finalize"]) + "."
     out = [head, s.get("what_it_does") or ""]
     out += [f"Reason {i}: {r}" for i, r in enumerate(s.get("reasons") or [], 1)]
     out += [f"Risk {i}, {r['severity']}: {r['text']} " + " ".join(f"[{f}]" for f in r["facts"])
