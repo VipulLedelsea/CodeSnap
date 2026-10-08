@@ -295,6 +295,25 @@ def summary_line(store):
             f"{c.get('cannot_check', 0)} could not be checked from the code alone (people, schedules, volumes or other files).")
 
 
+_FINDING_REF = re.compile(r"\s*\(?\b[Ff]indings?\s+\d+(?:\s*(?:/|,|&|and)\s*\d+)*\)?:?\s*")
+_CONFIRMS = re.compile(r"^(?:(?:the )?(?:findings?|code|source)\s+)?(?:also\s+)?(?:confirms?|shows?|supports?|matches)\b", re.I)
+
+
+def note_for(correction):
+    """The correction as a short note for the reader: no internal finding numbers, and nothing when the 'correction' only
+    confirms the statement."""
+    text = _FINDING_REF.sub(" ", (correction or "").strip()).strip(" ;,")
+    if not text or _CONFIRMS.match(text) and " but " not in text.lower() and " not " not in text.lower():
+        return ""
+    if re.match(r"(?i)shows?\b", text):
+        text = "The code " + text[0].lower() + text[1:]
+    words = text.split()
+    if len(words) > 40:
+        cut = " ".join(words[:40])
+        text = cut[:max(cut.rfind(";"), cut.rfind(". "), cut.rfind(", "))] if max(cut.rfind(";"), cut.rfind(". "), cut.rfind(", ")) > 60 else cut
+    return text[:1].upper() + text[1:].rstrip(" ;,.") + "."
+
+
 def apply_to_docx(document, store):
     v = verdicts(store)
     if not v:
@@ -313,9 +332,11 @@ def apply_to_docx(document, store):
                 edited = True
                 continue
             if r and r.get("verdict") == "partly" and r.get("correction"):
-                sent = f"{sent} Code check: {r['correction'].strip()}"
-                changed["corrected"] += 1
-                edited = True
+                note = note_for(r["correction"])
+                if note:
+                    sent = f"{sent} Code check: {note}"
+                    changed["corrected"] += 1
+                    edited = True
             parts.append(sent)
         if edited:
             par.runs[0].text = " ".join(parts) if parts else "Removed after the code check: not shown by the code."

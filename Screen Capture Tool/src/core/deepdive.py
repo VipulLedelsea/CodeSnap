@@ -444,6 +444,24 @@ REVIEW_BATCH = 80
 MIN_SPLIT = 120
 
 
+def _window_cache_get(store, art_id, key):
+    """A window of a long file that was already read and paid for, kept so a failure later in the file does not repeat it.
+    The key holds the exact prompt, so a changed file, prompt or model never reuses an old answer."""
+    return ((store.get_meta(f"deepdive_windows_{art_id}") or {}).get("reads") or {}).get(key)
+
+
+def _window_cache_put(store, art_id, key, data):
+    with _META_LOCK:
+        cur = store.get_meta(f"deepdive_windows_{art_id}") or {"reads": {}}
+        cur["reads"][key] = data
+        store.set_meta(f"deepdive_windows_{art_id}", cur)
+
+
+def _window_cache_clear(store, art_id):
+    with _META_LOCK:
+        store.set_meta(f"deepdive_windows_{art_id}", {"reads": {}})
+
+
 def window_workers():
     """How many windows of one file are in flight at once. In batch mode every call waits for its batch, so they all go together."""
     batch = os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes")
@@ -706,6 +724,10 @@ def analyse_file(store, client, art, model=None, review=True, review_model=None,
                      f"{', '.join(only)}. Review ONLY those lines (the rest is context) and record everything they show, including defects.\n")
         content = header + part + "\n" + listing(text, q0["bad_lines"], a - SEGMENT_CONTEXT, b + SEGMENT_CONTEXT) if part else \
             header + "\n" + listing(text, q0["bad_lines"])
+        key = f"{model}:{step}:{a}-{b}:{_hash(content)}"
+        saved = _window_cache_get(store, art["id"], key)
+        if saved is not None:
+            return [saved]
         msg_, ms_ = _analysis_call(store, client, art["id"], step, model, content)
         _log(store, step, art["id"], model, msg_, ms_)
         if getattr(msg_, "stop_reason", None) == "max_tokens":
@@ -719,6 +741,8 @@ def analyse_file(store, client, art, model=None, review=True, review_model=None,
         if (a, b) != (1, n_lines):     # a fact belongs to the window its first line is in
             d_["facts"] = [f for f in d_["facts"] if isinstance(f, dict) and isinstance(f.get("lines"), list) and f["lines"]
                            and isinstance(f["lines"][0], int) and a <= f["lines"][0] <= b]
+        if n_lines > SEGMENT_LINES * 1.25:
+            _window_cache_put(store, art["id"], key, d_)
         return [d_]
 
     reads = [d_ for part in parallel(lambda w: read_window(w[0], w[1], "deepdive"), segments(n_lines)) for d_ in part]
@@ -790,6 +814,7 @@ def analyse_file(store, client, art, model=None, review=True, review_model=None,
         f["id"] = i
         f["fact_id"] = f"F{i}"   # numbered here, after review, so a cited ID always matches a fact that is kept
     purpose = (data.get("purpose") or "").strip()
+    _window_cache_clear(store, art["id"])      # the file is done; its windows are in the result
     return {"artifact_id": art["id"], "name": art["name"], "version": art.get("version"), "hash": _hash(text),
             "model": model, "review_model": review_model if review else None, "prompt_version": PROMPT_VERSION, "ran_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "purpose": purpose, "file_role": _enum(data.get("file_role"), FILE_ROLES), "run_mode": _enum(data.get("run_mode"), RUN_MODES),

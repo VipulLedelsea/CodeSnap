@@ -1734,6 +1734,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                     security_counts={severity: sum(f["severity"] == severity for f in sec_f) for severity in SEV},
                     priority_reasons=[r_["title"] for r_ in BR[:2]], full_summary=bool(_es))
     RRV.apply_to_docx(doc.d, store)
+    _label_bare_inserts(doc)
     _fill_toc(doc)
     buf = io.BytesIO()
     doc.d.save(buf)
@@ -2300,6 +2301,36 @@ def _label_unknowns(doc):
                 col_label = head[i] if i < len(head) and head[i] != row_label else ""
                 label = row_label if len(cells) == 2 else " ".join(x for x in (_specific(row_label), _specific(col_label)) if x)
                 set_cell(cell, lead.sub(placeholder(label or col_label), text, count=1))
+
+
+BARE = "<insert information here>"
+
+
+def _label_bare_inserts(doc):
+    """A bare '<insert information here>' (made by a later wording pass) names what is missing: the column and row it is
+    in for a table cell, or the section it is under for a paragraph."""
+    for table in doc.d.tables:
+        rows = table.rows
+        if len(rows) < 2:
+            continue
+        head = [c.text.strip() for c in rows[0].cells]
+        for row in rows[1:]:
+            cells = row.cells
+            for i, cell in enumerate(cells):
+                if BARE not in cell.text:
+                    continue
+                row_label = cells[0].text.strip() if i else ""
+                col_label = head[i] if i < len(head) and head[i] != row_label else ""
+                label = row_label if len(cells) == 2 else " ".join(x for x in (_specific(row_label), _specific(col_label)) if x)
+                set_cell(cell, cell.text.replace(BARE, placeholder(label or col_label)))
+    section = ""
+    for p in doc.d.paragraphs:
+        if (p.style.name if p.style is not None else "").startswith("Heading"):
+            section = re.sub(r"^\d+(\.\d+)*\.?\s*", "", p.text).strip()
+        elif BARE in p.text and p.runs:
+            p.runs[0].text = p.text.replace(BARE, placeholder(section))
+            for r_ in p.runs[1:]:
+                r_.text = ""
 
 
 def _no_placeholders(doc):
