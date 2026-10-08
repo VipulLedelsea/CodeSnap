@@ -87,12 +87,12 @@ SCOPE = ("Write only output item 1, the executive summary. Work through steps 1 
          "appear below. Call record_exec_summary once.\n"
          "Be brief and direct: the whole summary under 300 words, no filler, no repeating the same point in two fields. "
          "what_it_does is one sentence. Each reason, risk, the lifecycle status and the decision is one sentence of at most "
-         "30 words. Use exact names and values from the findings and leave out anything vague. Fill every field the findings "
+         "25 words, not counting citations. Put several fact IDs in separate brackets, one per fact: [A.cbl:F1] [B.cbl:F2]. Use exact names and values from the findings and leave out anything vague. Fill every field the findings "
          "and inputs support. Where a field needs something they do not give you, write the placeholder "
          "<insert {specific item} information here>, naming the specific item, for example "
          "<insert user and volume information here> or <insert hosting cost information here>. Never guess, and never "
          "leave a field empty.")
-WORD_LIMITS = {"what_it_does": 45, "reason": 32, "risk": 32, "lifecycle": 40, "decision": 35, "confidence": 32}
+WORD_LIMITS = {"what_it_does": 40, "reason": 28, "risk": 28, "lifecycle": 35, "decision": 30, "confidence": 28}
 _PLACEHOLDER = re.compile(r"<\s*insert\s+([^<>]{1,70}?)(?:\s+information)?\s+here\s*>", re.I)
 
 TOOL = {
@@ -117,7 +117,9 @@ TOOL = {
                      "decision", "confidence", "confidence_and_coverage"]},
 }
 
-_CITE = re.compile(r"\[([^\[\]:\n]{1,120}):\s*(F\d+(?:\s*,\s*F\d+)*)\s*\]")
+_CITE = re.compile(r"\[([^\[\]:\n]{1,120}):\s*(F\d+(?:\s*,\s*F\d+)*)\s*\]")   # one finding: [file:F12]
+_BRACKET = re.compile(r"\[([^\[\]\n]{1,600})\]")
+_PAIR = re.compile(r"([A-Za-z0-9_.$#@-]+(?: [A-Za-z0-9_.$#@-]+)*)\s*:\s*(F\d+(?:\s*,\s*F\d+)*)")
 _EMOJI = re.compile("[←-⇿⌀-⏿①-➿⤀-⥿⬀-⯿\U0001f000-\U0001faff️]")
 
 
@@ -216,18 +218,32 @@ def clean_style(text: str) -> str:
 
 
 def check_citations(text, index, dropped):
-    """Remove citations that do not match a kept finding; keep the others, one bracket per fact."""
+    """Every bracket that holds finding references becomes one [file:F12] per kept finding. A bracket may list several
+    files, as in [A.cbl:F1, B.cbl:F2]. A reference that matches no kept finding is removed and recorded."""
     def fix(m):
-        name, ids = m.group(1).strip(), re.findall(r"F\d+", m.group(2))
-        dropped.extend(f"{name}:{i}" for i in ids if f"{name}:{i}" not in index)
-        return " ".join(f"[{name}:{i}]" for i in ids if f"{name}:{i}" in index)
-    out = _CITE.sub(fix, text or "")
+        pairs = _PAIR.findall(m.group(1))
+        if not pairs:
+            return m.group(0)
+        keep = []
+        for name, ids in pairs:
+            for i in re.findall(r"F\d+", ids):
+                (keep if f"{name.strip()}:{i}" in index else dropped).append(f"{name.strip()}:{i}")
+        return " ".join(f"[{k}]" for k in keep if k in index)
+    out = _BRACKET.sub(fix, text or "")
     return re.sub(r"\s+([.,;])", r"\1", re.sub(r"[ \t]{2,}", " ", out)).strip()
 
 
+def cited_ids(text):
+    return [f"{n.strip()}:{i}" for n, ids in _CITE.findall(text or "") for i in re.findall(r"F\d+", ids)]
+
+
 def brief(text, limit):
-    """Whole sentences only, as many as fit in the word limit; the first sentence is always kept."""
-    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z<\[])", (text or "").strip())
+    """Whole sentences only, as many as fit in the word limit. A single sentence still over 1.4 times the limit is cut at
+    its last comma or semicolon inside the limit. Citations are kept and moved to the end."""
+    text = (text or "").strip()
+    cites = _CITE.findall(text)
+    body = _CITE.sub("", text)
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z<])", body)
     out, words = [], 0
     for sent in parts:
         n = len(sent.split())
@@ -235,7 +251,14 @@ def brief(text, limit):
             break
         out.append(sent)
         words += n
-    return " ".join(out)
+    res = " ".join(out).strip()
+    if len(res.split()) > limit * 1.4:
+        cut = " ".join(res.split()[:limit])
+        k = max(cut.rfind(","), cut.rfind(";"))
+        res = (cut[:k] if k > len(cut) // 2 else cut).rstrip(" ,;:") + "."
+    res = re.sub(r"\s+([.,;])", r"\1", res)
+    kept = " ".join(f"[{n.strip()}:{ids.replace(' ', '')}]" for n, ids in cites) if cites else ""
+    return (res + " " + kept).strip() if kept else res
 
 
 def _ph(label):

@@ -2219,8 +2219,7 @@ def _fact_table(doc, tables, store, summary, anchor):
     index = ES.finding_index(store)
     cited = {f for r in summary.get("risks") or [] for f in r["facts"]}
     for text in ES.paragraphs(summary):
-        for name, ids in ES._CITE.findall(text):
-            cited |= {f"{name.strip()}:{i}" for i in re.findall(r"F\d+", ids)}
+        cited |= set(ES.cited_ids(text))
     cited = sorted(cited & set(index), key=lambda k: (k.rsplit(":F", 1)[0], int(k.rsplit(":F", 1)[1])))
     if not cited:
         return

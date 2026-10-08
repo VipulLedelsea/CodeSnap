@@ -33,6 +33,9 @@ For each one copy the exact text of both statements as first_quote and second_qu
 If you are not sure both statements are about the same thing, leave it out. Return an empty list when the report is consistent."""
 
 
+NOT_ONE = re.compile(r"\b(actually consistent|(?:is |are )?consistent,? (?:not|-)|not a (?:real )?contradiction|skip\b|remove\b|not an? (?:real )?(?:issue|inconsisten))", re.I)
+
+
 def _norm(text):
     return re.sub(r"\s+", " ", text or "").strip()
 
@@ -70,6 +73,8 @@ def verified(items, text):
         a, b = _norm(it.get("first_quote")), _norm(it.get("second_quote"))
         if len(a) < 8 or len(b) < 8 or a == b or a not in flat or b not in flat:
             continue
+        if NOT_ONE.search(it.get("why") or ""):
+            continue       # the reader said, in its own words, that this is not a contradiction
         key = tuple(sorted((a, b)))
         if key in seen:
             continue
