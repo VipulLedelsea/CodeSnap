@@ -141,15 +141,68 @@ def _quote_ok(quote, text):
     return bool(q) and q in re.sub(r"\s+", " ", text or "")
 
 
-def _ask(store, client, model, art, claims):
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9_$#@-]{3,}")
+_RANK = {"supported": 3, "partly": 2, "unsupported": 1}
+
+
+def _claim_window(client_args, a, b):
+    store, client, model, art, claims, q = client_args
     text = art.get("transcription") or ""
-    q = D.capture_quality(store, art)
-    body = (f"File: {art['name']}\nLanguage: {art.get('language') or 'unknown'}\n\n{D.listing(text, q['bad_lines'])}\n\nClaims:\n"
+    n = len(text.split("\n"))
+    shown = (a, b) != (1, n)
+    note = (f"You are shown lines {max(a - D.SEGMENT_CONTEXT, 1)}-{min(b + D.SEGMENT_CONTEXT, n)} of {n}. Judge each claim from these "
+            f"lines only; if they do not settle it, answer cannot_check.\n") if shown else ""
+    listing = D.listing(text, q["bad_lines"], a - D.SEGMENT_CONTEXT, b + D.SEGMENT_CONTEXT) if shown else D.listing(text, q["bad_lines"])
+    body = (f"File: {art['name']}\nLanguage: {art.get('language') or 'unknown'}\n{note}\n{listing}\n\nClaims:\n"
             + "\n".join(claim_line(i, c) for i, c in enumerate(claims, 1)))
     msg, ms = D._call(client, model, SYSTEM, TOOL, body)
     D._log(store, "report_review", art["id"], model, msg, ms)
-    got = {int(v["id"]): v for v in (D._tool(msg, TOOL["name"]) or {}).get("verdicts") or []
-           if isinstance(v, dict) and str(v.get("id", "")).isdigit()}
+    return {int(v["id"]): v for v in (D._tool(msg, TOOL["name"]) or {}).get("verdicts") or []
+            if isinstance(v, dict) and str(v.get("id", "")).isdigit()}
+
+
+def _assign(claims, text, windows, per_claim=2):
+    """For a long file: the windows each claim is sent to, chosen by the names and values it shares with the code there.
+    A name found in few windows counts for more than one found everywhere."""
+    lines = text.split("\n")
+    sets = [set(w.upper() for w in _WORD.findall("\n".join(lines[a - 1:b]))) for a, b in windows]
+    seen_in = {}
+    for st in sets:
+        for w in st:
+            seen_in[w] = seen_in.get(w, 0) + 1
+    out = []
+    for c in claims:
+        words = {w.upper() for w in _WORD.findall(c["text"])}
+        score = [sum(1.0 / seen_in[w] for w in words if w in st) for st in sets]
+        out.append([i for i in sorted(range(len(windows)), key=lambda i: -score[i])[:per_claim] if score[i] > 0])
+    return out
+
+
+def _ask(store, client, model, art, claims):
+    text = art.get("transcription") or ""
+    q = D.capture_quality(store, art)
+    n = len(text.split("\n"))
+    if n <= D.SEGMENT_LINES * 1.25:
+        got = _claim_window((store, client, model, art, claims, q), 1, n)
+    else:
+        windows = D.segments(n)
+        where = _assign(claims, text, windows)
+        jobs = []
+        for wi, (a, b) in enumerate(windows):
+            ids = [i for i, ws in enumerate(where) if wi in ws]
+            if ids:
+                jobs.append((a, b, ids))
+
+        def one(job):
+            a, b, ids = job
+            res = _claim_window((store, client, model, art, [claims[i] for i in ids], q), a, b)
+            return {ids[k - 1]: v for k, v in res.items() if 1 <= k <= len(ids)}
+        got = {}
+        for part in D.parallel(one, jobs):
+            for i, v in part.items():
+                if _RANK.get(v.get("verdict"), 0) > _RANK.get((got.get(i) or {}).get("verdict"), 0):
+                    got[i] = v
+        got = {i + 1: v for i, v in got.items()}
     out = {}
     for i, c in enumerate(claims, 1):
         v = got.get(i) or {"verdict": "cannot_check"}
@@ -159,15 +212,29 @@ def _ask(store, client, model, art, claims):
     return out
 
 
+def fair_facts(dd, names, cap, per_file_min=3):
+    """Lines like '[n] file lines a-b: statement' from every reviewed file, most serious first and an equal share per file,
+    so a long first file cannot crowd out the others."""
+    sev = {"high": 0, "medium": 1, "low": 2, "info": 3}
+    per = {}
+    for k, r in dd.items():
+        fs = sorted(r.get("facts") or [], key=lambda f: (sev.get(f.get("severity"), 4), (f.get("lines") or [0])[0]))
+        per[k] = fs
+    share = max(per_file_min, cap // max(len(per), 1))
+    picked = [(k, f) for k, fs in per.items() for f in fs[:share]]
+    extra = [(k, f) for k, fs in per.items() for f in fs[share:]]
+    picked += sorted(extra, key=lambda kf: sev.get(kf[1].get("severity"), 4))[:max(cap - len(picked), 0)]
+    out = []
+    for k, f in picked[:cap]:
+        lines = f.get("lines") or [0, 0]
+        out.append(f"[{len(out) + 1}] {names.get(k, k)} lines {lines[0]}-{lines[-1]}: {f.get('statement', '')}")
+    return out
+
+
 def _ask_program(store, client, model, claims):
-    facts = []
     dd = store.get_meta("deepdive") or {}
     names = {str(a["id"]): a["name"] for a in store.artifacts()}
-    for k, r in dd.items():
-        for f in (r.get("facts") or [])[:40]:
-            lines = f.get("lines") or [0, 0]
-            facts.append(f"[{len(facts) + 1}] {names.get(k, k)} lines {lines[0]}-{lines[-1]}: {f.get('statement', '')}")
-    facts = facts[:600]
+    facts = fair_facts(dd, names, 600)
     body = ("Source findings already checked against quotes in the code:\n" + "\n".join(facts)
             + "\n\nClaims (these span several files; decide from the findings above):\n"
             + "\n".join(claim_line(i, c) for i, c in enumerate(claims, 1)))

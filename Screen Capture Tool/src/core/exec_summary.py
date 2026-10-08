@@ -8,7 +8,7 @@ import time
 
 from core import deepdive as D
 
-MAX_INPUT_CHARS = 380000
+MAX_INPUT_CHARS = 300000
 VERDICTS = ["Retain", "Remediate", "Replatform", "Replace", "Retire"]
 SEVERITIES = ["Critical", "High", "Medium", "Low"]
 # report details that describe the business, in the order the model sees them
@@ -87,12 +87,12 @@ SCOPE = ("Write only output item 1, the executive summary. Work through steps 1 
          "appear below. Call record_exec_summary once.\n"
          "Be brief and direct: the whole summary under 300 words, no filler, no repeating the same point in two fields. "
          "what_it_does is one sentence. Each reason, risk, the lifecycle status and the decision is one sentence of at most "
-         "25 words, not counting citations. Put several fact IDs in separate brackets, one per fact: [A.cbl:F1] [B.cbl:F2]. Use exact names and values from the findings and leave out anything vague. Fill every field the findings "
+         "30 words, not counting citations. Put several fact IDs in separate brackets, one per fact: [A.cbl:F1] [B.cbl:F2]. Use exact names and values from the findings and leave out anything vague. Fill every field the findings "
          "and inputs support. Where a field needs something they do not give you, write the placeholder "
          "<insert {specific item} information here>, naming the specific item, for example "
          "<insert user and volume information here> or <insert hosting cost information here>. Never guess, and never "
          "leave a field empty.")
-WORD_LIMITS = {"what_it_does": 40, "reason": 28, "risk": 28, "lifecycle": 35, "decision": 30, "confidence": 28}
+WORD_LIMITS = {"what_it_does": 45, "reason": 35, "risk": 35, "lifecycle": 40, "decision": 35, "confidence": 30}
 _PLACEHOLDER = re.compile(r"<\s*insert\s+([^<>]{1,70}?)(?:\s+information)?\s+here\s*>", re.I)
 
 TOOL = {
@@ -137,23 +137,38 @@ def finding_index(store) -> dict:
     return out
 
 
-def _files(store, skip=None):
+def _pick(facts, cap):
+    """The `cap` most serious findings (then those that state rules, calculations and data use), back in line order."""
+    sev = {"high": 0, "medium": 1, "low": 2, "info": 3}
+    rank = {"business_rule": 0, "calculation": 0, "data_write": 1, "data_read": 1, "interface": 1, "security": 1, "data_integrity": 1,
+            "defect": 1, "dependency": 2, "configuration": 2}
+    keep = sorted(range(len(facts)), key=lambda i: (sev.get(facts[i].get("severity"), 4) if facts[i].get("severity") in ("high", "medium")
+                                                    else 2 + rank.get(facts[i].get("category"), 3), i))[:cap]
+    return [facts[i] for i in sorted(keep)]
+
+
+def _files(store, skip=None, fact_cap=None, rows=None):
     reviews = D.current_reviews(store)
     dd = store.get_meta("deepdive")
-    rows = []
+    out = []
     for art in store.artifacts():
         d = reviews.get(str(art["id"]))
         if not d:
             continue
+        shown = [f for f in d.get("facts") or [] if not (skip and f.get("severity") in skip)]
+        if fact_cap is not None:
+            shown = _pick(shown, fact_cap)
         facts = [{"cite": f"[{art['name']}:{_fid(f)}]", "category": f.get("category"), "severity": f.get("severity"),
-                  "basis": f.get("basis"), "statement": f"{f.get('statement', '')} (lines {f['lines'][0]}-{f['lines'][-1]})"}
-                 for f in d.get("facts") or [] if not (skip and f.get("severity") in skip)]
+                  "basis": f.get("basis"), "statement": f"{f.get('statement', '')} (lines {f['lines'][0]}-{f['lines'][-1]})"} for f in shown]
         concerns = [c.get("line") for c in D.current_concerns(store, art, dd) or []]
-        rows.append({"file": art["name"], "language": art.get("language"), "file_role": d.get("file_role") or "not shown",
-                     "run_mode": d.get("run_mode") or "not shown", "purpose": d.get("purpose"), "facts": facts,
-                     **{k: d.get(k) or [] for k in D.ROLLUPS}, "unknowns": d.get("unknowns") or [],
-                     "capture_concern_lines": concerns})
-    return rows
+        row = {"file": art["name"], "language": art.get("language"), "file_role": d.get("file_role") or "not shown",
+               "run_mode": d.get("run_mode") or "not shown", "purpose": d.get("purpose"), "facts": facts,
+               "findings_total": len(d.get("facts") or []), "findings_shown": len(facts),
+               **{k: (d.get(k) or [])[:rows] if rows is not None else d.get(k) or [] for k in D.ROLLUPS},
+               "unknowns": (d.get("unknowns") or [])[:rows if rows is not None else None],
+               "capture_concern_lines": concerns[:50], "capture_concern_count": len(concerns)}
+        out.append(row)
+    return out
 
 
 def _lifecycle(store):
@@ -194,14 +209,21 @@ def inputs(store) -> dict:
     }
 
 
+# Each step down shows fewer findings and list rows per file; the first that fits is used. The text is never cut, so it
+# stays valid, and with many large files every file still gets its share.
+LEVELS = [dict(), dict(skip={"info"}), dict(skip={"info", "low"}, rows=60), dict(skip={"info", "low"}, fact_cap=60, rows=25),
+          dict(skip={"info", "low"}, fact_cap=25, rows=12), dict(skip={"info", "low"}, fact_cap=12, rows=6),
+          dict(skip={"info", "low"}, fact_cap=6, rows=0)]
+
+
 def _payload(store):
     base = inputs(store)
     text = ""
-    for skip in (None, {"info"}, {"info", "low"}):
-        text = json.dumps({"A_per_file_findings": _files(store, skip), **base}, ensure_ascii=False, indent=1, default=str)
+    for level in LEVELS:
+        text = json.dumps({"A_per_file_findings": _files(store, **level), **base}, ensure_ascii=False, indent=1, default=str)
         if len(text) <= MAX_INPUT_CHARS:
             break
-    return text[:MAX_INPUT_CHARS]
+    return text
 
 
 def inputs_hash(store) -> str:
@@ -238,7 +260,7 @@ def cited_ids(text):
 
 
 def brief(text, limit):
-    """Whole sentences only, as many as fit in the word limit. A single sentence still over 1.4 times the limit is cut at
+    """Whole sentences only, as many as fit in the word limit. A single sentence still over 1.6 times the limit is cut at
     its last comma or semicolon inside the limit. Citations are kept and moved to the end."""
     text = (text or "").strip()
     cites = _CITE.findall(text)
@@ -252,7 +274,7 @@ def brief(text, limit):
         out.append(sent)
         words += n
     res = " ".join(out).strip()
-    if len(res.split()) > limit * 1.4:
+    if len(res.split()) > limit * 1.6:
         cut = " ".join(res.split()[:limit])
         k = max(cut.rfind(","), cut.rfind(";"))
         res = (cut[:k] if k > len(cut) // 2 else cut).rstrip(" ,;:") + "."
@@ -303,20 +325,50 @@ def validate(data, index) -> dict:
             "dropped_citations": sorted(set(dropped))}
 
 
+# The report's own disposition (from its scoring and options comparison) in this summary's five words.
+_DISPOSITION = {"retain": "Remediate", "refactor": "Remediate", "rehost": "Replatform", "replatform": "Replatform",
+                "rearchitect": "Replace", "replace": "Replace", "retire": "Retire"}
+
+
+def report_verdict(store):
+    """(verdict word, the report's label and meaning) the rest of the report recommends, or (None, None) when not yet assessed."""
+    v = (store.get_meta("assessment") or {}).get("verdict") or {}
+    code = v.get("code")
+    if code not in _DISPOSITION:
+        return None, None
+    word = "Retain" if code == "retain" and not any(
+        f.get("severity") in ("high", "critical") for r in D.current_reviews(store).values() for f in r.get("facts") or []) \
+        else _DISPOSITION[code]
+    return word, f"{v.get('label')}: {v.get('meaning')}"
+
+
 def run(store, client, model=None):
     from core import pipeline
     model = model or pipeline.FINAL_MODEL
     index = finding_index(store)
     if not index:
         return None
-    msg, ms = D._call(client, model, SYSTEM, TOOL, SCOPE + "\n\n" + _payload(store))
-    D._log(store, "exec_summary", None, model, msg, ms)
-    if getattr(msg, "stop_reason", None) == "max_tokens":
-        raise ValueError("executive summary was truncated")
-    data = D._tool(msg, TOOL["name"])
-    if not isinstance(data, dict):
-        raise ValueError("executive summary did not return its required result")
-    out = validate(data, index)
+    expected, meaning = report_verdict(store)
+    steer = ("\nThe report's own scoring and options comparison recommend " + expected + f" ({meaning}). Your verdict must be {expected}, "
+             "so that the report agrees with itself. Write the reasons and risks that support it from the findings, and say in the "
+             "decision what would change it.") if expected else ""
+    payload = SCOPE + steer + "\n\n" + _payload(store)
+    out = None
+    for attempt in (1, 2):
+        msg, ms = D._call(client, model, SYSTEM, TOOL, payload if attempt == 1 else payload.replace(
+            SCOPE, SCOPE + f"\nYour previous answer gave a different verdict. The verdict must be {expected}.", 1))
+        D._log(store, "exec_summary", None, model, msg, ms)
+        if getattr(msg, "stop_reason", None) == "max_tokens":
+            raise ValueError("executive summary was truncated")
+        data = D._tool(msg, TOOL["name"])
+        if not isinstance(data, dict):
+            raise ValueError("executive summary did not return its required result")
+        out = validate(data, index)
+        if not expected or out["verdict"] == expected:
+            break
+    if expected and out["verdict"] != expected:      # still different: the report's verdict stands, the difference is kept for the reviewer
+        out["model_verdict"] = out["verdict"]
+        out["verdict"] = expected
     out.update(model=model, ran_at=time.strftime("%Y-%m-%dT%H:%M:%S"), inputs_hash=inputs_hash(store))
     store.set_meta("exec_summary", out)
     return out

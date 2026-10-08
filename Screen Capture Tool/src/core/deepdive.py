@@ -444,6 +444,50 @@ REVIEW_BATCH = 80
 MIN_SPLIT = 120
 
 
+def window_workers():
+    """How many windows of one file are in flight at once. In batch mode every call waits for its batch, so they all go together."""
+    batch = os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes")
+    return max(1, int(os.environ.get("CODESNAP_WINDOW_WORKERS", "40" if batch else "6")))
+
+
+def _twice(fn):
+    """A call that failed for a passing reason (network, busy service, a batch entry that errored) is made once more.
+    A ValueError is an answer we cannot use (cut off, wrong shape): it is not repeated."""
+    def run(x):
+        try:
+            return fn(x)
+        except ValueError:
+            raise
+        except Exception:  # noqa: BLE001
+            time.sleep(2)
+            return fn(x)
+    return run
+
+
+def parallel(fn, items):
+    """fn over items, results in order; each is tried twice and the first error left is raised."""
+    items = list(items)
+    fn = _twice(fn)
+    if len(items) <= 1:
+        return [fn(x) for x in items]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(len(items), window_workers())) as pool:
+        return list(pool.map(fn, items))
+
+
+def fact_batches(facts, size=None, span=1200):
+    """Consecutive findings in line order, at most `size` of them and spanning at most `span` lines, so a check call
+    only needs the part of the file they sit in."""
+    size = size or REVIEW_BATCH
+    out, cur = [], []
+    for f in sorted(facts, key=lambda f: (f["lines"][0], f["lines"][-1])):
+        if cur and (len(cur) >= size or f["lines"][-1] - cur[0]["lines"][0] > span):
+            out.append(cur)
+            cur = []
+        cur.append(f)
+    return out + ([cur] if cur else [])
+
+
 def segments(n_lines, size=None):
     size = size or SEGMENT_LINES
     if n_lines <= size * 1.25:
@@ -677,9 +721,7 @@ def analyse_file(store, client, art, model=None, review=True, review_model=None,
                            and isinstance(f["lines"][0], int) and a <= f["lines"][0] <= b]
         return [d_]
 
-    reads = []
-    for a_, b_ in segments(n_lines):
-        reads += read_window(a_, b_, "deepdive")
+    reads = [d_ for part in parallel(lambda w: read_window(w[0], w[1], "deepdive"), segments(n_lines)) for d_ in part]
     data = reads[0] if len(reads) == 1 else _merge_reads(reads)
     lines_ = text.split("\n")
     concerns = [c for c in data.get("capture_concerns") or [] if isinstance(c, dict) and isinstance(c.get("line"), int)
@@ -691,12 +733,9 @@ def analyse_file(store, client, art, model=None, review=True, review_model=None,
         def run_of(g):
             lo, hi = (int(x) for x in re.split("[–-]", g))
             return lo, hi
-        more_reads = []
-        for a_, b_ in segments(n_lines):
-            inside = [g for g in gaps if a_ <= run_of(g)[0] <= b_]
-            if inside:
-                more_reads += read_window(a_, b_, "deepdive_gaps", only=inside)
-        more = _merge_reads(more_reads)
+        todo = [(a_, b_, [g for g in gaps if a_ <= run_of(g)[0] <= b_]) for a_, b_ in segments(n_lines)]
+        more = _merge_reads([d_ for part in parallel(lambda w: read_window(w[0], w[1], "deepdive_gaps", only=w[2]),
+                                                      [w for w in todo if w[2]]) for d_ in part])
         seen = {(f["category"], _norm(f["quote"])) for f in kept}
         k2, c2, r2, u2 = check_facts(more.get("facts"), text, q["bad_lines"])
         kept += [f for f in k2 if (f["category"], _norm(f["quote"])) not in seen]
@@ -709,17 +748,24 @@ def analyse_file(store, client, art, model=None, review=True, review_model=None,
     if review and kept:
         for i, f in enumerate(kept, 1):
             f["id"] = i
-        verdicts = {}
-        for i0 in range(0, len(kept), REVIEW_BATCH):
-            batch = kept[i0:i0 + REVIEW_BATCH]
+        def check(batch):
             payload = "\n".join(f"{f['id']}. [{f['category']}] {f['statement']} (lines {f['lines'][0]}-{f['lines'][1]})" for f in batch)
+            lo, hi = min(f["lines"][0] for f in batch) - SEGMENT_CONTEXT, max(f["lines"][-1] for f in batch) + SEGMENT_CONTEXT
+            part = ""
+            if n_lines > SEGMENT_LINES * 1.25:      # a long file is shown only around the findings being checked
+                part = (f"You are shown lines {max(lo, 1)}-{min(hi, n_lines)} of {n_lines}. A finding that says something is not used "
+                        f"or not called elsewhere in this file cannot be checked from this part: accept it if it is worded as "
+                        f"limited to this file, marked inferred, and nothing shown contradicts it.\n")
             rmsg, rms = _call(client, review_model, REVIEW_SYSTEM, REVIEW_TOOL,
-                              context + f"File: {art['name']}\n\n{listing(text, q['bad_lines'])}\n\nFindings:\n{payload}")
+                              context + f"File: {art['name']}\n{part}\n{listing(text, q['bad_lines'], lo, hi) if part else listing(text, q['bad_lines'])}\n\nFindings:\n{payload}")
             _log(store, "deepdive_review", art["id"], review_model, rmsg, rms)
-            if getattr(rmsg,'stop_reason',None)=='max_tokens':
+            if getattr(rmsg, 'stop_reason', None) == 'max_tokens':
                 raise ValueError('Independent source review was truncated; review remains incomplete.')
-            verdicts.update({int(v["id"]): v for v in (_tool(rmsg, REVIEW_TOOL["name"]) or {}).get("verdicts") or []
-                             if isinstance(v, dict) and str(v.get("id", "")).isdigit()})
+            return {int(v["id"]): v for v in (_tool(rmsg, REVIEW_TOOL["name"]) or {}).get("verdicts") or []
+                    if isinstance(v, dict) and str(v.get("id", "")).isdigit()}
+        verdicts = {}
+        for got in parallel(check, fact_batches(kept)):
+            verdicts.update(got)
         final = []
         for f in kept:
             v = verdicts.get(f["id"])
@@ -811,6 +857,41 @@ def _has_open_problem(store, a, dd) -> bool:
         return False
 
 
+SYNTH_MAX_FACTS = 1500
+_IDENT = re.compile(r"[A-Za-z][A-Za-z0-9_$#@-]{3,}")
+_COMMON = {"THIS", "THAT", "WITH", "FROM", "WHEN", "THEN", "FILE", "LINE", "LINES", "VALUE", "FIELD", "RECORD", "AFTER", "BEFORE",
+           "ONLY", "EACH", "INTO", "NEVER", "USED", "WRITES", "READS", "CALLS", "SETS", "WHERE", "WHICH", "NOT", "THAN", "OTHER"}
+_PRIORITY = {"business_rule": 0, "calculation": 0, "interface": 1, "data_read": 1, "data_write": 1, "dependency": 1,
+             "configuration": 1, "security": 1, "data_integrity": 1, "defect": 2, "control_flow": 3, "error_handling": 3}
+
+
+def cross_file_candidates(facts, cap):
+    """facts is [(id, file, fact)]. Up to `cap` of them: all when they fit, otherwise the findings that share a name or value
+    with another file's findings (the only ones a cross-file observation can use), an equal share per file, serious first."""
+    if len(facts) <= cap:
+        return facts
+    in_files = {}
+    for _, name, f in facts:
+        for w in {w.upper() for w in _IDENT.findall(f.get("statement") or "")} - _COMMON:
+            in_files.setdefault(w, set()).add(name)
+    sev = {"high": 0, "medium": 1, "low": 2, "info": 3}
+    scored = []
+    for item in facts:
+        shared = sum(1 for w in {w.upper() for w in _IDENT.findall(item[2].get("statement") or "")} - _COMMON if len(in_files.get(w, ())) > 1)
+        if shared:
+            f = item[2]
+            scored.append((_PRIORITY.get(f.get("category"), 4), sev.get(f.get("severity"), 4), -shared, item))
+    scored.sort(key=lambda t: t[:3])
+    per, share, out = {}, max(20, cap // max(len({n for _, n, _ in facts}), 1)), []
+    for *_, item in scored:
+        if per.get(item[1], 0) < share:
+            per[item[1]] = per.get(item[1], 0) + 1
+            out.append(item)
+    chosen = {id(x) for x in out}
+    out += [t[3] for t in scored if id(t[3]) not in chosen][:max(cap - len(out), 0)]
+    return sorted(out[:cap], key=lambda it: it[0])
+
+
 def synthesize(store, client, model=None) -> dict:
     from core.analysis import MODEL
     model = model or MODEL
@@ -820,10 +901,12 @@ def synthesize(store, client, model=None) -> dict:
         for f in r.get("facts") or []:
             fid = f"F{aid}.{f['id']}"
             index[fid] = (r["name"], f)
-            facts.append(f"{fid} [{r['name']} lines {f['lines'][0]}-{f['lines'][1]}] ({f['category']}) {f['statement']}")
+            facts.append((fid, r["name"], f))
     if len(dd) < 2 or not facts:
         return {"observations": [], "ran_at": None}
-    msg, ms = _call(client, model, SYNTH_SYSTEM, PROGRAM_TOOL, "Verified findings:\n" + "\n".join(facts[:1500]))
+    lines = [f"{fid} [{name} lines {f['lines'][0]}-{f['lines'][1]}] ({f['category']}) {f['statement']}"
+             for fid, name, f in cross_file_candidates(facts, SYNTH_MAX_FACTS)]
+    msg, ms = _call(client, model, SYNTH_SYSTEM, PROGRAM_TOOL, "Verified findings:\n" + "\n".join(lines))
     _log(store, "deepdive_program", None, model, msg, ms)
     obs = []
     for o in (_tool(msg, PROGRAM_TOOL["name"]) or {}).get("observations") or []:

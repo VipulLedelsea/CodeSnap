@@ -10,6 +10,7 @@ so the existing web report UI renders it, with the dependency graph in `diagrams
 """
 
 from core.analysis import MODEL, _parse_json
+from core.limits import fit_text
 
 PROJECT_SYSTEM = (
     "You are given the source of several files from ONE project, each preceded by its "
@@ -30,7 +31,8 @@ PROJECT_SYSTEM = (
 
 def analyze_project(client, files: list) -> dict:
     """files: list of {'name': str, 'code': str}. Returns a report dict."""
-    blocks = [f"===== FILE: {f['name']} =====\n{f['code']}" for f in files if f.get("code")]
+    per = max(4000, 300000 // max(len(files), 1))
+    blocks = [f"===== FILE: {f['name']} =====\n{fit_text(f['code'], per)}" for f in files if f.get("code")]
     joined = "\n\n".join(blocks)
     msg = client.messages.create(
         model=MODEL, max_tokens=4096, system=PROJECT_SYSTEM,

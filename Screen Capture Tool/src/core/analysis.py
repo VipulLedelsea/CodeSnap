@@ -683,6 +683,9 @@ def _parse_json(raw: str) -> dict:
     return None
 
 
+from core.limits import fit_text
+
+
 def synthesize_final(client, full_text: str) -> dict:
     """One cheap text-only call: classify the document AND summarise it.
 
@@ -695,7 +698,7 @@ def synthesize_final(client, full_text: str) -> dict:
         model=TEXT_MODEL,
         max_tokens=1024,
         system=FINALIZE_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": full_text}],
+        messages=[{"role": "user", "content": fit_text(full_text)}],
     )
     raw = "".join(getattr(b, "text", "") for b in msg.content).strip()
     data = _parse_json(raw)
@@ -1670,6 +1673,7 @@ FIX_SYSTEM_PROMPT = (
 )
 
 
+MAX_FIX_CHARS = 120000   # a whole file goes in and comes back, so a very long one is left as captured
 FIX_MAX_TOKENS = 64000   # a whole source file comes back, so the output must not be capped at a few thousand tokens
 
 
@@ -1683,6 +1687,8 @@ def fix_source(client, code: str, language: str, errors: str) -> str:
     Streams (large output). Raises FixRejected when the reply was cut off or refused, so a
     truncated file is never mistaken for a fix.
     """
+    if len(code) > MAX_FIX_CHARS:
+        raise FixRejected("the file is too long to correct in one call; the original was kept")
     kwargs = dict(
         model=MODEL,
         max_tokens=FIX_MAX_TOKENS,

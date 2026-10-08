@@ -6,7 +6,7 @@ import time
 
 from core import deepdive as D
 
-MAX_CHARS = 600000
+MAX_CHARS = 400000
 MAX_PARAGRAPH = 800
 TOOL = {
     "name": "record_inconsistencies",
@@ -84,18 +84,50 @@ def verified(items, text):
     return out
 
 
+def chunks(text, limit=None, lead=40000):
+    """The report as pieces that each fit one read. Every piece starts with the executive summary section, because a
+    contradiction between the summary and a later section is the one that matters most."""
+    limit = limit or MAX_CHARS
+    if len(text) <= limit:
+        return [text]
+    parts = re.split(r"(?m)^(?=## )", text)
+    first = parts[0] if not parts[0].startswith("## ") else ""
+    sections = [p for p in parts if p.startswith("## ")]
+    summary = next((p for p in sections if re.match(r"## 1[. ]", p) or "Application summary" in p[:80]), "")[:lead]
+    room = limit - len(summary) - 200
+    out, cur, size = [], [], 0
+    for sec in ([first] if first else []) + sections:
+        if sec is summary:
+            continue
+        pieces = [sec[i:i + room] for i in range(0, len(sec), room)] if len(sec) > room else [sec]
+        for piece in pieces:
+            if cur and size + len(piece) > room:
+                out.append(summary + "".join(cur))
+                cur, size = [], 0
+            cur.append(piece)
+            size += len(piece)
+    if cur:
+        out.append(summary + "".join(cur))
+    return out
+
+
 def run(store, client, report_docx, model=None) -> dict:
     from core import pipeline
     model = model or pipeline.FINAL_MODEL
     text = report_text(report_docx)
-    if len(text) > MAX_CHARS:
-        raise ValueError("report is too long for a single consistency read")
-    msg, ms = D._call(client, model, SYSTEM, TOOL, "Report:\n\n" + text)
-    D._log(store, "report_consistency", None, model, msg, ms)
-    if getattr(msg, "stop_reason", None) == "max_tokens":
-        raise ValueError("consistency read was truncated")
-    items = verified((D._tool(msg, TOOL["name"]) or {}).get("items"), text)
-    store.set_meta("report_consistency", {"ran_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": model, "items": items})
+    pieces = chunks(text)
+
+    def ask(piece):
+        msg, ms = D._call(client, model, SYSTEM, TOOL, "Report:\n\n" + piece)
+        D._log(store, "report_consistency", None, model, msg, ms)
+        if getattr(msg, "stop_reason", None) == "max_tokens":
+            raise ValueError("consistency read was truncated")
+        return (D._tool(msg, TOOL["name"]) or {}).get("items") or []
+
+    found = [it for part in D.parallel(ask, pieces) for it in part]
+    items = verified(found, text)
+    store.set_meta("report_consistency", {"ran_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": model, "items": items,
+                                          "pieces": len(pieces)})
     return {"items": items}
 
 

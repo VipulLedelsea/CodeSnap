@@ -151,8 +151,14 @@ def scores(facts) -> list:
                                           if np_ else "fixes issues in place; keeps " + ("both platforms." if plats == 2 else
                                                                                       f"all {plats} platforms." if plats > 2 else "the platform.")),
         "Retain": ([1, 1, 1, 5, 1, 1, 1], "no disruption, but every finding and end-of-life exposure stays open."),
+        "Retain (fix findings in place)": ([3, 2, 3, 4, 2, 2, 2],
+                                           "no platform change; the code, control and security findings are fixed in place "
+                                           "behind characterization tests, but the platforms, skill sets and end-of-life "
+                                           "exposure stay."),
     }
     first = OPTION.get(facts["program_code"], "Re-platform")
+    if facts["program_code"] == "retain" and facts.get("fixes"):
+        first = "Retain (fix findings in place)"
     order = [first] + [k for k in ("Replace (commercial or shared solution)", "Refactor (keep all platforms)", "Re-platform")
                        if k != first][:2]
     return [(k, opts[k][0], opts[k][1]) for k in order]

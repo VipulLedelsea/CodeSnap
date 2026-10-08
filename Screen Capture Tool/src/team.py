@@ -27,6 +27,7 @@ from pathlib import Path
 import tools
 from core import analysis, validate, outputs
 from core.analysis import MODEL, TEXT_MODEL
+from core.limits import fit_text
 
 MAX_ITERS = 10
 MAX_TOKENS = 4096
@@ -108,7 +109,7 @@ def _analyst_enrich(client, text: str, base: dict) -> dict:
     try:
         msg = client.messages.create(
             model=TEXT_MODEL, max_tokens=4096, system=ANALYST_SYSTEM,
-            messages=[{"role": "user", "content": text}],
+            messages=[{"role": "user", "content": fit_text(text)}],
         )
         raw = "".join(getattr(b, "text", "") for b in msg.content).strip()
         data = analysis._parse_json(raw)
@@ -290,7 +291,7 @@ def agent_diagrammer(client, code: str, language: str) -> str:
     try:
         msg = client.messages.create(
             model=TEXT_MODEL, max_tokens=2000, system=DIAGRAMMER_SYSTEM,
-            messages=[{"role": "user", "content": f"Language: {language or 'unknown'}\n\n{code}"}],
+            messages=[{"role": "user", "content": f"Language: {language or 'unknown'}\n\n{fit_text(code)}"}],
         )
         return "".join(getattr(b, "text", "") for b in msg.content).strip()
     except Exception:  # noqa: BLE001

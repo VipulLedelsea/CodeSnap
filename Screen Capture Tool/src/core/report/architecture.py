@@ -62,6 +62,15 @@ def _layer_role(art: dict, comp: dict, displays: list) -> tuple:
     return "Application", "Program"
 
 
+def _defined_here(text):
+    """Names this file itself defines as a subroutine (RPG BEGSR) or a numbered or bare paragraph header, found in one pass
+    so a long file is not searched again for every name it calls."""
+    names = {m.upper() for m in re.findall(r"(\S+)\s+BEGSR\b", text, re.I)}
+    names |= {m.upper() for m in re.findall(r"\bBEGSR\s+(\S+)", text, re.I)}
+    names |= {m.upper() for m in re.findall(r"(?m)^[ \t]*\d*[ \t]+(\S+?)\.[ \t]*$", text)}
+    return names
+
+
 def build(store, a: dict, techs: list) -> dict:
     """Components, data stores, flows, observations and a target outline, from the program model."""
     ents = {e["id"]: e for e in store.entities()}
@@ -90,8 +99,8 @@ def build(store, a: dict, techs: list) -> dict:
         calls = [x.replace(' (not provided)', ' (standard system utility; availability to confirm)')
                  if x.split(' (')[0].upper() in ('IEFBR14', 'IEBGENER') else x for x in calls]
         own = art.get("transcription") or ""
-        calls = [x for x in calls if not re.search(rf"\b{re.escape(x.split(' (')[0])}\s+BEGSR\b|\bBEGSR\s+{re.escape(x.split(' (')[0])}\b"
-                                                   rf"|^\s*\d*\s+{re.escape(x.split(' (')[0])}\.\s*$", own, re.M | re.I)]
+        defined = _defined_here(own)
+        calls = [x for x in calls if x.split(' (')[0].upper() not in defined]
         displays = names(("displays",), ("screen",))
         from .evidence import display_files, record_formats
         dfs = display_files([art])
