@@ -29,7 +29,12 @@ MODEL = _os.environ.get("CODESNAP_MODEL", "claude-opus-5-5")
 TEXT_MODEL = _os.environ.get("CODESNAP_TEXT_MODEL", "claude-sonnet-5-5")
 # Per-image extraction is an OCR-like task — use a cheaper/faster model to cut cost.
 # Reasoning steps (classify, fix) keep MODEL. Change if this model isn't available.
-EXTRACT_MODEL = MODEL  # Sonnet for extraction: follows the verbatim/no-correct rule far better than Haiku (higher cost)
+# Models that READ screenshots (the fallback reader, the line re-reads, the column and indentation reviews). Opus 5.5 is
+# not used here: in the 10/07 bake-off it was less accurate than Haiku 5.5 and Sonnet 5 (98.9% against 99.6% and 99.2%
+# of lines, 0.75 against 0.23 extra lines per frame) at 3 to 60 times the cost, and it was 95% of the reading spend on
+# 10-08-test. The first read is PLAIN_MODEL (Haiku 5.5); this is the second opinion, so it is a different model.
+READ_MODEL = _os.environ.get("CODESNAP_READ_MODEL", "claude-sonnet-5")
+EXTRACT_MODEL = READ_MODEL
 
 # Strict JSON response keeps explanation and extracted text cleanly separated.
 SYSTEM_PROMPT = (
@@ -1824,7 +1829,7 @@ def review_indentation(client, image_paths, language: str = "") -> list:
                     f"Language: {language or 'unknown'}. Inspect the code for indentation mistakes. "
                     "Return only the JSON object."})
     try:
-        msg = client.messages.create(model=MODEL, max_tokens=1024, system=INDENT_REVIEW_SYSTEM,
+        msg = client.messages.create(model=READ_MODEL, max_tokens=1024, system=INDENT_REVIEW_SYSTEM,
                                      messages=[{"role": "user", "content": content}])
         raw = "".join(getattr(b, "text", "") for b in msg.content).strip()
         data = _parse_json(raw) or {}

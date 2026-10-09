@@ -84,7 +84,7 @@ COLUMN_REVIEW_SYSTEM = (
 def review_columns(client, image_paths, code: str) -> list:
     import base64
     from pathlib import Path
-    from core.analysis import MODEL, _media_type, _parse_json
+    from core.analysis import READ_MODEL as MODEL, _media_type, _parse_json
     content = []
     for p in sorted(image_paths or [])[:8]:
         try:
