@@ -536,16 +536,35 @@ class App:
         if not self.program:
             return 0
         done = 0
+        staged = []
         for aid, kind, frames in self._pending_work():
             CAPTURES_ROOT.mkdir(parents=True, exist_ok=True)
             d = Path(tempfile.mkdtemp(prefix=f"resume_{aid}_", dir=CAPTURES_ROOT))
             self.sessions.append(d)
             for i, src in enumerate(frames, 1):
                 shutil.copyfile(src, d / f"{i:03d}.png")
-            print(f"[pending] analysing saved capture {aid} ({len(frames)} frame(s))")
+            staged.append((aid, kind, d))
+        if staged:
+            self._prefetch_pending(staged)
+        for aid, kind, d in staged:
+            print(f"[pending] analysing saved capture {aid} ({len(list(d.glob('*.png')))} frame(s))")
             self._analyse_burst(d, artifact_id=aid, kind=kind)
             done += 1
         return done
+
+    def _prefetch_pending(self, staged):
+        """Read the screenshots of every waiting file at the same time, so the per-file analysis that follows finds them
+        already read. In batch mode one read takes minutes; reading them one after another is what made runs take days."""
+        from core.analysis import prefetch_frames
+        jobs = []
+        for aid, kind, d in staged:
+            if kind == "screen":
+                continue
+            imgs = sorted(d.glob("*.png"))
+            self._sync_text_cache(d, imgs, load=True)
+            jobs += [(p, d / ".cache") for p in imgs]
+        print(f"[pending] reading {len(jobs)} screenshot(s) of {len(staged)} file(s) together")
+        prefetch_frames(self.client, jobs)
 
     def _pending_loop(self, every: float = 10.0):
         while True:

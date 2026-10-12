@@ -89,12 +89,21 @@ def repair(client, paths, raws, final, notes, statuses):
     lines = final.split("\n")
     near = _neighbours(frames, bad, final, paths)
     found = {}
+    asks = []
     for j, idx in sorted(near.items()):
         order = sorted(idx)
-        entries = [(lines[i - 1] if i else "", lines[i], lines[i + 1] if i + 1 < len(lines) else "") for i in order]
+        asks.append((j, order, [(lines[i - 1] if i else "", lines[i], lines[i + 1] if i + 1 < len(lines) else "") for i in order]))
+
+    def ask(item):
         try:
-            got = _ask(client, paths[j], entries)
+            return _ask(client, paths[item[0]], item[2])
         except Exception:  # noqa: BLE001
+            return None
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=max(1, min(len(asks), A.frame_workers()))) as pool:
+        answers = list(pool.map(ask, asks))
+    for (j, order, _), got in zip(asks, answers):
+        if got is None:
             continue
         for n, i in enumerate(order, 1):
             r = got.get(n) or {}

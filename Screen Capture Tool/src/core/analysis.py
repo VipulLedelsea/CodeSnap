@@ -1515,6 +1515,8 @@ def analyse_incremental(client, image_paths: list, cache_dir: Path = None) -> di
     so build_docx() and the callers work unchanged.
     """
     parts, metas = [], []
+    if cache_dir is not None:
+        prefetch_frames(client, [(p, cache_dir) for p in image_paths])
     for path in image_paths:
         if cache_dir is not None:
             extract_to_cache(client, path, cache_dir)
@@ -1636,6 +1638,29 @@ def extract_to_cache(client, path: Path, cache_dir: Path) -> None:
         except Exception:  # noqa: BLE001
             pass
         _publish_cache(cf, res["raw"])
+
+
+def frame_workers() -> int:
+    """How many screenshots are read at once. In batch mode each read waits minutes for its batch, so they all go together."""
+    batch = _os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes")
+    return max(1, int(_os.environ.get("CODESNAP_FRAME_WORKERS", "40" if batch else "4")))
+
+
+def prefetch_frames(client, jobs) -> None:
+    """Read many screenshots at the same time. `jobs` is a list of (image path, cache dir). A frame that fails is skipped
+    here and simply read again, with its error raised, when the caller reads it in order."""
+    jobs = list(jobs)
+    if len(jobs) < 2:
+        return
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(job):
+        try:
+            extract_to_cache(client, job[0], job[1])
+        except Exception:  # noqa: BLE001
+            pass
+    with ThreadPoolExecutor(max_workers=min(len(jobs), frame_workers())) as pool:
+        list(pool.map(one, jobs))
 
 
 def verify_for(path: Path, cache_dir: Path) -> dict:

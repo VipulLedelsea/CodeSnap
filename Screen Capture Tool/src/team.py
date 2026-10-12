@@ -45,6 +45,8 @@ def agent_extract(ctx) -> dict:
     raws = []
     metas = []
     corrections = []
+    if ctx.cache_dir is not None:
+        analysis.prefetch_frames(ctx.client, [(p, ctx.cache_dir) for p in sorted(ctx.images)])
     for p in sorted(ctx.images):
         if ctx.cache_dir is not None:
             analysis.extract_to_cache(ctx.client, p, ctx.cache_dir)
