@@ -210,8 +210,8 @@ ADVICE = {
             "this part again",
     "mismatch": "the text did not match the pixels on screen: zoom in or enlarge the font and capture again",
     "partial": "the file looks incomplete: use Add screenshots to capture only the missing start or end; the rest is kept",
-    "compile": "the code does not compile as captured, which often means a mis-read: check and recapture these lines",
-    "model": "the reviewer found text that cannot be right as captured: recapture these lines",
+    "compile": "the code does not compile as captured, which often means a mis-read: review these lines with the screenshots",
+    "model": "the reviewer found text that may be mis-read: review these lines with the screenshots",
     "spacing": "the screenshots disagree about the spacing on these lines: set the source margin again and check them",
 }
 
@@ -972,6 +972,14 @@ def run(store, client, artifact_ids=None, progress=None, force=False, program=Tr
     def one(a):
         with _META_LOCK:
             _set_active(store, a["id"], True)
+        stop = threading.Event()
+
+        def beat():   # in batch mode one file can wait hours on its batch; keep it marked as being reviewed meanwhile
+            while not stop.wait(300):
+                with _META_LOCK:
+                    if not stop.is_set():
+                        _set_active(store, a["id"], True)
+        threading.Thread(target=beat, daemon=True, name="codesnap-active-beat").start()
         try:
             res = analyse_file(store, client, a, model=model, review=review, review_model=review_model,
                                claims=(claims or {}).get(a["id"]))
@@ -981,10 +989,11 @@ def run(store, client, artifact_ids=None, progress=None, force=False, program=Tr
         except Exception as exc:  # noqa: BLE001
             return a, None, f"{a['name']}: {type(exc).__name__}: {exc}"[:240]
         finally:
+            stop.set()
             with _META_LOCK:
                 _set_active(store, a["id"], False)
 
-    workers = max(1, min(len(todo), int(os.environ.get("CODESNAP_DEEP_WORKERS", "12" if os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes") else "5"))))
+    workers = max(1, min(len(todo), int(os.environ.get("CODESNAP_DEEP_WORKERS", "40" if os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes") else "5"))))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for a, res, err in pool.map(one, todo) if workers == 1 else (f.result() for f in as_completed(
                 [pool.submit(one, a) for a in todo])):

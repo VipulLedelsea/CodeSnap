@@ -1,4 +1,5 @@
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 
 PRICES = {
@@ -83,6 +84,20 @@ def _step_table():
                       (PROJECT_SYSTEM, "project_map"), (UI_SYSTEM, "ui_screen")]
         except Exception:
             pass
+        for module, names in (("core.analysis", (("EXTRACT_PLAIN_SYSTEM_PROMPT", "read_first"), ("REREAD_SYSTEM_PROMPT", "read_recheck"))),
+                              ("core.deepdive", (("DEEP_SYSTEM", "deepdive"), ("REVIEW_SYSTEM", "deepdive_review"),
+                                                 ("SYNTH_SYSTEM", "program_synthesis"))),
+                              ("core.neighbor", (("SYSTEM", "neighbor_reread"),)),
+                              ("core.report_review", (("SYSTEM", "report_reread"), ("PROGRAM_SYSTEM", "report_reread"))),
+                              ("core.report_consistency", (("SYSTEM", "report_consistency"),)),
+                              ("core.exec_summary", (("SYSTEM", "exec_summary"),)),
+                              ("core.feedback", (("SYSTEM", "interpret_correction"),))):
+            try:
+                import importlib
+                mod = importlib.import_module(module)
+                table += [(getattr(mod, attr), name) for attr, name in names]
+            except Exception:
+                pass
         _STEPS = {text: name for text, name in table if isinstance(text, str)}
     return _STEPS
 
@@ -132,6 +147,25 @@ def program_budget(store):
     return float(limit) if limit else None
 
 
+_THREAD = threading.local()   # the file a thread is working for; worker pools started from it inherit it (BucketPool)
+
+
+class BucketPool(ThreadPoolExecutor):
+    """A thread pool whose workers charge their calls to the file of the thread that submitted the work, so several files can
+    be analysed at once without their costs mixing."""
+    def submit(self, fn, /, *args, **kwargs):
+        bucket = getattr(_THREAD, "bucket", None)
+
+        def run():
+            before = getattr(_THREAD, "inherited", None)
+            _THREAD.inherited = bucket
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                _THREAD.inherited = before
+        return super().submit(run)
+
+
 class UsageTracker:
     def __init__(self):
         self._lock = threading.Lock()
@@ -143,10 +177,11 @@ class UsageTracker:
         self.on_record = None
 
     def bucket(self):
-        return getattr(self._local, "bucket", None) or self.default_bucket
+        return getattr(self._local, "bucket", None) or getattr(_THREAD, "inherited", None) or self.default_bucket
 
     def set_thread_bucket(self, bucket):
         self._local.bucket = bucket
+        _THREAD.bucket = bucket   # worker pools started from this thread (BucketPool) inherit it
 
     def record(self, step, model, usage, ms, ok=True, error=None, discount=1.0):
         input_tokens = getattr(usage, "input_tokens", None) if usage is not None else None
@@ -229,7 +264,7 @@ class _TrackedMessages:
                                  ok=False, error=f"{type(exc).__name__}: {exc}")
             raise
         record = self._tracker.record(step, getattr(msg, "model", None) or kwargs.get("model"), getattr(msg, "usage", None),
-                             int((time.monotonic() - began) * 1000), discount=0.5 if getattr(self._messages, "is_batch", False) else 1.0,
+                             int((time.monotonic() - began) * 1000), discount=0.5 if getattr(self._messages, "is_batch", False) and not getattr(msg, "_codesnap_live", False) else 1.0,
                              ok=getattr(msg, "stop_reason", None) != "max_tokens",
                              error="output truncated (max_tokens)" if getattr(msg, "stop_reason", None) == "max_tokens" else None)
         if self._tracker.on_record:

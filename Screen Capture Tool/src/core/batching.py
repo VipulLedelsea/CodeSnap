@@ -77,6 +77,10 @@ class BatchRequestError(RuntimeError):
     pass
 
 
+class BatchTimeout(BatchRequestError):
+    """A batch did not end in the time allowed; what it had finished is kept and the rest is sent as live calls."""
+
+
 class BatchBadRequest(BatchRequestError):
     """The API rejected the request itself (a 400 in a live call): retrying it unchanged cannot succeed."""
 
@@ -97,9 +101,11 @@ class BatchMessages:
     def __init__(self, client, window=None, max_size=500, poll=None, timeout=None):
         self._client = client
         self._messages = client.messages
-        self.window = float(os.environ.get("CODESNAP_BATCH_WINDOW", 5)) if window is None else window
-        self.poll = float(os.environ.get("CODESNAP_BATCH_POLL", 15)) if poll is None else poll
-        self.timeout = float(os.environ.get("CODESNAP_BATCH_TIMEOUT", 24 * 3600)) if timeout is None else timeout
+        self.window = float(os.environ.get("CODESNAP_BATCH_WINDOW", 2)) if window is None else window
+        self.poll = float(os.environ.get("CODESNAP_BATCH_POLL", 5)) if poll is None else poll
+        # Batches normally end in minutes. One that has not ended after this long is cancelled and its unfinished requests are
+        # sent as live calls (full price, only for those), so a single slow batch cannot hold a whole run for a day.
+        self.timeout = float(os.environ.get("CODESNAP_BATCH_TIMEOUT", 2 * 3600)) if timeout is None else timeout
         self.max_size = max_size
         self._queue = []
         self._cond = threading.Condition()
@@ -155,12 +161,46 @@ class BatchMessages:
                     self._messages.batches.cancel(batch_id)
                 except Exception:
                     pass
-                raise BatchRequestError(f"batch {batch_id} did not finish within {self.timeout:.0f}s")
+                self._settle(batch_id)
+                raise BatchTimeout(f"batch {batch_id} did not finish within {self.timeout:.0f}s")
             time.sleep(self.poll)
+
+    def _settle(self, batch_id, patience=600.0):
+        """After a cancel, wait for the batch to report ended so the requests it finished can be collected."""
+        began = time.monotonic()
+        while time.monotonic() - began < patience:
+            try:
+                if self._messages.batches.retrieve(batch_id).processing_status == "ended":
+                    return
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(min(self.poll, 5.0))
+
+    def _live(self, item):
+        """One request sent now, not in a batch (the fallback for a request a slow batch did not finish)."""
+        began = time.monotonic()
+        wait = 5.0
+        while True:
+            try:
+                with self._messages.stream(**item.params) as stream:
+                    msg = stream.get_final_message()
+                object.__setattr__(msg, "_codesnap_live", True)
+                item.message = msg
+                break
+            except Exception as exc:  # noqa: BLE001
+                if getattr(exc, "status_code", None) in (400, 401, 403, 404) or time.monotonic() - began > 900:
+                    item.error = exc if isinstance(exc, BatchRequestError) else BatchRequestError(f"{type(exc).__name__}: {exc}")
+                    break
+                time.sleep(wait)
+                wait = min(wait * 2, 60.0)
+        item.event.set()
 
     def _attach(self, item, entry):
         try:
-            self._wait_ended(entry["batch_id"])
+            try:
+                self._wait_ended(entry["batch_id"])
+            except BatchTimeout:
+                pass
             results = {r.custom_id: r.result for r in self._call(lambda: list(self._messages.batches.results(entry["batch_id"])))}
             res = results.get(entry["custom_id"])
         except Exception:  # noqa: BLE001
@@ -170,6 +210,9 @@ class BatchMessages:
             item.event.set()
             return
         self.journal.drop(item.key)
+        if getattr(res, "type", None) == "canceled":
+            self._live(item)
+            return
         self._submit(item)
 
     def _submit(self, item):
@@ -200,7 +243,10 @@ class BatchMessages:
                 {"custom_id": f"r{i}", "params": item.params} for i, item in enumerate(group)]), patience=600.0)
             self.journal.put_many({item.key: {"batch_id": batch.id, "custom_id": f"r{i}", "at": time.time()}
                                    for i, item in enumerate(group)})
-            self._wait_ended(batch.id)
+            try:
+                self._wait_ended(batch.id)
+            except BatchTimeout:
+                pass   # what it finished is collected below; the requests it did not finish go out live
             results = {r.custom_id: r.result for r in self._call(lambda: list(self._messages.batches.results(batch.id)))}
         except Exception as exc:  # noqa: BLE001
             for item in group:
@@ -217,6 +263,8 @@ class BatchMessages:
             elif kind == "errored" and "invalid_request" in str(getattr(res, "error", "")):
                 item.error = BatchBadRequest(f"batch request errored: {getattr(res, 'error', '')}")
                 item.event.set()
+            elif kind == "canceled":
+                threading.Thread(target=self._live, args=(item,), daemon=True, name="codesnap-batch-live").start()
             elif kind in ("errored", "expired") and item.tries < 1:
                 item.tries += 1
                 retry.append(item)

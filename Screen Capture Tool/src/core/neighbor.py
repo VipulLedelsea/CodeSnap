@@ -99,8 +99,8 @@ def repair(client, paths, raws, final, notes, statuses):
             return _ask(client, paths[item[0]], item[2])
         except Exception:  # noqa: BLE001
             return None
-    from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=max(1, min(len(asks), A.frame_workers()))) as pool:
+    from core.usage import BucketPool
+    with BucketPool(max_workers=max(1, min(len(asks), A.frame_workers()))) as pool:
         answers = list(pool.map(ask, asks))
     for (j, order, _), got in zip(asks, answers):
         if got is None:

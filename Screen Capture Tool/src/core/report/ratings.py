@@ -318,7 +318,7 @@ def scorecard(comps, AM, sec_rating, sec_text, facts) -> dict:
     sus = facts.get("capture_suspect") or []
     if sus and st:
         st_txt += (f" Findings in {P.sentence(sus)} that look like duplicated, truncated or garbled lines were not counted; "
-                   "recapture those files to confirm.")
+                   "those files need a check against the original to confirm.")
     out["Stability and reliability"] = (st, st_txt)
     out["Performance and scalability"] = (None, "Insufficient evidence: needs run times, batch window and peak volumes "
                                                 "from operations (see 6.3). Not included in the overall rating.")

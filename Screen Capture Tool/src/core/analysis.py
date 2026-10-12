@@ -1647,19 +1647,22 @@ def frame_workers() -> int:
 
 
 def prefetch_frames(client, jobs) -> None:
-    """Read many screenshots at the same time. `jobs` is a list of (image path, cache dir). A frame that fails is skipped
+    """Read many screenshots at the same time. `jobs` is a list of (image path, cache dir[, usage bucket]). A frame that fails is skipped
     here and simply read again, with its error raised, when the caller reads it in order."""
     jobs = list(jobs)
     if len(jobs) < 2:
         return
-    from concurrent.futures import ThreadPoolExecutor
+    from core.usage import BucketPool
 
     def one(job):
+        if len(job) > 2 and job[2]:
+            from core.usage import _THREAD
+            _THREAD.inherited = job[2]   # charged to the file the frame belongs to
         try:
             extract_to_cache(client, job[0], job[1])
         except Exception:  # noqa: BLE001
             pass
-    with ThreadPoolExecutor(max_workers=min(len(jobs), frame_workers())) as pool:
+    with BucketPool(max_workers=min(len(jobs), frame_workers())) as pool:
         list(pool.map(one, jobs))
 
 

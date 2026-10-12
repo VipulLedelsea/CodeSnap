@@ -67,6 +67,42 @@ HK_READY = "<cmd>+<shift>+7"   # owned session: "I scrolled, capture the next pa
 CAPTURES_ROOT = Path("captures")  # scratch PNGs (gitignored); deleted on quit
 REPORTS_ROOT = Path("reports")    # persistent .docx reports; survive quit
 BG_WORKERS = int(os.environ.get("CODESNAP_WORKERS", "12" if os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes") else "3"))   # how many images to read concurrently
+
+
+class _AnalysisGate:
+    """A lock that admits `capacity` holders (1 = a plain lock). Resuming saved captures raises it so files are analysed together."""
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._held = 0
+        self.capacity = 1
+
+    def acquire(self):
+        with self._cond:
+            while self._held >= self.capacity:
+                self._cond.wait()
+            self._held += 1
+        return True
+
+    def release(self):
+        with self._cond:
+            self._held -= 1
+            self._cond.notify_all()
+
+    def set_capacity(self, n):
+        with self._cond:
+            self.capacity = max(1, int(n))
+            self._cond.notify_all()
+
+    __enter__ = acquire
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+def file_workers() -> int:
+    """How many saved captures are analysed at once when resuming (each waits minutes on a batch, so they all go together)."""
+    batch = os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes")
+    return max(1, int(os.environ.get("CODESNAP_FILE_WORKERS", "8" if batch else "1")))
 DUP_THRESHOLD = 3                 # perceptual-hash distance treated as a near-duplicate
 MAX_FIX_ITERS = 3                 # max auto-fix passes when a code check fails
 BURST_INTERVAL = 0.8              # seconds between burst captures
@@ -139,7 +175,9 @@ class App:
         self._session_start_lock = threading.Lock()
         self.display = None                       # display for captures: index, or None = the one under the mouse
         self._capture_lock = threading.Lock()     # serialises the actual screen grab
-        self._analysis_lock = threading.Lock()    # serialises stop/quit analysis
+        self._analysis_lock = _AnalysisGate()     # serialises stop/quit analysis; resuming saved captures lets several run at once
+        self._ingest_lock = threading.Lock()      # adding a file to the program is one at a time even when files are read together
+        self._busy = 0                            # analyses in progress (the _analysing flag is true while any is)
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=BG_WORKERS)
         self._futures = []                         # pending background reads
         self._fut_lock = threading.Lock()
@@ -535,7 +573,6 @@ class App:
         """Analyse every saved capture still waiting (e.g. the worker was stopped mid-queue). Returns how many ran."""
         if not self.program:
             return 0
-        done = 0
         staged = []
         for aid, kind, frames in self._pending_work():
             CAPTURES_ROOT.mkdir(parents=True, exist_ok=True)
@@ -546,11 +583,24 @@ class App:
             staged.append((aid, kind, d))
         if staged:
             self._prefetch_pending(staged)
-        for aid, kind, d in staged:
+        workers = min(len(staged), file_workers())
+        self._analysis_lock.set_capacity(workers)
+
+        def analyse(item):
+            aid, kind, d = item
             print(f"[pending] analysing saved capture {aid} ({len(list(d.glob('*.png')))} frame(s))")
             self._analyse_burst(d, artifact_id=aid, kind=kind)
-            done += 1
-        return done
+        try:
+            if workers > 1:
+                from core.usage import BucketPool
+                with BucketPool(max_workers=workers) as pool:
+                    list(pool.map(analyse, staged))
+            else:
+                for item in staged:
+                    analyse(item)
+        finally:
+            self._analysis_lock.set_capacity(1)
+        return len(staged)
 
     def _prefetch_pending(self, staged):
         """Read the screenshots of every waiting file at the same time, so the per-file analysis that follows finds them
@@ -562,7 +612,7 @@ class App:
                 continue
             imgs = sorted(d.glob("*.png"))
             self._sync_text_cache(d, imgs, load=True)
-            jobs += [(p, d / ".cache") for p in imgs]
+            jobs += [(p, d / ".cache", str(d)) for p in imgs]
         print(f"[pending] reading {len(jobs)} screenshot(s) of {len(staged)} file(s) together")
         prefetch_frames(self.client, jobs)
 
@@ -630,11 +680,14 @@ class App:
         self._analysis_lock.acquire()   # serialise overlapping analyses (captures stay non-blocking)
         imgs = sorted(session_dir.glob("*.png"))   # listed under the lock: never a half-written frame set
         ctx.images = list(imgs)
-        self._analysing = True
+        with self._state_lock:
+            self._busy += 1
+            self._analysing = True
         self._sync_text_cache(session_dir, imgs, load=True)
         self._stage(artifact_id, "reading screenshots", cache_dir=ctx.cache_dir)
         bucket = str(session_dir)
         self.tracker.default_bucket = bucket
+        self.tracker.set_thread_bucket(bucket)   # several files can be analysed at once: each charges its own calls
         self._attach_usage_persistence()
         try:
             if self.program:
@@ -656,7 +709,8 @@ class App:
             self._sync_text_cache(session_dir, imgs, load=False)
             if self.program:
                 self._stage(artifact_id, "adding to the program")
-                self._ingest_into_program(imgs, ctx, records, artifact_id=artifact_id)
+                with self._ingest_lock:
+                    self._ingest_into_program(imgs, ctx, records, artifact_id=artifact_id)
                 self._report_if_done()
             self.tracker.take(bucket)
         except Exception as exc:  # noqa: BLE001
@@ -674,7 +728,10 @@ class App:
             except Exception:  # noqa: BLE001
                 pass
         finally:
-            self._analysing = False
+            self.tracker.set_thread_bucket(None)
+            with self._state_lock:
+                self._busy -= 1
+                self._analysing = self._busy > 0
             self._untrack(artifact_id)
             self._analysis_lock.release()
             print("\n[idle] Cmd+Shift+1 for a new burst, Cmd+Shift+9 to quit.")
@@ -806,7 +863,7 @@ class App:
                 print("Code analysis: " + "; ".join(res["errors"]), file=sys.stderr)
             bad = next((r for r in q if r["artifact_id"] == artifact_id), None)
             if bad:
-                status.publish(f"{name} needs a rescan: " + "; ".join(i["reason"] for i in bad["issues"][:2]), "error", stage="done")
+                status.publish(f"{name} needs attention: " + "; ".join(i["reason"] for i in bad["issues"][:2]), "error", stage="done")
         except Exception as exc:  # noqa: BLE001
             print(f"Code analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
 
@@ -820,7 +877,7 @@ class App:
             if o and o["result"] == "fixed":
                 status.publish(f"{a['name']} is fixed: the recapture (v{o['version']}) is complete", "info", stage="done")
             elif o and o["result"] == "still":
-                status.publish(f"{a['name']} v{o['version']} still needs a recapture: " +
+                status.publish(f"{a['name']} v{o['version']} still needs attention: " +
                                "; ".join(i["reason"] for i in o["remaining"][:2]), "error", stage="done")
         except Exception as exc:  # noqa: BLE001
             print(f"Recapture check failed: {exc}", file=sys.stderr)
