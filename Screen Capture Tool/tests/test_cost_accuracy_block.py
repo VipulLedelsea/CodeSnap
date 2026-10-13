@@ -142,6 +142,25 @@ def test_preflight_names_a_model_that_does_not_answer():
     assert "claude-nope" in preflight.describe(failed) and "404" in preflight.describe(failed)
 
 
+def test_preflight_uses_the_sdk_client_whose_internal_http_client_has_no_messages():
+    """The SDK client keeps its HTTP client in `_client` (no `.messages`); only the app's wrappers keep a real client there."""
+    from core import preflight
+
+    asked = []
+
+    class Messages:
+        def create(self, **kw):
+            asked.append(kw["model"])
+
+    sdk = types.SimpleNamespace(messages=Messages(), _client=types.SimpleNamespace())       # like anthropic.Anthropic
+    wrapper = types.SimpleNamespace(_client=types.SimpleNamespace(messages=Messages()))      # like the usage/batch wrappers
+    preflight._OK.clear()
+    assert preflight.check_models(sdk, ["claude-a"]) == []
+    preflight._OK.clear()
+    assert preflight.check_models(wrapper, ["claude-b"]) == []
+    assert asked == ["claude-a", "claude-b"]
+
+
 def test_number_check_flags_a_stated_total_that_differs_from_the_model():
     from core import report_numbers as N
     text = ("## 1.2 Key findings\nAll 12 provided files were reviewed with no concerns. 9 of 12 files use COBOL.\n"

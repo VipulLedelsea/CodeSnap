@@ -21,7 +21,10 @@ def analysis_models() -> list:
 def check_models(client, models, now=None) -> list:
     """[(model, reason)] for each distinct model that does not answer; [] when every one does."""
     now = time.monotonic() if now is None else now
-    plain = getattr(client, "_client", client)
+    # The app's usage and batch wrappers keep the real client in `_client`; the SDK's own client keeps its HTTP client
+    # there (no `.messages`), so unwrap only when what is inside can make a request.
+    inner = getattr(client, "_client", None)
+    plain = inner if hasattr(inner, "messages") else client
     failed = []
     for model in dict.fromkeys(m for m in models if m):
         if now - _OK.get(model, -TTL) < TTL:
