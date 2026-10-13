@@ -358,6 +358,7 @@ def _progress(arts: list) -> dict:
 
 
 _DEEP = {}
+_DEEP_QUEUE = {}    # slug -> ids of corrected files waiting for the running review to end
 _REBUILDS = {}
 _JOB_LOCK = threading.RLock()      # guards check-and-register on _DEEP / _REBUILDS
 _REBUILD_LOCK = _JOB_LOCK
@@ -399,19 +400,80 @@ def _deep_start(slug: str, artifact_ids=None) -> dict:
         finally:
             job["running"] = False
             job["finished"] = time.time()
+            _deep_drain(slug)
     threading.Thread(target=work, daemon=True).start()
     return job
 
 
-def _deep_when_ready(slug: str):
-    """Start the deep review as soon as the last open problem is resolved: runs after the answering request ends."""
+def _pipeline_running(slug: str) -> bool:
+    """True while the batch pipeline (another process) is analysing this program. A run that has not moved for 12 hours is
+    treated as dead."""
+    try:
+        with _open_program(slug) as store:
+            job = store.get_meta("pipeline_job") or {}
+        if job.get("state") != "running":
+            return False
+        began = time.mktime(time.strptime(job.get("updated") or job.get("started"), "%Y-%m-%dT%H:%M:%S"))
+        return time.time() - began < 12 * 3600
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _deep_watch(slug: str, every: float = 90.0):
+    """Look again soon: the corrected files in the queue are reviewed once nothing else is being reviewed."""
+    def look():
+        if not _DEEP_QUEUE.get(slug):
+            return
+        if (_DEEP.get(slug) or {}).get("running") or _pipeline_running(slug):
+            _deep_watch(slug, every)
+        else:
+            _deep_drain(slug)
+    timer = threading.Timer(every, look)
+    timer.daemon = True
+    timer.start()
+
+
+def _deep_drain(slug: str):
+    """Files corrected by the user while a review was running are reviewed once it ends (only those still out of date)."""
+    ids = _DEEP_QUEUE.pop(slug, None)
+    if not ids:
+        return
+    try:
+        from core import deepdive
+        with _open_program(slug) as store:
+            todo = [a["id"] for a in deepdive.pending(store) if a["id"] in ids]
+        if todo:
+            _deep_start(slug, todo)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _deep_when_ready(slug: str, artifact_id: int | None = None):
+    """Review a file as soon as its own open problems are resolved (runs after the answering request ends). With no file
+    given, review everything out of date once no file has an open problem. While a review is running the file waits in
+    a queue and is reviewed when that run ends."""
     def go():
         try:
             from core import deepdive
-            job = _DEEP.get(slug) or {}
-            if job.get("running") or slug in _REBUILDS or not api_key_status()["has_key"]:
+            if slug in _REBUILDS or not api_key_status()["has_key"]:
                 return
             from core.model.line_review import items
+            if artifact_id is not None:
+                with _open_program(slug) as store:
+                    art = store.artifact(artifact_id)
+                    if not art or not art.get("is_current", 1) or items(store, art):
+                        return
+                    if not any(a["id"] == artifact_id for a in deepdive.pending(store)):
+                        return
+                with _JOB_LOCK:
+                    if (_DEEP.get(slug) or {}).get("running") or _pipeline_running(slug):
+                        _DEEP_QUEUE.setdefault(slug, set()).add(artifact_id)
+                        _deep_watch(slug)
+                        return
+                _deep_start(slug, [artifact_id])
+                return
+            if (_DEEP.get(slug) or {}).get("running"):
+                return
             with _open_program(slug) as store:
                 if any(store.capture_progress(a["id"]).get("analysing") for a in store.artifacts()):
                     return
@@ -747,6 +809,23 @@ def api_program_artifact(slug: str, artifact_id: int):
                 "review_lines": items(store, artifact)}
 
 
+def _file_busy(slug: str, store, art: dict) -> str | None:
+    """Why this one file cannot take an answer right now (None when it can). Other files being read or reviewed do not matter:
+    a file can be checked as soon as its own results are in, while the rest of the program is still being analysed."""
+    from core import deepdive
+    rebuilding = _REBUILDS.get(slug)
+    if rebuilding and rebuilding.get("name") == art["name"]:
+        return "This file is being rebuilt from its saved screenshots. Try again when that finishes."
+    if store.capture_progress(art["id"]).get("analysing") or art.get("status") == "captured":
+        return "This file is still being read. You can answer as soon as its results are in."
+    if str(art["id"]) in deepdive._active(store):
+        return "This file is being reviewed right now. Try again in a few minutes."
+    for aid, info in (store.pending_captures() or {}).items():
+        if aid != art["id"] and (info.get("recapture_of") == art["name"] or info.get("added_to") == art["id"]):
+            return "A new capture of this file is being analysed. Wait for it to finish."
+    return None
+
+
 @app.get("/api/programs/{slug}/artifacts/{artifact_id}/review/{line}")
 def api_line_review(slug: str, artifact_id: int, line: int):
     from core.model.line_review import detail
@@ -764,16 +843,13 @@ def api_line_review(slug: str, artifact_id: int, line: int):
 def api_line_review_answer(slug: str, artifact_id: int, line: int, payload: dict = Body(...)):
     from core import feedback, deepdive
     from core.model.corrections import CorrectionError
-    if (_DEEP.get(slug) or {}).get('running') and slug not in _REBUILDS and not _claims_alive(slug):
-        if not _stop_analysis(slug):
-            raise HTTPException(status_code=409, detail="The code review is still stopping. Try again in a few seconds.")
     with _open_program(slug) as store:
         art = store.artifact(artifact_id)
         if not art or not art['is_current']:
             raise HTTPException(status_code=404, detail="This file was removed or replaced. Refresh the review.")
-        if slug in _REBUILDS or (_DEEP.get(slug) or {}).get('running') or any(
-                store.capture_progress(a['id']).get('analysing') for a in store.artifacts()):
-            raise HTTPException(status_code=409, detail="Wait for analysis to finish before answering.")
+        busy = _file_busy(slug, store, art)
+        if busy:
+            raise HTTPException(status_code=409, detail=busy)
         lines = (art.get('transcription') or '').splitlines()
         if (payload.get('text_hash') != deepdive._hash(art.get('transcription')) or
                 not 0 < line <= len(lines) or payload.get('old_text') != lines[line-1]):
@@ -794,7 +870,7 @@ def api_line_review_answer(slug: str, artifact_id: int, line: int, payload: dict
             raise HTTPException(status_code=400, detail=str(exc))
         from core.model.line_review import items
         remaining = items(store, store.artifact(artifact_id))
-        _deep_when_ready(slug)
+        _deep_when_ready(slug, artifact_id)
         return {'ok': True, **result, 'review_status': 'completed', 'review_lines': remaining,
                 'remaining_issues': [] if delete else [item for item in remaining if item['line'] == line]}
 
@@ -811,9 +887,12 @@ def api_line_review_missing(slug: str, artifact_id: int, line: int, payload: dic
         lines = (art.get('transcription') or '').splitlines()
         if payload.get('text_hash') != deepdive._hash(art.get('transcription')) or not 0 < line <= len(lines):
             raise HTTPException(status_code=409, detail="This source changed. Refresh the screenshot question before answering.")
+        busy = _file_busy(slug, store, art)
+        if busy:
+            raise HTTPException(status_code=409, detail=busy)
         confirmed.mark_missing(store, art['name'], art.get('transcription'), line)
         remaining = items(store, art)
-        _deep_when_ready(slug)
+        _deep_when_ready(slug, artifact_id)
         return {'ok': True, 'review_lines': remaining,
                 'message': f'Lines are missing before line {line}. Record that part of the screen again with Add screenshots.'}
 

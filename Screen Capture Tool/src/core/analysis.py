@@ -1029,47 +1029,6 @@ def merge_frames(raw_parts: list, metas: list | None = None):
     return code, parts
 
 
-def _vote_lines(final, parts, metas, min_ratio=0.85):
-    """Settle each stitched line by what the screenshots that show it read. Every line of a file is on two to nine screenshots,
-    and a misread (a comma read as a period, a zero for the letter O) is usually on one of them. A line is replaced only when
-    the other readings of it outweigh the current one at least two to one, at least two screenshots agree on the replacement,
-    and the replacement is nearly the same text (so a different line that was matched by position cannot win). Pixel-verified
-    readings count double. Returns (final text, [(line number, old text, new text)])."""
-    import collections
-    from core import verify
-    lines = final.split("\n")
-    votes = [collections.Counter() for _ in lines]
-    frames = [collections.defaultdict(set) for _ in lines]
-    for k, (part, meta) in enumerate(zip(parts, metas)):
-        rows = part.split("\n")
-        status = (meta or {}).get("status")
-        status = status if isinstance(status, list) and len(status) == len(rows) else None
-        for j, i in enumerate(verify._line_map(part, final, carry_replacements=True)):
-            if i is None or not rows[i].strip() or "[CUT OFF]" in rows[i]:
-                continue
-            votes[j][rows[i].rstrip()] += 2.0 if status and status[i] in ("verified", "reread") else 1.0
-            frames[j][rows[i].rstrip()].add(k)
-    changed = []
-    for j, line in enumerate(lines):
-        tally = votes[j]
-        if len(tally) < 2 or not line.strip() or "[CUT OFF]" in line:
-            continue
-        mine = tally.get(line.rstrip(), 0.0)
-        # Two identical long lines in a row are rarely real source: a screenshot read a line twice and skipped its neighbour.
-        # The repeated text then has no claim over a different reading of the same place, even a single one that ties it.
-        twin = len(line.strip()) >= 25 and ((j + 1 < len(lines) and lines[j] == lines[j + 1]) or (j and lines[j] == lines[j - 1]))
-        alternatives = [(w, t) for t, w in tally.items() if t != line.rstrip()
-                        and _difflib.SequenceMatcher(None, line.rstrip(), t, autojunk=False).ratio() >= (0.7 if twin else min_ratio)]
-        if not alternatives:
-            continue
-        weight, best = max(alternatives)
-        enough = (weight >= mine and len(frames[j][best]) >= 1) if twin else (weight >= 2 * max(mine, 1.0) and len(frames[j][best]) >= 2)
-        if enough:
-            changed.append((j + 1, line, best))
-            lines[j] = best
-    return "\n".join(lines), changed
-
-
 def _trim_unverified_edges(parts, metas, max_rows=3, min_verified=0.8):
     """Drop the rows at the top or bottom edge of a screenshot that the pixel check could not match, when the neighbouring
     screenshot shows the same place again. A row cut by the edge of the screen is read half-seen, sometimes as two rows, and
@@ -1107,6 +1066,47 @@ def _trim_unverified_edges(parts, metas, max_rows=3, min_verified=0.8):
                 lines[:] = kept
                 status[:] = status[:len(status) - n] if edge == "tail" else status[n:]
     return ["\n".join(lines) for lines in out], dropped
+
+
+def _vote_lines(final, parts, metas, min_ratio=0.85):
+    """Settle each stitched line by what the screenshots that show it read. Every line of a file is on two to nine screenshots,
+    and a misread (a comma read as a period, a zero for the letter O) is usually on one of them. A line is replaced only when
+    the other readings of it outweigh the current one at least two to one, at least two screenshots agree on the replacement,
+    and the replacement is nearly the same text (so a different line that was matched by position cannot win). Pixel-verified
+    readings count double. Returns (final text, [(line number, old text, new text)])."""
+    import collections
+    from core import verify
+    lines = final.split("\n")
+    votes = [collections.Counter() for _ in lines]
+    frames = [collections.defaultdict(set) for _ in lines]
+    for k, (part, meta) in enumerate(zip(parts, metas)):
+        rows = part.split("\n")
+        status = (meta or {}).get("status")
+        status = status if isinstance(status, list) and len(status) == len(rows) else None
+        for j, i in enumerate(verify._line_map(part, final, carry_replacements=True)):
+            if i is None or not rows[i].strip() or "[CUT OFF]" in rows[i]:
+                continue
+            votes[j][rows[i].rstrip()] += 2.0 if status and status[i] in ("verified", "reread") else 1.0
+            frames[j][rows[i].rstrip()].add(k)
+    changed = []
+    for j, line in enumerate(lines):
+        tally = votes[j]
+        if len(tally) < 2 or not line.strip() or "[CUT OFF]" in line:
+            continue
+        mine = tally.get(line.rstrip(), 0.0)
+        # Two identical long lines in a row are rarely real source: a screenshot read a line twice and skipped its neighbour.
+        # The repeated text then has no claim over a different reading of the same place, even a single one that ties it.
+        twin = len(line.strip()) >= 25 and ((j + 1 < len(lines) and lines[j] == lines[j + 1]) or (j and lines[j] == lines[j - 1]))
+        alternatives = [(w, t) for t, w in tally.items() if t != line.rstrip()
+                        and _difflib.SequenceMatcher(None, line.strip(), t.strip(), autojunk=False).ratio() >= (0.7 if twin else min_ratio)]
+        if not alternatives:
+            continue
+        weight, best = max(alternatives)
+        enough = (weight >= mine and len(frames[j][best]) >= 1) if twin else (weight >= 2 * max(mine, 1.0) and len(frames[j][best]) >= 2)
+        if enough:
+            changed.append((j + 1, line, best))
+            lines[j] = best
+    return "\n".join(lines), changed
 
 
 def _statement_rows(lines):
@@ -1237,6 +1237,98 @@ def _observed_cobol_columns(parts):
     return output
 
 
+def _fix_macro_continuations(final):
+    """A CICS map set (and assembler macro source) continues a statement on the next line by ending the first line with
+    a comma and a continuation mark (X); the continuation always starts in column 16. Screenshots read that indent a column or two off in
+    either direction, so the line is placed back on column 16. Applies only to map-set text. Returns (text, [line numbers])."""
+    if not _re.search(r"\bDFHM(?:SD|DI|DF)\b", final):
+        return final, []
+    lines = final.split("\n")
+    fixed = []
+    for i in range(1, len(lines)):
+        prev = lines[i - 1].rstrip()
+        row = lines[i]
+        if _re.search(r",\s+X$", prev) and row.strip() and "[CUT OFF]" not in row:
+            indent = len(row) - len(row.lstrip(" "))
+            if indent != 15 and 8 <= indent <= 22 and not row.lstrip().startswith("*"):
+                lines[i] = " " * 15 + row.lstrip(" ")
+                fixed.append(i + 1)
+    return "\n".join(lines), fixed
+
+
+def _collapse_doubled_lines(final, parts, min_len=12):
+    """Drop a line that appears twice in a row in the stitched text when the screenshots that show that place disagree about
+    it: one read the line twice and the others show it once. A source file can really repeat a line, so a pair is only
+    collapsed when more screenshots show it once than twice. Returns (text, [line numbers dropped])."""
+    lines = final.split("\n")
+    keys = [l.strip() for l in lines]
+    rows = [[l.strip() for l in p.split("\n")] for p in parts]
+
+    def count(seq):
+        n = len(seq)
+        return sum(1 for r in rows for i in range(len(r) - n + 1) if r[i:i + n] == seq)
+    drop = []
+    for j in range(1, len(lines) - 2):
+        if keys[j] != keys[j + 1] or len(keys[j]) < min_len or "[CUT OFF]" in keys[j]:
+            continue
+        before, after = keys[j - 1], keys[j + 2]
+        if not before or not after or before == keys[j] or after == keys[j]:
+            continue
+        twice, once = count([before, keys[j], keys[j], after]), count([before, keys[j], after])
+        if once > twice:
+            drop.append(j + 1)
+    if not drop:
+        return final, []
+    skip = set(drop)
+    return "\n".join(l for i, l in enumerate(lines) if i not in skip), [d + 1 for d in drop]
+
+
+def _equalize_frame_offsets(parts, min_block=5, min_pairs=8, support=0.8, max_shift=12):
+    """Bring screenshots that sit some columns left or right of their neighbours to one common offset. The editor can
+    scroll sideways by a column between screenshots, so a whole screen is then read that many columns away from the rest.
+    Two neighbouring screens show some lines in common; when nearly all of those lines differ by the same one or two columns,
+    that screen is shifted as a whole (up to a dozen columns: a larger move is a real scroll to other text). The common offset keeps the file's leftmost indent where it was, so a margin offset
+    that affects the whole capture is left for _drop_margin_offset. Returns the parts unchanged when nothing consistent is found."""
+    import collections
+    if len(parts) < 3:
+        return parts
+    split = [p.split("\n") for p in parts]
+    indent = lambda l: len(l) - len(l.lstrip(" "))
+    key = lambda lines: [l.strip() for l in lines]
+    rel = [0] * len(parts)
+    for i in range(1, len(parts)):
+        a, b = split[i - 1], split[i]
+        matcher = _difflib.SequenceMatcher(None, key(a), key(b), autojunk=False)
+        deltas = []
+        for block in matcher.get_matching_blocks():
+            if block.size < min_block:
+                continue
+            for t in range(block.size):
+                la, lb = a[block.a + t], b[block.b + t]
+                if la.strip() and lb.strip() and "[CUT OFF]" not in la + lb and "\t" not in la + lb:
+                    deltas.append(indent(lb) - indent(la))
+        if len(deltas) >= min_pairs:
+            delta, count = collections.Counter(deltas).most_common(1)[0]
+            if delta and abs(delta) <= max_shift and count / len(deltas) >= support:
+                rel[i] = delta
+    offsets, run = [], 0
+    for r in rel:
+        run += r
+        offsets.append(run)
+    if not any(offsets):
+        return parts
+    floor = [min((indent(l) for l in lines if l.strip() and "[CUT OFF]" not in l), default=None) for lines in split]
+    seen = [(f, o) for f, o in zip(floor, offsets) if f is not None]
+    target = min(f for f, _ in seen) - min(f - o for f, o in seen)
+    out = []
+    for lines, offset in zip(split, offsets):
+        shift = target - offset
+        if shift:
+            lines = [(" " * shift + l if shift > 0 else l[min(-shift, indent(l)):]) if l.strip() else l for l in lines]
+        out.append("\n".join(lines))
+    return out
+
+
 def merge_verified(raw_parts: list, metas: list | None = None):
     """merge_frames plus verification: returns (code, clean_parts, notes, statuses). `metas` are the per-screenshot
     checks (verify_for); when every screenshot has editor line numbers the lines are placed by number, otherwise by
@@ -1244,6 +1336,7 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     from core import verify
     metas = list(metas or [])
     metas += [{}] * (len(raw_parts) - len(metas))
+    raw_parts = _equalize_frame_offsets(raw_parts)
     raw_parts = _drop_margin_offset(raw_parts, metas)
     mode = source_mode(raw_parts)
     statuses = verify.lookup(raw_parts, metas)
@@ -1299,9 +1392,15 @@ def merge_verified(raw_parts: list, metas: list | None = None):
         final, voted = _vote_lines(final, cleaned, metas)
         if voted:
             notes["voted_lines"] = voted
+        final, doubled = _collapse_doubled_lines(final, cleaned)
+        if doubled:
+            notes["doubled_lines_dropped"] = doubled
     from core.spacing import reconcile
     final,spacing_notes=reconcile(final,cleaned,metas)
     notes.update(spacing_notes)
+    final, continued = _fix_macro_continuations(final)
+    if continued:
+        notes["continuation_columns_set"] = continued
     if mode != "columns":
         # Each screenshot's indentation is only relative to its own text until the pixel check has placed it, so a stretch that
         # is one column off its file's grid shows up here, on the finished text, not on the individual screens.
@@ -1378,6 +1477,19 @@ def _conflict_context(lines, at):
     return context
 
 
+def _agrees_above(merged, at, b, o, rows=40, need=0.88):
+    """Do the rows above b[o] look like the rows above merged[at]? When the tail really sits at b[o], everything above it in
+    this screen is what was already read just before the tail, so the two agree row for row (OCR noise aside). Template
+    routines repeat the same last lines, so a match can sit inside the wrong routine; the routine header and the lines
+    with other numbers above it then disagree. True when there are too few rows to compare."""
+    n = min(o, at, rows)
+    pairs = [(merged[at - j], b[o - j]) for j in range(1, n + 1)
+             if merged[at - j].strip() and b[o - j].strip() and "[CUT OFF]" not in merged[at - j] + b[o - j]]
+    if len(pairs) < 3:
+        return True
+    return sum(_sim(x, y) >= 0.7 for x, y in pairs) >= need * len(pairs)
+
+
 def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8, prefer=frozenset(), notes=None) -> "list | None":
     """Merge frame b onto merged. Finds where the TAIL of merged reappears *inside* b
     (frames often re-show earlier lines), then appends only what follows. Returns the
@@ -1388,55 +1500,78 @@ def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8
     sql_identity = _re.compile(r'^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW|(?:UNIQUE\s+)?INDEX)\s+([\w."\[\]]+)', _re.I)
     old_objects = {m.group(0).strip().upper() for row in merged if (m := sql_identity.match(row))}
     for k in range(max_k, min_overlap - 1, -1):
-        tail = merged[-k:]
-        # a 2-3 line overlap made only of punctuation ("}", "{", "END-IF.") is not evidence
-        if k < 4 and sum(len(_re.sub(r"\W", "", x)) for x in tail) < 12:
-            continue
-        for o in range(0, len(b) - k + 1):
-            window = b[o:o + k]
-            sims = []
-            for x, y in zip(tail, window):
-                score = _sim(x, y)
-                if score < 0.7:
-                    break
-                sims.append(score)
-            # every line must match (OCR noise allowed), not just the average
-            if len(sims) == k and sum(sims) / len(sims) >= thresh:
-                # A later repeated END-IF window cannot discard a new paragraph
-                # visible before it in this frame.
-                new_prefix = b[:o]
-                if any(_SOURCE_LABEL.fullmatch(line.strip()) and
-                       line.strip() not in old_labels for line in new_prefix):
-                    continue
-                if any(m.group(0).strip().upper() not in old_objects for row in new_prefix
-                       if (m := sql_identity.match(row))):
-                    continue
-                # Whatever this screen shows above the overlap was already on an earlier screen, so it is skipped as a repeat.
-                # Several lines never seen before mean the "overlap" is a different copy of a repeated template (two
-                # procedures that end alike), and skipping them would drop real lines.
-                # (A row is "seen" when an earlier row is nearly the same text: a separator comment read with a different
-                # number of dashes is the same line, a procedure header with a different number is not.)
-                unseen = [row for row in new_prefix
-                          if len(_re.sub(r"\W", "", row)) >= 6 and " ".join(row.split()) not in old_collapsed
-                          and not any(_difflib.SequenceMatcher(None, _re.sub(r"[\W_]", "", row), _re.sub(r"[\W_]", "", m),
-                                                               autojunk=False).ratio() >= 0.93 for m in merged[-200:])]
-                if len(unseen) > max(1, len(new_prefix) // 8):
-                    continue
-                # a line cut off at the bottom of one screen is usually whole on the next — keep the whole copy
-                tail = [w if "[CUT OFF]" in t and "[CUT OFF]" not in w else t for t, w in zip(tail, window)]
-                # two screenshots read a line differently: keep the copy the pixel check verified
-                tail = [w if w != t and w.rstrip() in prefer and t.rstrip() not in prefer else t
-                        for t, w in zip(tail, window)]
-                result = merged[:-k] + tail + b[o + k:]
-                if notes is not None:
-                    for i, (x, y) in enumerate(zip(merged[-k:], window)):
-                        if (x.strip() != y.strip() and len(x.strip()) >= 6 and len(y.strip()) >= 6 and
-                                "[CUT OFF]" not in x + y and
-                                (x.rstrip() in prefer) == (y.rstrip() in prefer)):
-                            at = len(merged) - k + i
-                            notes.setdefault("overlap_conflicts", []).append(
-                                _conflict_context(result, at))
-                return result
+        # The last row of the screen before can be a row clipped by the screen edge that the reader guessed at. When a long,
+        # distinctive overlap holds except for that one or two unverified last rows, those rows are the doubtful part, not the
+        # overlap. Without this a repeated template (many paragraphs that differ only by a number) matches a short tail
+        # inside the wrong paragraph and the whole stretch is appended a second time.
+        for trim in (0, 1, 2):
+            end = len(merged) - trim
+            if end - k < 0:
+                continue
+            if trim and (k < 6 or any(not row.strip() or "[CUT OFF]" in row or _SOURCE_LABEL.fullmatch(row.strip())
+                                      for row in merged[end:])):
+                continue   # a paragraph label is never the doubtful row
+            tail = merged[end - k:end]
+            # a 2-3 line overlap made only of punctuation ("}", "{", "END-IF.") is not evidence
+            if k < 4 and sum(len(_re.sub(r"\W", "", x)) for x in tail) < 12:
+                continue
+            if trim and sum(len(_re.sub(r"\W", "", x)) for x in tail) < 40:
+                continue
+            for o in range(0, len(b) - k + 1):
+                window = b[o:o + k]
+                sims = []
+                for x, y in zip(tail, window):
+                    score = _sim(x, y)
+                    if score < 0.7:
+                        break
+                    sims.append(score)
+                # every line must match (OCR noise allowed), not just the average
+                if len(sims) == k and sum(sims) / len(sims) >= thresh:
+                    # A later repeated END-IF window cannot discard a new paragraph
+                    # visible before it in this frame.
+                    new_prefix = b[:o]
+                    if any(_SOURCE_LABEL.fullmatch(line.strip()) and
+                           line.strip() not in old_labels for line in new_prefix):
+                        continue
+                    if any(m.group(0).strip().upper() not in old_objects for row in new_prefix
+                           if (m := sql_identity.match(row))):
+                        continue
+                    # Whatever this screen shows above the overlap was already on an earlier screen, so it is skipped as a repeat.
+                    # Several lines never seen before mean the "overlap" is a different copy of a repeated template (two
+                    # procedures that end alike), and skipping them would drop real lines.
+                    # (A row is "seen" when an earlier row is nearly the same text: a separator comment read with a different
+                    # number of dashes is the same line, a procedure header with a different number is not.)
+                    unseen = [row for row in new_prefix
+                              if len(_re.sub(r"\W", "", row)) >= 6 and " ".join(row.split()) not in old_collapsed
+                              and not any(_difflib.SequenceMatcher(None, _re.sub(r"[\W_]", "", row), _re.sub(r"[\W_]", "", m),
+                                                                   autojunk=False).ratio() >= 0.93 for m in merged[-200:])]
+                    if len(unseen) > max(1, len(new_prefix) // 8):
+                        continue
+                    if trim and any(_sim(x, y) >= 0.7 for x, y in zip(merged[end:], b[o + k:o + k + trim])):
+                        continue   # the rows after the overlap agree: they are not in doubt, a longer match would have found it
+                    # The rows just above the window in this screen must also be the rows just above the tail already read.
+                    # Template routines repeat the same last lines, so a long match can sit inside the wrong routine; the
+                    # rows above it then belong to a different routine and give it away.
+                    if not _agrees_above(merged, end - k, b, o):
+                        continue
+                    # a line cut off at the bottom of one screen is usually whole on the next — keep the whole copy
+                    tail = [w if "[CUT OFF]" in t and "[CUT OFF]" not in w else t for t, w in zip(tail, window)]
+                    # two screenshots read a line differently: keep the copy the pixel check verified
+                    tail = [w if w != t and w.rstrip() in prefer and t.rstrip() not in prefer else t
+                            for t, w in zip(tail, window)]
+                    result = merged[:end - k] + tail + b[o + k:]
+                    if notes is not None:
+                        for i, (x, y) in enumerate(zip(merged[end - k:end], window)):
+                            if (x.strip() != y.strip() and len(x.strip()) >= 6 and len(y.strip()) >= 6 and
+                                    "[CUT OFF]" not in x + y and
+                                    (x.rstrip() in prefer) == (y.rstrip() in prefer)):
+                                at = end - k + i
+                                notes.setdefault("overlap_conflicts", []).append(
+                                    _conflict_context(result, at))
+                        if trim and end < len(result):
+                            # the rows dropped from the screen before are in doubt: flag what replaced them for review
+                            notes.setdefault("overlap_conflicts", []).append(_conflict_context(result, end))
+                    return result
     # A unique paragraph label or numbered maintenance comment establishes
     # position independently of repeated logic. Retain rows a later read skipped.
     marker = _re.compile(r"\d{2,}-[\w-]+\.|[A-Za-z_][\w]*:|\*.*\d.*")
@@ -1777,6 +1912,8 @@ def analyse_incremental(client, image_paths: list, cache_dir: Path = None) -> di
     so build_docx() and the callers work unchanged.
     """
     parts, metas = [], []
+    if cache_dir is not None:
+        prefetch_frames(client, [(p, cache_dir) for p in image_paths])
     for path in image_paths:
         if cache_dir is not None:
             extract_to_cache(client, path, cache_dir)
@@ -1898,6 +2035,32 @@ def extract_to_cache(client, path: Path, cache_dir: Path) -> None:
         except Exception:  # noqa: BLE001
             pass
         _publish_cache(cf, res["raw"])
+
+
+def frame_workers() -> int:
+    """How many screenshots are read at once. In batch mode each read waits minutes for its batch, so they all go together."""
+    batch = _os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes")
+    return max(1, int(_os.environ.get("CODESNAP_FRAME_WORKERS", "40" if batch else "4")))
+
+
+def prefetch_frames(client, jobs) -> None:
+    """Read many screenshots at the same time. `jobs` is a list of (image path, cache dir[, usage bucket]). A frame that fails is skipped
+    here and simply read again, with its error raised, when the caller reads it in order."""
+    jobs = list(jobs)
+    if len(jobs) < 2:
+        return
+    from core.usage import BucketPool
+
+    def one(job):
+        if len(job) > 2 and job[2]:
+            from core.usage import _THREAD
+            _THREAD.inherited = job[2]   # charged to the file the frame belongs to
+        try:
+            extract_to_cache(client, job[0], job[1])
+        except Exception:  # noqa: BLE001
+            pass
+    with BucketPool(max_workers=min(len(jobs), frame_workers())) as pool:
+        list(pool.map(one, jobs))
 
 
 def verify_for(path: Path, cache_dir: Path) -> dict:

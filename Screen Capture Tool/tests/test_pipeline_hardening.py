@@ -158,9 +158,14 @@ def test_temperature_is_not_sent_to_opus(monkeypatch, tmp_path):
     monkeypatch.setattr(analysis, "measured_frame", lambda c, p, raw, calibration=None: (raw, {}, 0))
     png = tmp_path / "a.png"
     png.write_bytes(b"\x89PNG....")
+    monkeypatch.setattr(analysis, "EXTRACT_MODEL", "claude-opus-5-5")   # Opus rejects the parameter outright
     c = OnceClient(_msg('{"raw_transcription": ["a = 1"], "corrections_applied": []}'))
     analysis.extract_structured(c, png)
     assert "temperature" not in c.calls[0]
+    monkeypatch.setattr(analysis, "EXTRACT_MODEL", "claude-sonnet-5")   # the current reader keeps the A/B switch
+    c = OnceClient(_msg('{"raw_transcription": ["a = 1"], "corrections_applied": []}'))
+    analysis.extract_structured(c, png)
+    assert c.calls[0]["temperature"] == 0.0
     assert analysis._accepts_temperature("claude-sonnet-5-5") and not analysis._accepts_temperature("claude-opus-5-5")
 
 

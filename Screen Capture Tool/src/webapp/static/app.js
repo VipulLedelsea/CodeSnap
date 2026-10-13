@@ -919,7 +919,7 @@ async function loadPrograms(select) {
 }
 const STATE = {
   waiting: ["Waiting", "wait"], reading: ["Reading", "busy"], reviewing: ["Reviewing", "busy"],
-  needs_recapture: ["Needs recapture", "bad"], failed: ["Couldn't read", "bad"], done: ["Done", "ok"],
+  needs_recapture: ["Needs attention", "attn"], failed: ["Couldn't read", "bad"], done: ["Done", "ok"],
 };
 const ISSUE = { cut: "lines cut off at the edge of the screen", break: "a gap between two screens, so lines may be missing",
   rows: "a line may have been skipped or added", mismatch: "some characters may be misread", partial: "the start or end of the file looks missing",
@@ -951,13 +951,13 @@ function renderProgress(d) {
   if (p.reading) bits.push(`${p.reading} reading`);
   if (p.reviewing) bits.push(`${p.reviewing} being reviewed`);
   if (p.waiting) bits.push(`${p.waiting} waiting`);
-  const attn = p.needs_recapture + p.failed;
+  const attn = p.needs_recapture, bad = p.failed;
   box.innerHTML = `<div class="pp-head">
       <b>${p.finished} of ${p.total} files processed</b>
-      <span>${busy ? bits.join(" · ") + ` — ${p.to_go} to go` : "Nothing left to process"}${attn ? ` · <em>${attn} need${attn > 1 ? "" : "s"} recapture</em>` : ""}</span>
+      <span>${busy ? bits.join(" · ") + ` — ${p.to_go} to go` : "Nothing left to process"}${attn ? ` · <em class="attn">${attn} need${attn > 1 ? "" : "s"} attention</em>` : ""}${bad ? ` · <em>${bad} couldn't be read</em>` : ""}</span>
     </div>
     ${busy ? `<button class="btn-link" data-stop-analysis type="button">Stop analysis</button>` : ""}
-    <div class="pp-bar">${seg(p.done, "ok")}${seg(p.needs_recapture + p.failed, "bad")}${seg(p.reviewing + p.reading, "busy")}${seg(p.waiting, "wait")}</div>
+    <div class="pp-bar">${seg(p.done, "ok")}${seg(p.needs_recapture, "attn")}${seg(p.failed, "bad")}${seg(p.reviewing + p.reading, "busy")}${seg(p.waiting, "wait")}</div>
     ${_spendLine(d)}`;
 }
 document.addEventListener("click", async (ev) => {
@@ -980,8 +980,8 @@ function _fileRow(a, pendingFor) {
   else if (pendingFor && st === "failed") note = `<div class="pf-note bad">Recapture couldn't be read: ${escapeHtml((pendingFor.pending || {}).error || "Reading failed.")} <button class="btn-link" data-act="retry" data-artifact-id="${pendingFor.id}" type="button">Retry</button></div>`;
   else if (pendingFor) note = `<div class="pf-note busy">Recapture in progress${pendingFor.pending && pendingFor.pending.frames ? ` — read ${pendingFor.pending.read || 0} of ${pendingFor.pending.frames} screenshots` : ""}.</div>`;
   else if (rc && rc.result === "fixed") note = `<div class="pf-note ok">✓ Fixed by the recapture (now v${rc.version})${rc.fixed.length ? " — no more " + [...new Set(rc.fixed.filter(i => !(i.kind === "partial" && rc.fixed.some(j => j.kind === "cut"))).map(i => FIXED[i.kind] || "problems"))].join(" or ") : ""}.</div>`;
-  else if (rc && rc.result === "still") note = `<div class="pf-note bad">Recaptured as v${rc.version}, but it still needs work: ${_issues(rc.remaining).toLowerCase()}. <button class="btn-link" data-act="review-lines" type="button">Review with screenshots</button> <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
-  else if (st === "needs_recapture") note = `<div class="pf-note bad">${_issues(a.quality.issues)}. <button class="btn-link" data-act="review-lines" type="button">Review with screenshots</button> <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
+  else if (rc && rc.result === "still") note = `<div class="pf-note attn">Updated to v${rc.version}; a few lines still need attention: ${_issues(rc.remaining).toLowerCase()}. <button class="btn-link" data-act="review-lines" type="button">Review with screenshots</button> <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
+  else if (st === "needs_recapture") note = `<div class="pf-note attn">${_issues(a.quality.issues)}. <button class="btn-link" data-act="review-lines" type="button">Review with screenshots</button> <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
   else if (st === "failed" && a.pending && a.pending.error) note = `<div class="pf-note bad">${escapeHtml(a.pending.error)} <button class="btn-link" data-act="retry" type="button">Retry</button></div>`;
   const reading = st === "reading" && a.pending && a.pending.frames ? ` · ${a.pending.read || 0}/${a.pending.frames}` : "";
   return `
@@ -1112,7 +1112,7 @@ const DEEP_GROUPS = [["What it does", ["purpose", "control_flow"]], ["Business r
   ["Data read and written", ["data_read", "data_write"]], ["Interfaces and dependencies", ["interface", "dependency"]], ["Screens", ["ui"]],
   ["Error handling", ["error_handling"]], ["Risks and defects", ["security", "data_integrity", "defect"]]];
 function _deepHtml(dd, current, q) {
-  const qi = q && q.status === "rescan" ? `<div class="pf-gap"><b>Rescan needed.</b> ${q.issues.map(i => escapeHtml(i.reason + (i.lines && i.lines.length ? " (lines " + i.lines.join(", ") + ")" : "") + ": " + i.advice)).join("<br>")}</div>` : "";
+  const qi = q && q.status === "rescan" ? `<div class="pf-gap"><b>Needs attention.</b> ${q.issues.map(i => escapeHtml(i.reason + (i.lines && i.lines.length ? " (lines " + i.lines.join(", ") + ")" : "") + ": " + i.advice)).join("<br>")}</div>` : "";
   if (!dd) return `<div class="pf-verify"><div class="pf-vhead">Line-by-line review</div>${qi}<div class="project-hint">Not run yet — it runs after each capture, or use “Analyse now”.</div></div>`;
   const cite = f => f.lines[0] === f.lines[1] ? `L${f.lines[0]}` : `L${f.lines[0]}–${f.lines[1]}`;
   const groups = DEEP_GROUPS.map(([t, cats]) => {

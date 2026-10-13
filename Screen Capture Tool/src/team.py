@@ -44,6 +44,8 @@ def agent_extract(ctx) -> dict:
     raws = []
     metas = []
     corrections = []
+    if ctx.cache_dir is not None:
+        analysis.prefetch_frames(ctx.client, [(p, ctx.cache_dir) for p in sorted(ctx.images)])
     for p in sorted(ctx.images):
         if ctx.cache_dir is not None:
             analysis.extract_to_cache(ctx.client, p, ctx.cache_dir)
@@ -631,7 +633,8 @@ def run_team_fast(client, ctx, goal=None, verbose=True, audit=None, max_iters=No
     indent_lang = _indent_sensitive(language, extension)
     from core.cobol import detect_kind, lint_columns, merge_column_review, review_columns
     column_lang = detect_kind(code0, language, extension) in ("cobol", "copybook")
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    from core.usage import BucketPool
+    with BucketPool(max_workers=3) as pool:
         f_an = pool.submit(_analyst_enrich, client, numbered, base)
         f_de = pool.submit(agent_decoder, client, code0, extension, language)
         f_rv = pool.submit(analysis.review_indentation, client, getattr(ctx, "images", []), language) if indent_lang else None

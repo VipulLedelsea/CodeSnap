@@ -583,7 +583,7 @@ a.disabled{ opacity:.45; pointer-events:none; }
 .pf-check.ok{ color:#1F7A4D; border-color:#BFE3CF; }
 .pf-check.warn{ color:#8A5A00; border-color:#F1D9A6; }
 .pf-check.bad{ color:#B42318; border-color:#F4C7C3; font-weight:600; }
-.cb.rescan{ border-left:3px solid #B42318; }
+.cb.rescan{ border-left:3px solid #E0A458; }
 .cb.rescan .rs-item{ margin-top:4px; font-size:12px; }
 .dd-g{ margin-top:8px; }
 .dd-t{ font-weight:600; font-size:12px; margin-bottom:2px; }
@@ -690,10 +690,12 @@ a.disabled{ opacity:.45; pointer-events:none; }
 .pp-head b{ font-size:16px; font-weight:600; color:var(--text); }
 .pp-head span{ font-size:13px; color:var(--muted); }
 .pp-head em{ font-style:normal; color:#B42318; font-weight:500; }
+.pp-head em.attn{ color:#8A5A00; }
 .pp-bar{ display:flex; height:8px; border-radius:6px; overflow:hidden; background:var(--line-soft); gap:2px; }
 .pp-bar i{ display:block; min-width:6px; }
 .pp-bar i.ok{ background:#3C9A6B; }
 .pp-bar i.bad{ background:#D0584A; }
+.pp-bar i.attn{ background:#E0A458; }
 .pp-bar i.busy{ background:#5B8FD8; animation:pp-pulse 1.4s ease-in-out infinite; }
 .pp-bar i.wait{ background:#E3C27A; }
 @keyframes pp-pulse{ 50%{ opacity:.55; } }
@@ -701,6 +703,7 @@ a.disabled{ opacity:.45; pointer-events:none; }
 .pf-state{ font-size:11.5px; border-radius:999px; padding:2px 9px; white-space:nowrap; color:var(--muted); background:var(--line-soft); }
 .pf-state.ok{ color:#1F7A4D; background:#E6F4EC; }
 .pf-state.bad{ color:#B42318; background:#FBE9E7; font-weight:500; }
+.pf-state.attn{ color:#8A5A00; background:var(--warn-soft); font-weight:500; }
 .pf-state.busy{ color:#1D5FBF; background:#E8F0FC; }
 .pf-state.wait{ color:#8A5A00; background:#FBF1DC; }
 .pf-menu{ position:relative; color:var(--muted); padding:0 6px; border-radius:6px; cursor:pointer; font-size:15px; line-height:1; }
@@ -710,6 +713,7 @@ a.disabled{ opacity:.45; pointer-events:none; }
 .pf-note{ font-size:12.5px; margin:6px 2px 0; }
 .pf-note.ok{ color:#1F7A4D; }
 .pf-note.bad{ color:#B42318; }
+.pf-note.attn{ color:#8A5A00; }
 .pf-note.busy{ color:#1D5FBF; }
 .pf-note .btn-link{ font-size:12.5px; }
 .dl-links{ font-size:13px; color:var(--muted); display:flex; gap:6px; align-items:center; }
@@ -756,3 +760,4 @@ a.disabled{ opacity:.45; pointer-events:none; }
 
 .pp-spend { margin-top: 6px; font-size: 12px; color: var(--muted); }
 .pp-spend.pp-warn { color: #b45309; font-weight: 600; }
+body.dark .pf-state.attn, body.dark .pf-note.attn, body.dark .pp-head em.attn{ color:#E8B766; }
