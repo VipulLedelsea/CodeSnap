@@ -125,7 +125,11 @@ class BatchMessages:
             threading.Thread(target=self._attach, args=(item, entry), daemon=True, name="codesnap-batch-attach").start()
         else:
             self._submit(item)
-        item.event.wait()
+        from core import capture_gate
+        while not item.event.wait(1.0):
+            # Stop must work while a request waits in a batch. The batch keeps running at the API and its journal entry
+            # stays, so the next run attaches to the paid result instead of paying again.
+            capture_gate.check()
         if item.error is not None:
             raise item.error
         self.journal.drop(item.key)
@@ -195,17 +199,29 @@ class BatchMessages:
             threading.Thread(target=self._run, args=(group,), daemon=True, name="codesnap-batch-run").start()
 
     def _run(self, group):
+        created = False
         try:
             batch = self._call(lambda: self._messages.batches.create(requests=[
                 {"custom_id": f"r{i}", "params": item.params} for i, item in enumerate(group)]), patience=600.0)
+            created = True
             self.journal.put_many({item.key: {"batch_id": batch.id, "custom_id": f"r{i}", "at": time.time()}
                                    for i, item in enumerate(group)})
             self._wait_ended(batch.id)
             results = {r.custom_id: r.result for r in self._call(lambda: list(self._messages.batches.results(batch.id)))}
         except Exception as exc:  # noqa: BLE001
+            gone = getattr(exc, "status_code", None) == 404 and created
+            retry = []
             for item in group:
+                if gone and item.tries < 2:
+                    # the batch was removed or expired before its results were read: send the request again
+                    item.tries += 1
+                    self.journal.drop(item.key)
+                    retry.append(item)
+                    continue
                 item.error = exc if isinstance(exc, BatchRequestError) else BatchRequestError(f"{type(exc).__name__}: {exc}")
                 item.event.set()
+            for item in retry:
+                self._submit(item)
             return
         retry = []
         for i, item in enumerate(group):

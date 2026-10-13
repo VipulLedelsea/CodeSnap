@@ -30,6 +30,7 @@ _RULES = [
     (r"screenshot", "screen"),
     (r"transcriptions?", "source"),
     (r"transcribed", "reviewed"),
+    (r"capture (concern|problem|issue)s?", r"reading \1s"),   # "capture concerns" must not become "provide concerns"
     (r"captured", "reviewed"),
     (r"captures", "provides"),
     (r"capture", "provide"),

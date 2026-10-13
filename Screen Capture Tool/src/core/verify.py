@@ -80,14 +80,21 @@ def join_sideways(a: str, b: str, min_k: int = 8):
         return None
     if b0 in a0:
         return a
+    # The overlap must start with b's first min_k characters, so look only where those occur (a C-speed search) instead of
+    # testing every position of a.
+    lo, hi, head = max(0, len(a0) - len(b0)), len(a0) - min_k, b0[:min_k]
+    at = a0.find(head, lo)
+    if at == -1 or at > hi:
+        return None
     # A complete SQL statement is a new source row, not a horizontally
     # scrolled suffix merely because many INSERTs share the same ending.
     if re.match(r'^(?:--|(?:CREATE|INSERT|SELECT|UPDATE|DELETE|ALTER|DROP|GRANT|REVOKE|MERGE)\b)', b0, re.I):
         return None
     b_lead = re.sub(r"^\s*(\[CUT OFF\]\s*)?", "", b)      # a piece cut at its left edge starts with the marker
-    for p in range(max(0, len(a0) - len(b0)), len(a0) - min_k + 1):
-        if b0.startswith(a0[p:]):
-            return a0 + b_lead[len(a0) - p:]
+    while at != -1 and at <= hi:
+        if b0.startswith(a0[at:]):
+            return a0 + b_lead[len(a0) - at:]
+        at = a0.find(head, at + 1)
     return None
 
 
@@ -102,11 +109,71 @@ def _piece_of(l: str, g: str) -> bool:
     return j is not None and j != g
 
 
+class _PieceIndex:
+    """Answers "is this line a piece of a line on some OTHER screen?" for a whole capture without comparing it with every line.
+    The distinct lines of all screens are searched as one text (C speed); only the few places where the line can occur are
+    tested with the exact rules of _piece_of. The answer for a line needs at most two screens that hold a source, so the
+    search stops there; the screen being judged is excluded afterwards."""
+
+    def __init__(self, frames):
+        where = {}
+        for k, fr in enumerate(frames):
+            for g in fr:
+                where.setdefault(g, set()).add(k)
+        self.raw = list(where)
+        self.frames = [where[g] for g in self.raw]
+        self.stem = [_stem(g) for g in self.raw]
+        self.norm = [normalized_line(x) for x in self.stem]
+        self._cache = {}
+        for name, items in (("n", self.norm), ("r", self.stem)):
+            starts, pos = [], 0
+            for x in items:
+                starts.append(pos)
+                pos += len(x) + 1
+            setattr(self, name + "_starts", starts)
+            setattr(self, name + "_blob", "\n".join(items))
+
+    def _line_of(self, starts, pos):
+        import bisect
+        return bisect.bisect_right(starts, pos) - 1
+
+    def holders(self, l):
+        """Up to two distinct screens that hold a line l is a piece of."""
+        got = self._cache.get(l)
+        if got is not None:
+            return got
+        out, l0 = set(), normalized_line(_stem(l))
+        if len(l0) >= 8:
+            blob, starts = self.n_blob, self.n_starts
+            at = blob.find(l0)
+            while at != -1 and len(out) < 2:
+                k = self._line_of(starts, at)
+                # inside a line, but the line must not simply start with it
+                if at > starts[k] and not self.norm[k].startswith(l0) and self.norm[k]:
+                    out |= self.frames[k]
+                at = blob.find(l0, at + 1)
+            if len(out) < 2:
+                b0 = _stem(l).strip()
+                head = b0[:8]
+                at = self.r_blob.find(head) if len(b0) >= 8 else -1
+                while at != -1 and len(out) < 2:
+                    k = self._line_of(self.r_starts, at)
+                    g, a0 = self.raw[k], self.stem[k]
+                    # the same test as _piece_of for a line that does not contain l: join_sideways gives something new
+                    if self.norm[k] and l0 not in self.norm[k]:
+                        j = join_sideways(g, l)
+                        if j is not None and j != g:
+                            out |= self.frames[k]
+                    at = self.r_blob.find(head, at + 1)
+        self._cache[l] = out
+        return out
+
+
 def sideways_views(frames: list) -> set:
     """Indexes of the screens that were taken scrolled right: most of their lines are cut at the left edge, or are
     pieces of lines another screen shows from their start."""
     out = set()
-    blobs = [("\n".join(normalized_line(_stem(g)) for g in fr), "\n".join(_stem(g) for g in fr)) for fr in frames]
+    index = None
     for i, f in enumerate(frames):
         long_ = [l for l in f if len(_stem(l).strip()) >= 8]
         if not long_:
@@ -115,20 +182,15 @@ def sideways_views(frames: list) -> set:
         if leadcut >= 0.5 * len(long_):
             out.add(i)
             continue
-        others = [g for j, fr in enumerate(frames) if j != i for g in fr]
-        # Cheap necessary conditions (C-speed substring tests over the other screens) before the exact per-line
-        # comparison: a piece must lie inside some line (normalized) or start with the last >= 8 chars of one.
-        norm_blob = "\n".join(blobs[j][0] for j in range(len(frames)) if j != i)
-        raw_blob = "\n".join(blobs[j][1] for j in range(len(frames)) if j != i)
+        index = index or _PieceIndex(frames)
+        need = 0.5 * len(long_)
         pieces = 0
-        for l in long_:
-            l0 = normalized_line(_stem(l))
-            head = _stem(l).strip()[:8]
-            if (len(l0) < 8 or l0 not in norm_blob) and (len(head) < 8 or head not in raw_blob):
-                continue
-            if any(_piece_of(l, g) for g in others):
+        for n, l in enumerate(long_):
+            if pieces >= need or pieces + (len(long_) - n) < need:
+                break                                   # decided either way
+            if index.holders(l) - {i}:
                 pieces += 1
-        if pieces >= 0.5 * len(long_):
+        if pieces >= need:
             out.add(i)
     return out
 
@@ -147,29 +209,60 @@ def sideways_merge_ex(merged: list, lines: list, force: bool = False):
     if len(cand) < 3:
         return None
     out, ext, piece, miss, pos, joined = list(merged), 0, 0, 0, 0, []
+    stems = [_stem(x) for x in out]
+    blob = "\n".join(stems)
+    exact = {x.strip() for x in stems}
+    need, allowed = max(3, 0.4 * len(cand)), 0.25 * len(cand)
     for l in cand:
         b0 = _stem(l).strip()
+        head = b0[:8]
         hit = None
-        for i in list(range(pos, len(out))) + list(range(0, pos)):
-            j = join_sideways(out[i], l)
-            if j is not None:
-                hit = (i, j)
-                break
+        # a line can only join one that contains its first eight characters, so most lines are ruled out by one search
+        if head in blob:
+            for i in list(range(pos, len(out))) + list(range(0, pos)):
+                if head not in stems[i]:
+                    continue
+                j = join_sideways(out[i], l)
+                if j is not None:
+                    hit = (i, j)
+                    break
         if hit is None:
-            if not any(_sim(m, l) >= 0.9 for m in out):
+            if b0 not in exact and not _has_close(stems, b0):
                 miss += 1
+                if not force and miss > allowed:
+                    return None          # the answer can only be "no" from here
             continue
         i, j = hit
         if j != out[i]:
             out[i] = j
+            stems[i] = _stem(j)
+            blob = "\n".join(stems)
+            exact.add(stems[i].strip())
             ext += 1
             joined.append(j)
         elif not _stem(out[i]).strip().startswith(b0):
             piece += 1             # starts part-way into a known line: the view is scrolled right
         pos = i + 1
-    if force or (ext + piece >= max(3, 0.4 * len(cand)) and miss <= 0.25 * len(cand)):
+    if force or (ext + piece >= need and miss <= allowed):
         return out, ext, joined
     return None
+
+
+def _has_close(stems: list, b0: str) -> bool:
+    """Is some line of `stems` at least 90% like b0 (the test the old loop made with _sim on every line)? Lines whose length
+    alone rules them out are skipped, and the cheap upper bounds of the matcher are tried before the exact ratio."""
+    la = len(b0)
+    r = difflib.SequenceMatcher(None)
+    r.set_seq2(b0)                      # the line being looked for is fixed; its lookup table is built once
+    for m in stems:
+        m = m.strip()
+        lb = len(m)
+        if 2 * min(la, lb) < 0.9 * (la + lb):
+            continue
+        r.set_seq1(m)
+        if r.real_quick_ratio() >= 0.9 and r.quick_ratio() >= 0.9 and r.ratio() >= 0.9:
+            return True
+    return False
 
 
 def _same_line(x: str, y: str) -> bool:
@@ -422,6 +515,11 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
            "first_line": notes.get("first_line"), "last_line": notes.get("last_line"),
            "sideways": notes.get("sideways", 0), "wrapped": notes.get("wrapped", 0), "flags": flags[:50],
            "breaks": sum(flag['reason'] == REASONS['break'] for flag in flags)}
+    if notes.get("column_shifted_frames"):
+        # stretches of a screenshot that were read one column to the right and were moved back (core.analysis._align_frame_columns)
+        out["column_shifted"] = [{"screen": k + 1, "first_row": a, "last_row": b} for k, a, b in notes["column_shifted_frames"]]
+    if notes.get("indent_runs_moved"):
+        out["indent_shifted"] = [{"first_line": a, "last_line": b} for a, b in notes["indent_runs_moved"]]
     if notes.get('spacing_statuses'):
         measured=sum(s=='measured' for s in notes['spacing_statuses'])
         out['spacing']={'measured':measured,'total':total,'unconfirmed':max(0,total-measured),

@@ -6,6 +6,8 @@ from core.validate import looks_truncated
 _BRACE_FAMS = {"cs", "java", "cpp", "js", "php", "perl", "powershell", "delphi"}
 _SEQ = re.compile(r"^(\d{6})[ *\-/Dd$]")
 _NAT = re.compile(r"^(\d{4})\s")
+_LABEL = re.compile(r"^\s{0,4}([A-Za-z_]{1,8}?)(\d{1,5}):\s*(?:PROC|PROCEDURE|BEGIN|DO|ENTRY|\s*$)", re.I)     # R18: PROC;
+_PARAGRAPH = re.compile(r"^.{6} \s{0,3}(\d{3,5})-([A-Za-z][\w-]*)\.\s*$")                                    # 5050-CHECK-05.
 
 
 def _balance(lines, open_ch, close_ch):
@@ -29,6 +31,70 @@ def _seq_gaps(lines, rx, width):
     if step <= 0:
         return []
     return [(a, b) for a, b in zip(nums, nums[1:]) if b - a > max(step * 25, step + 10 ** (width - 3))]
+
+
+def shifted_spacing(raw, min_run=20) -> list:
+    """(first line, last line) of runs of COBOL statements indented one column off the file's own step pattern.
+    COBOL statements sit at steps of four from the margin, so in a file where 90% or more share one indent remainder, a
+    run of 20 or more lines with the next remainder is a screenshot that was read one column to the side. Flagged, not
+    rewritten: the transcription is evidence."""
+    import collections
+    rows = []
+    for i, line in enumerate(raw, 1):
+        text = line.strip()
+        if not text or len(line) < 8 or line[6:7] == "*" or text.startswith("*"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent >= 11:      # area A names and divisions are not statements
+            rows.append((i, indent % 4))
+    if len(rows) < 60:
+        return []
+    major, count = collections.Counter(m for _, m in rows).most_common(1)[0]
+    if count / len(rows) < 0.9:
+        return []
+    out, run = [], []
+
+    def flush():
+        if len(run) >= min_run:
+            out.append((run[0], run[-1]))
+    for number, mod in rows:
+        if (mod - major) % 4 in (1, 3):
+            if run and number - run[-1] > 6:
+                flush()
+                run = []
+            run.append(number)
+        elif run and number - run[-1] > 6:
+            flush()
+            run = []
+    flush()
+    return out
+
+
+def label_gaps(raw) -> list:
+    """Numbered labels or paragraphs that run in a steady sequence with one or two members missing: (name, before, after,
+    line). Files of near-identical routines lose a whole block when stitched, and nothing else shows it. Needs six or more
+    in the sequence, and a gap of exactly one to three steps, so an original that skips numbers is not flagged."""
+    import statistics
+    runs = {}
+    for i, line in enumerate(raw, 1):
+        m = _LABEL.match(line)
+        if m:
+            runs.setdefault(("label", m.group(1).upper()), []).append((int(m.group(2)), i))
+        m = _PARAGRAPH.match(line)
+        if m:
+            runs.setdefault(("paragraph", len(m.group(1))), []).append((int(m.group(1)), i))
+    out = []
+    for (kind, name), items in runs.items():
+        diffs = [b - a for (a, _), (b, _) in zip(items, items[1:]) if b > a]
+        if len(items) < 6 or len(diffs) < 5:
+            continue
+        step = statistics.median(diffs)
+        if step <= 0:
+            continue
+        for (a, line), (b, _) in zip(items, items[1:]):
+            if b - a > step and (b - a) % step == 0 and (b - a) <= step * 3:
+                out.append((f"{name}{a + step:g}" if kind == "label" else f"paragraph {int(a + step)}", a, b, line))
+    return out
 
 
 def check(text: str, filename: str = "", language: str = "", errors: str = "") -> dict:
@@ -64,7 +130,11 @@ def check(text: str, filename: str = "", language: str = "", errors: str = "") -
             tail = tail[:72].rstrip()
         if tail and not tail.endswith(".") and re.search(r"\bPROCEDURE\s+DIVISION\b", "\n".join(lines), re.I):
             reasons.append("last COBOL statement has no closing period — end probably not captured")
+    for missing, a, b, line in label_gaps(raw)[:3]:
+        reasons.append(f"{missing} is missing between {a} and {b} (near line {line}) — a block was probably lost between screenshots")
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if re.search(r"\bDFHM(?:DI|DF)\b", text or "") and not re.search(r"\bDFHMSD\b(?!\s+TYPE=FINAL)", text or "", re.I):
+        reasons.append("BMS map has no DFHMSD header — start of the file probably not captured")
     stripped = (text or "").lstrip()
     if ext in ("xml", "config", "wsdl", "xaml", "dtsx", "xsd", "fmb") or stripped.startswith("<?xml"):
         import xml.etree.ElementTree as ET
@@ -133,7 +203,11 @@ def check(text: str, filename: str = "", language: str = "", errors: str = "") -
     last = body[-1].rstrip()
     if fam not in ("cobol",) and (last.count('"') % 2 == 1) and not last.endswith(("_", "\\")):
         reasons.append("last line ends inside a string — cut off mid-line")
-    return {"partial": bool(reasons), "reasons": reasons}
+    spacing = []
+    if fam == "cobol":
+        spacing = [f"lines {a}-{b} are indented one column off the rest of the file — spacing probably shifted; "
+                   "recapture them or answer the line questions" for a, b in shifted_spacing(raw)[:3]]
+    return {"partial": bool(reasons), "reasons": reasons, "spacing": spacing}
 
 
 END_REASONS = ("unclosed", "no PROCEDURE DIVISION", "ends mid-construct", "end probably not captured",

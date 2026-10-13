@@ -1,7 +1,9 @@
 """Text helpers shared by findings and reports."""
 import re
+from functools import lru_cache
 
 
+@lru_cache(maxsize=1_000_000)       # pure, and the stitcher compares the same screen lines against each other millions of times
 def normalized_line(line):
     """Normalize source spacing without changing spaces inside quoted values."""
     text = line.lstrip()

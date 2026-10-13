@@ -7,6 +7,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 @pytest.fixture(autouse=True)
+def _no_model_preflight(monkeypatch):
+    """The model preflight makes a real API call; tests must never reach the network."""
+    monkeypatch.setenv("CODESNAP_SKIP_PREFLIGHT", "1")
+
+
+@pytest.fixture(autouse=True)
 def _no_pdf_conversion(monkeypatch, request):
     """Report packaging would otherwise launch LibreOffice / Word (up to 4 minutes) in every test that builds a
     package. Tests that need the real conversion can use @pytest.mark.real_pdf."""

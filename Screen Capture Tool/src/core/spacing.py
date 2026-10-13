@@ -114,22 +114,36 @@ def signature(calibration):
 
 
 def positions(source,reading):
-    """Unique surrounding rows identify repeated statements without guessing."""
+    """Unique surrounding rows identify repeated statements without guessing.
+
+    For each row of the reading, the source position is the one place where the row and the rows around it (two to twelve on each
+    side) all agree. Only places where the row itself occurs can match, so the search starts from an index of the source and
+    widens the window over the places still standing, instead of comparing the window with every position of the source."""
     from core.text import normalized_line
     keys=[normalized_line(s) for s in source]
     other=[normalized_line(s) for s in reading]
-    matches={}
+    where={}
+    for i,k in enumerate(keys):
+        where.setdefault(k,[]).append(i)
+    n=len(keys); matches={}
     for j in range(len(other)):
         if not other[j] or '[CUT OFF]' in reading[j]:
             continue
+        cand=None; lo_done=hi_done=None
         for radius in range(2,13):
             lo,hi=max(0,j-radius),min(len(other),j+radius+1)
             if hi-lo<3:
                 continue
-            candidates=[i for i in range(j-lo,len(keys)-(hi-j)+1)
-                        if keys[i-(j-lo):i+(hi-j)]==other[lo:hi]]
-            if len(candidates)==1:
-                matches[j]=candidates[0]
+            if cand is None:
+                cand=[i for i in where.get(other[j],()) if i-(j-lo)>=0 and i+(hi-j)<=n
+                      and keys[i-(j-lo):i+(hi-j)]==other[lo:hi]]
+            else:
+                cand=[i for i in cand if i-(j-lo)>=0 and i+(hi-j)<=n
+                      and all(keys[i-(j-t)]==other[t] for t in range(lo,lo_done))
+                      and all(keys[i+(t-j)]==other[t] for t in range(hi_done,hi))]
+            lo_done,hi_done=lo,hi
+            if len(cand)==1:
+                matches[j]=cand[0]
                 break
     return matches
 

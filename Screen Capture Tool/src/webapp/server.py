@@ -216,7 +216,7 @@ def api_pending_promote(name: str):
 @app.post("/api/session/start")
 def api_session_start(single: bool = False, idle_stop: float | None = None, region: str | None = None,
                       project_mode: bool = False, program: str | None = None, capture_kind: str = "code",
-                      display: str | None = None):
+                      display: str | None = None, confirm: bool = False):
     if program and not _program_exists(program):
         return JSONResponse({"error": f"Unknown program: {program}"}, status_code=404)
     if capture_kind not in ("code", "screen", "auto"):
@@ -228,6 +228,10 @@ def api_session_start(single: bool = False, idle_stop: float | None = None, regi
         if limit and spent >= limit:
             return JSONResponse({"error": f"API budget reached for this program (${spent:.2f} of ${limit:.2f}). "
                                           f"Raise the budget to keep capturing."}, status_code=402)
+    busy = [] if confirm or _session.running() else _programs_being_analysed()
+    if busy:
+        return JSONResponse({"error": "Analysis is running for " + ", ".join(busy) + ". A capture holds it until the capture "
+                                      "ends. Start the capture anyway?", "needs_confirm": True, "busy": busy}, status_code=409)
     try:
         started = _session.start(single=single, idle_stop=idle_stop, region=region, project_mode=project_mode,
                                  program=program, capture_kind=capture_kind, display=display)
@@ -431,6 +435,9 @@ def _deep_when_ready(slug: str):
 @app.post("/api/programs/{slug}/deepdive")
 def api_program_deepdive(slug: str, artifact_id: int | None = None):
     """Start (or restart for one file) the deep, evidence-checked code analysis."""
+    bad = _preflight()
+    if bad:
+        return JSONResponse({"error": bad}, status_code=400)
     job = _deep_start(slug, [artifact_id] if artifact_id is not None else None)
     return {"ok": True, **{k: v for k, v in job.items() if k != "started"}}
 
@@ -462,6 +469,11 @@ def api_program_create(payload: dict = Body(...)):
         return {"ok": True, "program": store.info}
 
 
+def _program_budget(store):
+    from core.usage import program_budget
+    return program_budget(store)
+
+
 @app.get("/api/programs/{slug}")
 def api_program(slug: str):
     with _open_program(slug) as store:
@@ -471,6 +483,7 @@ def api_program(slug: str):
             "revision": revision,
             "coverage": store.coverage(),
             "usage": store.usage(),
+            "budget_usd": _program_budget(store),
             "usage_by_step": store.usage_by_step()["steps"],
             "artifacts": (arts := [_artifact_summary(store, a) for a in store.artifacts()]),
             "progress": _progress(arts),
@@ -513,6 +526,9 @@ def api_program_pending_process(slug: str):
         return {"ok": True, "waiting": 0}
     if _session.running() and _session.program == slug:
         return {"ok": True, "waiting": waiting, "note": "The running capture session is analysing them."}
+    bad = _preflight(reading_models=True)
+    if bad:
+        return JSONResponse({"error": bad}, status_code=400)
     if not _session.process_pending(slug):
         return JSONResponse({"error": "Another program is being processed. Retry when it finishes."}, status_code=409)
     return {"ok": True, "waiting": waiting, "note": "Analysing in the background."}
@@ -560,6 +576,8 @@ def api_program_artifact_screenshots(slug: str, artifact_id: int, payload: dict 
                                                recapture_of=art["name"], keep_frames_of=artifact_id)
             frames = len(store.artifact_evidence(new_id))
         out = api_program_pending_process(slug)
+        if isinstance(out, JSONResponse):
+            return out
         return {**out, "artifact_id": new_id, "frames": frames, "added": len(paths)}
 
 
@@ -568,6 +586,31 @@ def _claims_alive(slug: str) -> bool:
     with _open_program(slug) as store:
         pending = store.pending_captures() or {}
     return any((v.get("claim") or {}).get("owner") and _owner_alive(v["claim"]["owner"]) for v in pending.values())
+
+
+def _preflight(reading_models: bool = False) -> str:
+    """A message when a model the run needs does not answer; "" when all do or when there is no key to test with."""
+    if not api_key_status()["has_key"] or os.environ.get("CODESNAP_SKIP_PREFLIGHT") == "1":
+        return ""
+    from core import preflight
+    try:
+        failed = preflight.check_models(_client(), preflight.reading_models() if reading_models else preflight.analysis_models())
+    except HTTPException:
+        return ""
+    return preflight.describe(failed) if failed else ""
+
+
+def _programs_being_analysed() -> list:
+    from core.model import ProgramStore
+    out = []
+    for info in ProgramStore.list():
+        slug = info.get("slug")
+        try:
+            if slug and _analysis_busy(slug):
+                out.append(slug)
+        except Exception:  # noqa: BLE001 - a program that cannot be opened must not block a capture
+            continue
+    return out
 
 
 def _analysis_busy(slug: str) -> bool:
@@ -735,10 +778,12 @@ def api_line_review_answer(slug: str, artifact_id: int, line: int, payload: dict
         if (payload.get('text_hash') != deepdive._hash(art.get('transcription')) or
                 not 0 < line <= len(lines) or payload.get('old_text') != lines[line-1]):
             raise HTTPException(status_code=409, detail="This source changed. Refresh the screenshot question before answering.")
-        text = payload.get('new_text')
-        if not isinstance(text, str) or not text.strip() or '\n' in text or '\r' in text:
+        delete = payload.get('delete') is True
+        text = "" if delete or payload.get('remove') is True else payload.get('new_text')
+        if not isinstance(text, str) or (not text.strip() and not delete and payload.get('remove') is not True) \
+                or '\n' in text or '\r' in text:
             raise HTTPException(status_code=400, detail="Enter one complete source line, preserving its spaces.")
-        op = 'artifact.confirm_line' if text == lines[line-1] else 'artifact.replace_line'
+        op = 'artifact.delete_line' if delete else 'artifact.confirm_line' if text == lines[line-1] else 'artifact.replace_line'
         change = {'artifact': art['name'], 'line': line, 'old_text': lines[line-1]}
         if op == 'artifact.replace_line':
             change['new_text'] = text
@@ -751,7 +796,7 @@ def api_line_review_answer(slug: str, artifact_id: int, line: int, payload: dict
         remaining = items(store, store.artifact(artifact_id))
         _deep_when_ready(slug)
         return {'ok': True, **result, 'review_status': 'completed', 'review_lines': remaining,
-                'remaining_issues': [item for item in remaining if item['line'] == line]}
+                'remaining_issues': [] if delete else [item for item in remaining if item['line'] == line]}
 
 
 @app.post("/api/programs/{slug}/artifacts/{artifact_id}/review/{line}/missing")
@@ -1046,9 +1091,10 @@ def api_program_report(slug: str, fmt: str, rescan: bool = True, client: str | N
 
 @app.get("/api/programs/{slug}/report-settings")
 def api_report_settings(slug: str):
-    from core.report.settings import FIELDS, get
+    from core.report.settings import BUSINESS_KEYS, FIELDS, get
     with _open_program(slug) as store:
-        return {"fields": [{"key": k, "label": l} for k, l in FIELDS], "values": get(store)}
+        return {"fields": [{"key": k, "label": l, "group": "business" if k in BUSINESS_KEYS else "details"} for k, l in FIELDS],
+                "values": get(store)}
 
 
 @app.post("/api/programs/{slug}/report-settings")

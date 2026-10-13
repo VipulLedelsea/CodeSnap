@@ -15,7 +15,7 @@ def pipeline_health(store) -> dict:
     for r in runs:
         if r["artifact_id"] and not r["ok"] and r["error"]:
             last_error[r["artifact_id"]] = r["error"]
-    failed, partial, invalid, unverified, waiting = [], [], [], [], []
+    failed, partial, invalid, unverified, waiting, shifted, edge_open = [], [], [], [], [], [], []
     pending = store.pending_captures()
     for a in arts:
         if a["status"] == "captured":
@@ -31,13 +31,26 @@ def pipeline_health(store) -> dict:
         text = a.get("transcription") or ""
         if not text.strip():
             continue
-        c = completeness(text, a["name"], a.get("language") or "")
+        if a.get("validation_ok") == 0 and (a.get("validation_errors") or "").strip() not in ("", "None"):
+            invalid.append({"id": a["id"], "name": a["name"], "tool": a.get("validation_tool") or "",
+                            "error": _first_line(a["validation_errors"])})
+        elif a.get("validation_ok") is None and a["artifact_type"] in ("code",):
+            unverified.append(a["name"])
+        c = completeness(text, a["name"], a.get("language") or "",
+                         a.get("validation_errors") if a.get("validation_ok") == 0 else "")
         if c["partial"]:
             from .completeness import end_reached, drop_end_reasons
             if end_reached(store, a):
                 c = drop_end_reasons(c)
         if c["partial"]:
             partial.append({"id": a["id"], "name": a["name"], "reasons": c["reasons"]})
+        if (a.get("artifact_type") in (None, "code")):
+            from . import edges
+            open_edges = edges.flags(store, a)
+            if open_edges:
+                edge_open.append({"id": a["id"], "name": a["name"], "edges": [e["kind"] for e in open_edges]})
+        if c.get("spacing"):
+            shifted.append({"id": a["id"], "name": a["name"], "reasons": c["spacing"]})
     parsers = ("cobol-parser", "ts-parser", "extractors", "langpacks")
     local_steps = ("security_scan", "assessment", "ui_review")
     is_parser = lambda r: str(r["model"] or r["prompt_version"] or "").startswith(parsers)
@@ -53,10 +66,10 @@ def pipeline_health(store) -> dict:
         since = oks[-2] if len(oks) >= 2 else 0
         local_errors += [{"step": step, "error": _first_line(r["error"], 220)} for r in runs
                          if r["step"] == step and not r["ok"] and r["id"] > since]
-    issues = len(failed) + len(partial) + len(invalid) + len(local_errors) + len(waiting)
+    issues = len(failed) + len(partial) + len(shifted) + len(invalid) + len(local_errors) + len(waiting)
     return {
         "status": "ok" if not issues else ("attention" if not failed else "errors"),
-        "files": len(arts), "analysis_errors": local_errors[-10:], "failed": failed, "partial": partial, "invalid": invalid, "unverified": unverified,
+        "files": len(arts), "analysis_errors": local_errors[-10:], "failed": failed, "partial": partial, "spacing_shifted": shifted, "edges_unconfirmed": edge_open, "invalid": invalid, "unverified": unverified,
         "waiting": waiting,
         "api": {"calls": len(api), "failures": len(api_fail), "cost": spent,
                 "recent_errors": [{"step": r["step"], "error": _first_line(r["error"])} for r in api_fail[-5:]],

@@ -77,12 +77,14 @@ def disposition(scores: dict, facts: dict, inputs: dict) -> dict:
         return pick("replatform", f"{round(legacy_share * 100)}% of the code runs on end-of-life or dead-end technology: "
                     + "; ".join(sorted(set((facts.get("no_path") or []) + (facts.get("eol_hard") or [])))[:3]),
                     "Rebuild or move those components (see component dispositions); keep the rest")
-    if S < 70 or D < 60 or H < 60 or facts.get("sec_high") or facts.get("high_risk"):
+    if S < 70 or D < 60 or H < 60 or facts.get("sec_high") or facts.get("high_risk") or facts.get("review_high"):
         why = []
         if S < 70 or facts.get("sec_high"):
             why.append(f"Security {S}/100 ({facts.get('sec_high', 0)} critical/high finding(s))")
         if facts.get("high_risk"):
             why.append(f"{facts['high_risk']} component(s) at high or critical risk")
+        if facts.get("review_high"):
+            why.append(f"The line-by-line review found {facts['review_high']} high-severity defect(s)")
         if D < 60:
             why.append(f"Tech debt {D}/100")
         if H < 60:

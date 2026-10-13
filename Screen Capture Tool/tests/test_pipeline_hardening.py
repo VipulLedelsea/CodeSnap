@@ -152,7 +152,9 @@ def test_deepdive_does_not_swallow_other_errors_by_message_text():
 
 def test_temperature_is_not_sent_to_opus(monkeypatch, tmp_path):
     monkeypatch.setenv("CODESNAP_EXTRACT_TEMPERATURE", "0")
-    monkeypatch.setattr(analysis, "EXTRACT_MODEL", "claude-opus-5-5")      # Opus rejects temperature, whichever model reads
+    # the readers are Sonnet and Haiku now; point them at Opus 5.5 to see that the A/B temperature is still held back from it
+    monkeypatch.setattr(analysis, "PLAIN_MODEL", "claude-opus-5-5")
+    monkeypatch.setattr(analysis, "EXTRACT_MODEL", "claude-opus-5-5")
     monkeypatch.setattr(analysis, "measured_frame", lambda c, p, raw, calibration=None: (raw, {}, 0))
     png = tmp_path / "a.png"
     png.write_bytes(b"\x89PNG....")

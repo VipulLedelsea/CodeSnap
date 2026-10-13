@@ -309,3 +309,136 @@ def test_repeated_rexx_routes_do_not_discard_new_labels_before_overlap():
     source = route(17) + route(18) + route(19) + route(20)
     frames = ['\n'.join(source[:13]), '\n'.join(source[9:39]), '\n'.join(source[32:])]
     assert merge_verified(frames)[0].splitlines() == source
+
+
+def _procedure(n):
+    return [f"R{n}: PROC;", f"  /* CHG-{n}: settlement tolerance. */", "  STATUS = 'ACCEPT';",
+            f"  IF ABS(VARIANCE) > {n % 7} THEN DO;", "    STATUS = 'HOLD';", "  END;",
+            "  IF PROCESSOR = 'OLDPAY' THEN DO;", "    STATUS = 'ACCEPT';", "    REASON = 'NEXT_DAY_PROCESSOR';", "  END;",
+            "  /* INC-2021: drain stuck queue after three attempts. */", "  IF RETRIES > 3 THEN DO;",
+            "    REASON = 'RETRY_OVERRIDE';", "  END;", "  AMOUNT = ABS(VARIANCE);", f"END R{n};"]
+
+
+def test_a_template_that_repeats_does_not_make_the_stitcher_drop_the_lines_between_two_screens():
+    """R17 and R18 end with 13 identical lines. A second screen that shows five lines of R17's end, then R18 in full, must not be
+    matched against R18's own tail, which would throw R18's first lines away."""
+    from core.analysis import stitch_parts
+    lines = [l for n in range(10, 24) for l in _procedure(n)]
+    start = lines.index("R17: PROC;")
+    first = lines[:start + 15]                         # ends with R17's 'AMOUNT = ABS(VARIANCE);'
+    second = lines[start + 11:start + 11 + 40]         # overlaps the last four lines, then runs on through R18 and R19
+    out = stitch_parts(["\n".join(first), "\n".join(second)]).split("\n")
+    assert out == lines[:start + 11 + 40]
+
+
+def test_a_stretch_read_one_column_to_the_right_is_moved_back_and_a_normal_screen_is_left_alone():
+    from core.analysis import _align_frame_columns
+    normal = [f"           MOVE {i} TO X." for i in range(150)]                 # indent 11, remainder 3
+    screen = ["        01 RESPONSE-RECORD.", "           05 RES-AMOUNT PIC 9.", "        PROCEDURE DIVISION.", "        0000-MAIN."] \
+        + [f"            MOVE {i} TO Y." for i in range(12)]                    # from PROCEDURE DIVISION on, one column right
+    parts, moved = _align_frame_columns(["\n".join(normal), "\n".join(screen), "\n".join(normal[:20])])
+    got = parts[1].split("\n")
+    assert moved == [(1, 3, 16)] and got[0] == "        01 RESPONSE-RECORD." and got[2] == "       PROCEDURE DIVISION."
+    assert got[4] == "           MOVE 0 TO Y." and parts[0] == "\n".join(normal) and parts[2] == "\n".join(normal[:20])
+    # fewer than eight statements in a row, or a file with no single pattern, is not touched
+    few = ["\n".join(normal), "\n".join([f"            MOVE {i} TO Y." for i in range(5)])]
+    assert _align_frame_columns(few)[1] == []
+    mixed = ["\n".join(["           MOVE 1.", "               MOVE 2.", "            MOVE 3.", "             MOVE 4."] * 40)]
+    assert _align_frame_columns(mixed)[1] == []
+
+
+def test_half_seen_rows_at_a_screen_edge_are_dropped_when_the_next_screen_shows_the_place_again():
+    from core.analysis import _trim_unverified_edges, merge_verified
+    body = [f"           MOVE {i} TO FIELD-{i}." for i in range(40)]
+    first = body[:20] + ["        END-IF", "        END-IF"]                      # the last row was half cut: read twice, wrong indent
+    second = body[16:40]
+    parts = ["\n".join(first), "\n".join(second)]
+    status = [["verified"] * 20 + ["unchecked", "unchecked"], ["verified"] * len(second)]
+    trimmed, dropped = _trim_unverified_edges(parts, [{"status": status[0]}, {"status": status[1]}])
+    assert dropped == [(0, "tail", 2)] and trimmed[0].split("\n") == body[:20]
+    # the same rows are kept when the other screen does not show the lines before them (they are the only copy), or when the
+    # pixel check did not work on the screen (most rows unchecked)
+    far = ["\n".join(body[30:40])]
+    assert _trim_unverified_edges([parts[0]] + far, [{"status": status[0]}, {"status": ["verified"] * 10}])[1] == []
+    assert _trim_unverified_edges(parts, [{"status": ["unchecked"] * 22}, {"status": status[1]}])[1] == []
+
+
+def test_a_line_misread_on_one_screen_is_settled_by_the_other_screens_that_show_it():
+    from core.analysis import _vote_lines
+    good = "          DFHMDF POS=(3,2),LENGTH=7,INITIAL='RECEIPT',           X"
+    bad = good.replace(",", ".")
+    context = [f"          DFHMDF POS=({i},2),LENGTH=7" for i in range(6)]
+    final = "\n".join(context[:3] + [bad] + context[3:])
+    shows = lambda line: "\n".join(context[:3] + [line] + context[3:])
+    parts = [shows(good), shows(good), shows(bad), shows(good)]
+    metas = [{"status": ["verified"] * 7}] * 4
+    fixed, changed = _vote_lines(final, parts, metas)
+    assert fixed.split("\n")[3] == good and changed == [(4, bad, good)]
+    # one screen against one is a tie: nothing changes; a quite different line never replaces a line; a cut-off row is not a vote
+    assert _vote_lines(final, [shows(good), shows(bad)], metas[:2])[1] == []
+    other = "          MOVE ALPHA TO BETA PLEASE"
+    assert _vote_lines(final, [shows(other), shows(other), shows(bad)], metas[:3])[1] == []
+    assert _vote_lines(final, [shows(good + " [CUT OFF]")] * 3 + [shows(bad)], metas[:4] + [{}])[1] == []
+
+
+def test_a_stretch_one_column_off_a_two_space_grid_is_moved_back_but_a_lone_line_is_not():
+    from core.analysis import _align_indent_grid
+    base = []
+    for n in range(120):
+        base += [f"R{n}: PROC;", f"  STATUS = {n};", f"  IF A > {n} THEN DO;", f"    REASON = {n};", "  END;", f"END R{n};"]
+    screen = [l[1:] if l.startswith(" ") else l for l in base[6:24]]            # read one column to the left
+    fixed, moved = _align_indent_grid(["\n".join(base), "\n".join(screen), "\n".join(base[:30])])
+    assert moved == [(1, 2, 17)] and fixed[1].split("\n") == base[6:24]
+    lone = base[:]
+    lone[3] = "   REASON = 3;"                                                    # one hand-aligned line, not a run
+    assert _align_indent_grid(["\n".join(lone)])[1] == []
+    assert _align_indent_grid(["\n".join(["   x = 1;"] * 80)])[1] == []           # a file with no grid is left alone
+
+
+def test_a_cut_off_row_and_the_half_seen_row_above_it_are_both_dropped_at_a_screen_edge():
+    from core.analysis import _trim_unverified_edges
+    body = [f"           MOVE {i} TO FIELD-{i}." for i in range(40)]
+    first = body[:20] + ["    END-IF", "    END-IF[CUT OFF]"]
+    parts = ["\n".join(first), "\n".join(body[16:40])]
+    status = ["verified"] * 20 + ["unchecked", "cut"]
+    trimmed, dropped = _trim_unverified_edges(parts, [{"status": status}, {"status": ["verified"] * 24}])
+    assert dropped == [(0, "tail", 2)] and trimmed[0].split("\n") == body[:20]
+
+
+def test_a_cut_off_row_beside_its_whole_line_is_dropped_but_a_lone_one_is_kept():
+    from core.analysis import _drop_cut_duplicates
+    lines = ["-- note", "CREATE TABLE history0 ( [CUT OFF]", "CREATE TABLE mun_history0 (", "  id INTEGER,"]
+    assert _drop_cut_duplicates(lines) == ["-- note", "CREATE TABLE mun_history0 (", "  id INTEGER,"]
+    lone = ["-- note", "CREATE TABLE history0 ( [CUT OFF]", "  id INTEGER,"]
+    assert _drop_cut_duplicates(lone) == lone
+
+
+def test_a_line_read_twice_in_a_row_gives_way_to_a_different_reading_of_that_place():
+    from core.analysis import _vote_lines
+    row = lambda name, year: f"INSERT INTO district_policy VALUES ('{name}', {year}, 1500, 28250, 5, 5, 1);"
+    above, below = row("LAKESIDE", 2020), row("MILLBROOK", 1997)
+    twice = row("MILLBROOK", 1996)
+    final = "\n".join([above, twice, twice, below])                       # the stitched text repeats MILLBROOK 1996
+    screen_a = "\n".join([above, twice, twice, below])                    # one screen read it that way
+    screen_b = "\n".join([above, row("LAKESIDE", 2021), twice, below])    # another read the true rows
+    fixed, changed = _vote_lines(final, [screen_a, screen_b], [{"status": ["verified"] * 4}] * 2)
+    assert fixed.split("\n") == [above, row("LAKESIDE", 2021), twice, below] and len(changed) == 1
+    # without the repeated line a one-to-one disagreement still changes nothing
+    plain = "\n".join([above, twice, below])
+    assert _vote_lines(plain, [plain, "\n".join([above, row("LAKESIDE", 2021), below])], [{}, {}])[1] == []
+
+
+def test_stitching_a_long_repetitive_file_stays_fast_and_exact():
+    """A 3,000-line file of near-identical paragraphs on 86 screens. Stitching used to grow with the square of the file (20,000
+    lines would have taken half an hour); it must stay well inside this limit, with the text exact."""
+    import sys
+    import time
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent / "quality"))
+    import scale_bench
+    from core.analysis import merge_verified
+    lines = scale_bench.make_file(3000)
+    parts = scale_bench.screens(lines)
+    began = time.time()
+    code, _, _, _ = merge_verified(parts, [{}] * len(parts))
+    assert time.time() - began < 45
+    assert [l for l in code.split("\n") if l.strip()] == [l for l in lines if l.strip()]
