@@ -995,6 +995,19 @@ def _clean_source(text: str, mode: str | None = None) -> str:
     return text.strip("\n")
 
 
+def _duplicate_header_names(text: str) -> list:
+    """The class or top-level function names that appear more than once (what _has_dup_headers reacts to)."""
+    seen, dup = set(), []
+    for l in text.splitlines():
+        m = (_re.match(r"^\s*(?:public\s+|static\s+|final\s+|abstract\s+)*class\s+(\w+)", l)
+             or _re.match(r"^(?:def|function|func|fn)\s+(\w+)", l))
+        if m:
+            if m.group(1) in seen and m.group(1) not in dup:
+                dup.append(m.group(1))
+            seen.add(m.group(1))
+    return dup
+
+
 def _has_dup_headers(text: str) -> bool:
     """True if the text repeats a class name or a top-level function name — a strong
     signal that frame-stitching mis-merged and duplicated a block."""
@@ -1389,6 +1402,13 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     candidates = [stitched] + parts
     clean = [c for c in candidates if c.strip() and not _has_dup_headers(c)]
     best = max(clean or candidates, key=lambda c: len(c.splitlines())) if candidates else stitched
+    if (best is not stitched and stitched.strip() and _has_dup_headers(stitched)
+            and len(stitched.splitlines()) > 2 * len(best.splitlines())):
+        # A repeated class or function name is a hint, not proof: files repeat inner classes (Config, Meta), and a block
+        # copied by the stitcher is a few lines. Replacing a long stitch with one screen silently drops most of the file,
+        # so keep the stitch and report the repeated names for review instead.
+        best = stitched
+        notes["duplicate_headers"] = _duplicate_header_names(stitched)
     if best is not stitched:
         notes["sideways"] = 0
     for j in notes.pop("joined", []):
