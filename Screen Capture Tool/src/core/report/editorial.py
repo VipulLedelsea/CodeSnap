@@ -107,7 +107,7 @@ def _next_steps_diagram():
     return out.getvalue()
 
 
-def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts=None, priority_reasons=(), analysis_stage=None, full_summary=False):
+def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts=None, priority_reasons=(), analysis_stage=None, full_summary=False, evidence_rows=()):
     document = doc.d
     from docx.enum.style import WD_STYLE_TYPE
     for name in ("Normal", "Body Text", "List Paragraph"):
@@ -242,9 +242,195 @@ def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts
             anchor.addnext(e); anchor = e
     if metadata is not None:
         metadata["traffic_light"] = color.lower()
+    _shorten_cells(document)
+    overflow = _cap_registers(document)
+    _add_appendices(doc, overflow, evidence_rows)
+    _collapse_empty_tables(document)
+    _landscape_wide_tables(document)
     _strip_removed_refs(document, numbers)
     _style(document)
     _simple_english(document)
+
+
+
+# Tables kept short in the body: heading, rows kept, columns shown for rows moved to the appendix (id, description, rating)
+REGISTER_CAPS = (("9.1 ", 6, (0, 1, 6), "Risk register"), ("7.3 ", 6, (0, 1, 7), "Technical debt register"),
+                 ("5.1 ", 10, (0, 1, 5), "Data inventory"))
+SUMMARY_WORDS = 22
+
+
+def _short(text, words=SUMMARY_WORDS):
+    parts = text.split()
+    if len(parts) <= words:
+        return text
+    cut = " ".join(parts[:words])
+    k = max(cut.rfind(". "), cut.rfind("; "), cut.rfind(", "))
+    return (cut[:k] if k > len(cut) // 2 else cut).rstrip(" ,;:.") + "."
+
+
+
+CELL_WORDS = 55
+
+
+def _shorten_cells(document):
+    """A table cell of more than 55 words keeps its first whole sentences or clauses within that limit."""
+    for table in document.tables:
+        for row in table.rows:
+            seen = set()
+            for cell in row.cells:
+                if id(cell._tc) in seen:
+                    continue
+                seen.add(id(cell._tc))
+                text = cell.text
+                if len(text.split()) > CELL_WORDS and "\n" not in text and not text.lstrip().startswith("<insert"):
+                    short = _short(text, CELL_WORDS)
+                    if short != text and cell.paragraphs and cell.paragraphs[0].runs:
+                        _set_text(cell.paragraphs[0], short)
+
+
+def _cap_registers(document):
+    """Keep the longest registers to their highest rows. The rows taken out are returned with the register name, so the
+    appendix can list them and the body says where they went."""
+    moved = []
+    heading = None
+    for el in list(document.element.body.iterchildren()):
+        if el.tag == qn("w:p"):
+            p = Paragraph(el, document)
+            if (p.style.name if p.style is not None else "").startswith("Heading"):
+                heading = p.text
+        elif el.tag == qn("w:tbl") and heading:
+            for prefix, keep, columns, name in REGISTER_CAPS:
+                if not heading.startswith(prefix):
+                    continue
+                table = Table(el, document)
+                body = list(table.rows)[1:]
+                if len(body) <= keep + 3:      # moving a few rows saves nothing
+                    break
+                extra = body[keep:]
+                rows = [[_short(r.cells[min(c, len(r.cells) - 1)].text) for c in columns] for r in extra]
+                head = [table.rows[0].cells[min(c, len(table.rows[0].cells) - 1)].text for c in columns]
+                if name == "Data inventory":      # the other columns are all open items; list the names only
+                    rows, head = [[r[0]] for r in rows], [head[0]]
+                for r in extra:
+                    r._tr.getparent().remove(r._tr)
+                note = _paragraph(document, f"The {keep} highest entries are shown. The other {len(extra)} are listed in Appendix H.")
+                el.addnext(note)
+                moved.append((name, head, rows))
+                break
+            heading = None
+    return moved
+
+
+def _add_appendices(doc, overflow, evidence_rows):
+    """Appendix H: the register entries left out of the body. Appendix I: the findings the key-findings summary relies
+    on, with file and lines."""
+    from core.report import template_docx as TD
+    document = doc.d
+    if not overflow and not evidence_rows:
+        return
+    listed = next((p for p in document.paragraphs if p.text.startswith("Appendix G:")), None)
+    for letter, text, wanted in (("I", "Appendix I: Evidence for the key findings (Section 1.2)", bool(evidence_rows)),
+                                 ("H", "Appendix H: Further register entries (Sections 5.1, 7.3 and 9.1)", bool(overflow))):
+        if listed is not None and wanted:
+            el = deepcopy(listed._p)
+            listed._p.addnext(el)
+            _set_text(Paragraph(el, document), text)
+    if overflow:
+        document.add_paragraph("Appendix H. Further register entries", "Heading 1").paragraph_format.page_break_before = True
+        for name, head, rows in overflow:
+            anchor = document.add_paragraph(name, "Heading 2")
+            if len(head) == 1:
+                document.add_paragraph(f"{len(rows)} further entries: " + ", ".join(r[0] for r in rows) + ".")
+                continue
+            TD._table_after(doc, doc.table_proto, anchor._p, head, rows)
+            document.add_paragraph("")
+    if evidence_rows:
+        document.add_paragraph("Appendix I. Evidence for the key findings (Section 1.2)", "Heading 1").paragraph_format.page_break_before = True
+        anchor = document.add_paragraph("Each statement in the key findings rests on the review findings below.")
+        TD._table_after(doc, doc.table_proto, anchor._p, ["File", "Lines", "Type", "Finding"], evidence_rows)
+
+
+
+WIDE = []              # tables placed on a landscape page; _style sizes their columns to the wider page
+WIDE_COLUMNS = 8       # a table with this many columns or more, and several rows, goes on a landscape page
+WIDE_ROWS = 4
+WIDE_TEXT = 2500       # characters; a small table fits on a portrait page
+
+
+def _collapse_empty_tables(document):
+    """A table with no entries ('None identified') shows that sentence across the full width, not in the first column."""
+    for table in document.tables:
+        if len(table.rows) != 2 or len(table.columns) < 3:
+            continue
+        row = table.rows[1]
+        if len(row._tr.tc_lst) == len(table.columns) and row.cells[0].text.strip() and not any(c.text.strip() for c in row.cells[1:]):
+            merged = row.cells[0].merge(row.cells[-1])
+            for extra in [q for q in merged.paragraphs if not q.text.strip()][:]:
+                if len(merged.paragraphs) > 1:
+                    extra._p.getparent().remove(extra._p)
+
+
+def _section_break(document, landscape):
+    """A paragraph that ends a section; the section it ends is portrait or landscape."""
+    body = document.element.body
+    final = body.find(qn("w:sectPr"))
+    sect = deepcopy(final)
+    if landscape:
+        size = sect.find(qn("w:pgSz"))
+        width, height = size.get(qn("w:w")), size.get(qn("w:h"))
+        size.set(qn("w:w"), height); size.set(qn("w:h"), width); size.set(qn("w:orient"), "landscape")
+    kind = sect.find(qn("w:type"))
+    if kind is None:
+        kind = OxmlElement("w:type")
+        sect.find(qn("w:pgSz")).addprevious(kind)       # the schema puts the section type just before the page size
+    kind.set(qn("w:val"), "nextPage")
+    p = OxmlElement("w:p")
+    ppr = OxmlElement("w:pPr")
+    ppr.append(sect)
+    p.append(ppr)
+    return p, sect
+
+
+def _landscape_wide_tables(document):
+    """Tables with eight or more columns (the risk and debt registers) get a landscape page, where their text columns
+    have room. The heading above each stays with its table."""
+    body = document.element.body
+    final = body.find(qn("w:sectPr"))
+    children = list(body.iterchildren())
+    targets = []
+    for i, el in enumerate(children):
+        if el.tag != qn("w:tbl"):
+            continue
+        table = Table(el, document)
+        if (len(table.columns) >= WIDE_COLUMNS and len(table.rows) > WIDE_ROWS and not table.cell(0, 0).text.startswith("Impact 5")
+                and sum(len(c.text) for r in table.rows for c in r.cells) > WIDE_TEXT):
+            head = i - 1
+            while head >= 0 and not (children[head].tag == qn("w:p") and Paragraph(children[head], document).style is not None
+                                     and Paragraph(children[head], document).style.name.startswith("Heading")):
+                head -= 1
+            end = i + 1
+            while end < len(children) and children[end].tag == qn("w:p") and Paragraph(children[end], document).text.strip() \
+                    and not (getattr(Paragraph(children[end], document).style, "name", "") or "").startswith("Heading") \
+                    and not children[end].xpath(".//w:sectPr"):
+                end += 1
+            targets.append((head, i, end, el))
+    first = True
+    for head, i, end, el in targets:
+        before, sect_p = _section_break(document, landscape=False)
+        after, sect_l = _section_break(document, landscape=True)
+        if not first:                  # only the document's first section keeps the cover page's own header
+            for tag in ("w:headerReference", "w:footerReference", "w:titlePg"):
+                for node in sect_p.findall(qn(tag)):
+                    sect_p.remove(node)
+        for tag in ("w:headerReference", "w:footerReference", "w:titlePg"):
+            for node in sect_l.findall(qn(tag)):
+                sect_l.remove(node)
+        for node in final.findall(qn("w:titlePg")):
+            final.remove(node)
+        children[head].addprevious(before)
+        children[end - 1].addnext(after)
+        WIDE.append(el)
+        first = False
 
 
 def _strip_removed_refs(document, numbers):
@@ -309,7 +495,7 @@ def _simple_english(document):
                     el.getparent().remove(el)
                     continue
                 seen_prose.add(key)
-            if not p.text.strip() and not style.startswith("Heading") and not p._p.xpath(skip) and el.getparent() is not None:
+            if not p.text.strip() and not style.startswith("Heading") and not p._p.xpath(skip + "|.//w:sectPr") and el.getparent() is not None:
                 el.getparent().remove(el)
         elif el.tag == qn("w:tbl"):
             for row in Table(el, document).rows:
@@ -322,17 +508,52 @@ def _simple_english(document):
                         fix(p, False)
 
 
+
+CHAR_IN = 0.072        # inches per character at 9 pt Arial, on average
+
+
+def _fit_columns(table, available):
+    """Column widths in EMU from what each column holds: identifiers and ratings stay narrow, descriptions get the
+    room. No column is narrower than its longest word, so words are not broken across lines."""
+    n = len(table.columns)
+    rows = [r for r in table.rows if len(r._tr.tc_lst) == n]
+    if not rows:
+        return [int(available / max(n, 1))] * max(n, 1)
+    scale = 0.9 if n >= 8 else 1.0
+    need, want = [], []
+    for j in range(n):
+        texts = [r.cells[j].text for r in rows[1:]] or [rows[0].cells[j].text]
+        words = [len(w) for t in texts for w in t.split()] or [1]
+        head = max([len(w) for w in rows[0].cells[j].text.split()] or [1])
+        mean = sum(min(len(t), 260) for t in texts) / len(texts)
+        low = max(0.45, (min(max(words), 14) * CHAR_IN + 0.18) * scale, (min(head, 11) * CHAR_IN * 0.85 + 0.18) * scale)
+        need.append(low)
+        want.append(max(low, (0.3 + mean * 0.05) * scale))
+    room = available / 914400
+    if sum(need) >= room:
+        widths = [x * room / sum(need) for x in need]
+    elif sum(want) >= room:
+        extra = (room - sum(need)) / (sum(want) - sum(need) or 1)
+        widths = [a + (b - a) * extra for a, b in zip(need, want)]
+    else:
+        widths = [w * room / sum(want) for w in want]
+    return [int(w * 914400) for w in widths]
+
+
 def _style(document):
     for style in document.styles:
         if style.type == 1:
             style.font.color.rgb = RGBColor(0, 0, 0)
     for name in ("Normal", "Body Text", "List Paragraph"):
         style = document.styles[name]
-        style.font.name = "Arial"; style.font.size = Pt(11)
+        style.font.name = "Arial"; style.font.size = Pt(10)
         style.font.color.rgb = RGBColor(0, 0, 0)
-    for name, size in (("Title", 24), ("Heading 1", 16), ("Heading 2", 13), ("Heading 3", 11)):
+    for name, size, before, after in (("Title", 24, 0, 6), ("Heading 1", 16, 20, 6), ("Heading 2", 13, 14, 4), ("Heading 3", 11, 10, 3)):
         style = document.styles[name]
         style.font.name = "Arial"; style.font.size = Pt(size); style.font.color.rgb = RGBColor(0, 0, 0)
+        if name != "Title":
+            style.paragraph_format.space_before = Pt(before); style.paragraph_format.space_after = Pt(after)
+            style.paragraph_format.keep_with_next = True
     in_appendix = False
     for p in document.paragraphs:
         if p.text.startswith("Appendix") and (p.style.name if p.style is not None else "").startswith("Heading"):
@@ -345,7 +566,7 @@ def _style(document):
                 run.font.color.rgb = RGBColor(0, 0, 0)
                 run.font.size = document.styles[p.style.name].font.size
             else:
-                run.font.size = Pt(11)
+                run.font.size = Pt(10)
             if not p.text.startswith(("RED", "YELLOW", "GREEN", "Needs changes")):
                 run.font.color.rgb = RGBColor(0, 0, 0)
     for table in document.tables:
@@ -353,10 +574,10 @@ def _style(document):
         table.autofit = False
         section = document.sections[0]
         available = section.page_width - section.left_margin - section.right_margin
-        widths = [max(c.width or 1, 1) for c in table.rows[0].cells]
-        total = sum(widths)
-        minimum = min(Inches(.65), int(available / len(widths)))
-        fitted = [int(minimum + (available - minimum * len(widths)) * w / total) for w in widths]
+        if table._tbl in WIDE:
+            available = section.page_height - section.left_margin - section.right_margin
+        fitted = _fit_columns(table, int(available))
+        small = len(fitted) >= 8
         pr = table._tbl.tblPr
         width = pr.find(qn("w:tblW"))
         if width is not None:
@@ -372,6 +593,12 @@ def _style(document):
         for i, column in enumerate(table.columns):
             column.width = fitted[min(i, len(fitted)-1)]
         for row_index, row in enumerate(table.rows):
+            trpr = row._tr.get_or_add_trPr()
+            for tag in ("w:cantSplit", "w:tblHeader"):
+                if tag == "w:tblHeader" and row_index:
+                    continue
+                if trpr.find(qn(tag)) is None:
+                    trpr.append(OxmlElement(tag))
             for i, cell in enumerate(row.cells):
                 cell.width = fitted[min(i, len(fitted)-1)]
                 tcpr = cell._tc.get_or_add_tcPr()
@@ -384,7 +611,7 @@ def _style(document):
                 for p in cell.paragraphs:
                     p.paragraph_format.space_after = Pt(4); p.paragraph_format.space_before = Pt(3)
                     for run in p.runs:
-                        run.font.name = "Arial"; run.font.size = Pt(9)
+                        run.font.name = "Arial"; run.font.size = Pt(8 if small else 8.5)
                         run.font.color.rgb = RGBColor(0, 0, 0); run.bold = row_index == 0
                         if row_index and cell.text in {"RED", "YELLOW", "GREEN"}:
                             run.font.color.rgb = RGBColor.from_string({"RED": "B42318", "YELLOW": "996300", "GREEN": "176B3A"}[cell.text])

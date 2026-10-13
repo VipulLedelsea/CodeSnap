@@ -308,10 +308,24 @@ def note_for(correction):
     if re.match(r"(?i)shows?\b", text):
         text = "The code " + text[0].lower() + text[1:]
     words = text.split()
-    if len(words) > 40:
-        cut = " ".join(words[:40])
+    if len(words) > 18:
+        cut = " ".join(words[:18])
         text = cut[:max(cut.rfind(";"), cut.rfind(". "), cut.rfind(", "))] if max(cut.rfind(";"), cut.rfind(". "), cut.rfind(", ")) > 60 else cut
     return text[:1].upper() + text[1:].rstrip(" ;,.") + "."
+
+
+REMOVED = "Removed after the code check: not shown by the code."
+
+
+def _drop_removed(document):
+    """A table row or paragraph whose whole claim was removed by the code check is deleted, not left as a note."""
+    for table in document.tables:
+        for row in list(table.rows)[1:]:
+            if any(c.text.strip() == REMOVED or c.text.strip().endswith("): " + REMOVED) for c in row.cells):
+                row._tr.getparent().remove(row._tr)
+    for p in list(document.paragraphs):
+        if p.text.strip() == REMOVED:
+            p._p.getparent().remove(p._p)
 
 
 def apply_to_docx(document, store):
@@ -339,7 +353,7 @@ def apply_to_docx(document, store):
                     edited = True
             parts.append(sent)
         if edited:
-            par.runs[0].text = " ".join(parts) if parts else "Removed after the code check: not shown by the code."
+            par.runs[0].text = " ".join(parts) if parts else REMOVED
             for r_ in par.runs[1:]:
                 r_.text = ""
 
@@ -355,4 +369,5 @@ def apply_to_docx(document, store):
             for cell in row.cells:
                 for p in cell.paragraphs:
                     fix(p)
+    _drop_removed(document)
     return changed

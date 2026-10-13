@@ -396,3 +396,58 @@ def paragraphs(s: dict) -> list:
     out.append("Decision needed: " + (s.get("decision") or ""))
     out.append(f"Confidence {s.get('confidence', 'low')}: " + (s.get("confidence_and_coverage") or ""))
     return [p.strip() for p in out if p and p.strip()]
+
+
+_TAGS = re.compile(r"(?:\s*\[[^\[\]:\n]{1,120}:\s*F\d+(?:\s*,\s*F\d+)*\s*\])+")
+REPORT_RISKS = 3        # the report's key findings show the three most serious risks; the rest stay in section 9
+
+
+def _where(ids, index, limit=2):
+    """'(A.cbl lines 1-128; B.cbl lines 35-90)' for the first `limit` distinct files among finding ids."""
+    seen, out = set(), []
+    for k in ids:
+        f = index.get(k)
+        name = k.rsplit(":F", 1)[0]
+        if not f or name in seen:
+            continue
+        seen.add(name)
+        out.append(f"{name} lines {f['lines'][0]}-{f['lines'][-1]}")
+        if len(out) == limit:
+            break
+    return f" ({'; '.join(out)})" if out else ""
+
+
+def plain_refs(text, index, limit=2):
+    """Finding tags such as [A.cbl:F12] become a plain reference, file and lines, in the sentence they supported."""
+    def one(m):
+        return _where(cited_ids(m.group(0)), index, limit)
+    return re.sub(r"\s+([.,;])", r"\1", _TAGS.sub(one, text or "")).strip()
+
+
+def report_paragraphs(s: dict, index: dict) -> dict:
+    """The summary for section 1.2 of the report: the verdict, what the application does, the three most serious risks,
+    the decision needed and the confidence. Evidence tags are replaced by file and line references."""
+    head = f"Verdict: {s['verdict']}" + (" (provisional)." if s.get("provisional") else ".")
+    need = [x.rstrip(" .") for x in (s.get("needed_to_finalize") or []) if x.strip()]
+    if s.get("provisional") and need:
+        head += " Needed to finalize: " + "; ".join(need[:4]) + (f"; and {len(need) - 4} more (Section 13.4)" if len(need) > 4 else "") + "."
+    order = {k: i for i, k in enumerate(SEVERITIES)}
+    risks = sorted(s.get("risks") or [], key=lambda r: order.get(r["severity"], 9))[:REPORT_RISKS]
+    bullets = [f"{r['severity']}: " + plain_refs(r["text"], index).rstrip(" .") + _where(r["facts"], index) + "." for r in risks]
+    support = ("" if s.get("lifecycle_verified") else " Vendor support dates for the detected technologies are not verified (Section 6.2).")
+    before = [head, plain_refs(s.get("what_it_does") or "", index)]
+    if bullets:
+        before.append("Main risks:")
+    after = ["Decision needed: " + plain_refs(s.get("decision") or "", index),
+             f"Confidence {s.get('confidence', 'low')}: " + plain_refs(s.get("confidence_and_coverage") or "", index) + support]
+    return {"before": [p for p in before if p.strip()], "risks": bullets, "after": [p.strip() for p in after if p.strip()]}
+
+
+def evidence_rows(s: dict, index: dict) -> list:
+    """[file, lines, type, finding] for every finding the summary cites, in file and line order."""
+    cited = {f for r in s.get("risks") or [] for f in r["facts"]}
+    for text in paragraphs(s):
+        cited |= set(cited_ids(text))
+    keep = sorted(cited & set(index), key=lambda k: (k.rsplit(":F", 1)[0], int(k.rsplit(":F", 1)[1])))
+    return [[k.rsplit(":F", 1)[0], f"{index[k]['lines'][0]}-{index[k]['lines'][-1]}",
+             index[k].get("severity") or index[k].get("category") or "", brief(index[k].get("statement") or "", 26)] for k in keep]

@@ -15,6 +15,7 @@ from pathlib import Path
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
+from docx.table import Table as _Table
 from docx.shared import Inches, RGBColor
 
 from core.text import shorten_at_boundary
@@ -49,6 +50,8 @@ class Doc:
         self.d = Document(str(path))
         self.body = self.d.element.body
         self.open_items = []
+        self.evidence_rows = []
+        self.table_proto = _Table(deepcopy(self.d.tables[26]._tbl), self.d)     # a table with four or more columns
         self.proto = None
         for p in self.d.paragraphs:
             if p.text.startswith("Summarize in three to five"):
@@ -486,6 +489,14 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                       "owner_sec": "Information security (to be named)", "owner_ea": "Enterprise architecture (to be named)"})
     from . import codefindings as CFM
     CF = CFM.select(store, code_arts, DDV.review_facts(store))
+    PI = CFM.program_items((DPROG or {}).get("observations"))
+    CF = CFM.absorb(CF, PI)           # a finding the whole-program review already covers is stated once, for the program
+    for it_ in PI["risks"]:
+        L_, I_, why_l_, why_i_ = CFM.program_rating(it_)
+        BR.append({"title": CFM.short(it_["title"] + ": " + it_["text"], 170), "brief": CFM.short(it_["title"], 120),
+                   "cat": "Across files", "L": L_, "I": I_, "score": L_ * I_, "why_L": why_l_, "why_I": why_i_,
+                   "comps": list(it_["files"]), "owner": owner_it, "existing": "None visible in the code",
+                   "mit": "Confirm the intended behavior with the business owner, correct the files together, and add a test that runs them as one chain"})
     for cf_ in CF:
         L_, I_, why_l_, why_i_ = CFM.rate(cf_)
         BR.append({"title": CFM.short(cf_["text"]), "brief": CFM.short(cf_["text"], 120), "cat": "Code finding", "L": L_, "I": I_,
@@ -494,7 +505,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                    "why_I": why_i_,
                    "comps": [cf_["file"]], "owner": owner_it, "existing": "None visible in the code",
                    "mit": "Confirm the intended rule with the business owner, correct the source, and add a test that records the new behavior"})
-    BR.sort(key=lambda r_: -r_["score"])
+    BR.sort(key=lambda r_: (-r_["score"], -len(r_.get("comps") or [])))      # a risk that spans more files comes first
     from core import report_review as RRV
     RR = RRV.verdicts(store)
     if RR:
@@ -671,11 +682,18 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     ]
     from core import exec_summary as ES
     _es = ES.current(store)
+    _index = ES.finding_index(store) if _es else {}
     if _es:
-        findings_txt = ES.paragraphs(_es)
+        _rp = ES.report_paragraphs(_es, _index)
+        findings_txt = _rp["before"]
     _last = doc.replace("Summarize in three to five", [Q.QUALIFICATION] + findings_txt)
     if _es and _last is not None:
-        _fact_table(doc, T, store, _es, _last._p)
+        _anchor = _last._p
+        for t_ in _rp["risks"]:
+            _anchor = doc.new_para(t_, _anchor, bullet=True)._p
+        for t_ in _rp["after"]:
+            _anchor = doc.new_para(t_, _anchor)._p
+        doc.evidence_rows = ES.evidence_rows(_es, _index)
     doc.replace("List any condition that warrants action", "Validate the source findings and approved business policy before production change. Prioritize any confirmed unintended control override or exposure:")
     imm = []
     owner_it = s["it_reviewer"] or "IT application owner (to be named)"
@@ -738,9 +756,12 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
             except Exception:  # noqa: BLE001
                 log.exception("Process figure could not be inserted; the report continues without it")
         proc._p.getparent().remove(proc._p)
-    doc.replace("Document each business process the application supports", "The process below is drawn from what each "
-                "component reads, calculates and writes, from the arrival of inputs to the outputs and look-ups. Manual steps, "
-                "approval points outside the application and handoffs are to be mapped with stakeholders (open item).")
+    _flow = (CFM.program_items((DPROG or {}).get("observations")) or {}).get("flow")
+    doc.replace("Document each business process the application supports",
+                ([f"How the program runs, start to finish: {_flow['text'].rstrip('.')}."] if _flow else []) +
+                ["The process below is drawn from what each component reads, calculates and writes, from the arrival of inputs "
+                 "to the outputs and look-ups. Manual steps, approval points outside the application and handoffs are to be "
+                 "mapped with stakeholders (open item)."])
     doc.unknown("Swimlane process map with business actors and manual steps", "2.3")
     steps = []
     for j in (flows.get("journeys") or [])[:3]:
@@ -921,7 +942,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                 continue
             n = 3 + sum(1 for k_ in ("context_sys", "data") if figs.get(k_))
             try:
-                pic = doc.picture(png(dg, scale=1.5), anchor, 6.8)
+                pic = doc.picture(png(dg, scale=1.5), anchor, 6.8, max_h=4.2 if key == "context_sys" else 6.2)
                 capp = doc.new_para(f"Figure {n}. {cap}. Validation with the IT owner: pending.", pic._p, italic=True)
             except Exception:  # noqa: BLE001
                 log.exception("Diagram %s could not be inserted; the report continues without it", key)
@@ -1194,6 +1215,11 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                     "Wrong results or hard-to-change behavior if left as is; business effect to confirm",
                     "Correct the source after the rule is confirmed, and cover it with a test",
                     "S" if cf_["severity"] != "high" else "M", "High" if cf_["severity"] == "high" else "Medium"])
+    for it_ in PI["debt"]:
+        reg.append([f"{CFM.short(it_['title'], 160)} ({', '.join(it_['files'][:5])}{' and more' if len(it_['files']) > 5 else ''})", "Code",
+                    "The same rule copied into several files instead of kept in one place",
+                    "A change to the rule must be made in every copy; one missed copy gives different results",
+                    "Move the rule to one shared routine or table, then retire the copies", "M", "Medium"])
     if RR:
         reg = [r_ for r_ in reg if (RR.get(RRV.claim_key(r_[0])) or {}).get("verdict") != "unsupported"]
     reg.sort(key=lambda r_: ["High", "Medium", "Low"].index(r_[-1]))
@@ -1583,16 +1609,16 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         typ = {"code": "Source code", "ui_screen": "Application screen", "schema": "Database schema", "config": "Configuration",
                "document": "Document"}.get(x.get("artifact_type"), "Source code")
         qx = DDV.capture_quality(store, x, (DD.get(str(x["id"])) or {}).get("capture_concerns"))
-        qtxt = {"good": "no unresolved capture warning; original-source completeness requires separate validation",
+        qtxt = {"good": "no capture warning; completeness not validated",
                 "rescan": "copy incomplete (" + "; ".join(DDV.report_reason(i) for i in qx["issues"][:2]) + ")",
                 "unchecked": "copy not checked line by line"}[qx["status"]]
         if x.get("artifact_type") == "ui_screen":
             qtxt = "screen image, read for its fields and notices" + (f"; the same form as {COPIES[x['name']]}"
                                                                      if x["name"] in COPIES else "")
         elif qx["status"] == "good" and str(x["id"]) not in DD:
-            qtxt = "no unresolved capture warning; current line-by-line review pending"
+            qtxt = "no capture warning; line-by-line review pending"
         ev.append([f"EV-{num}-{i:02d}", x["name"], typ, f"v{x.get('version', 1)}, {(x.get('updated') or x.get('created') or '')[:10]}",
-                   f"Program source set: {x['name']}; {qtxt}"])
+                   f"Source set; {qtxt}"])
     rows(T[40], ev)
     from core.technology_support import program_coverage
     source_coverage=program_coverage(store)
@@ -1699,7 +1725,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         final = False
         version_txt = draft
 
-    other = [it for it in items if not BLOCK.search(it[0])]
+    other = _merge_open_items([it for it in items if not BLOCK.search(it[0])])
     oi = []
     for i, (what, sec_, owner) in enumerate(blocking + other, 1):
         blk = (what, sec_, owner) in blocking
@@ -1732,7 +1758,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     from . import editorial
     editorial.apply(doc, a, evidence_quality, s, metadata=metadata, analysis_stage=store.get_meta("analysis_stage"),
                     security_counts={severity: sum(f["severity"] == severity for f in sec_f) for severity in SEV},
-                    priority_reasons=[r_["title"] for r_ in BR[:2]], full_summary=bool(_es))
+                    priority_reasons=[r_["title"] for r_ in BR[:2]], full_summary=bool(_es), evidence_rows=doc.evidence_rows)
     RRV.apply_to_docx(doc.d, store)
     _label_bare_inserts(doc)
     _fill_toc(doc)
@@ -2072,6 +2098,37 @@ def _has_col(store, table, col):
         return False
 
 
+
+def _merge_open_items(items):
+    """One row per owner and section instead of one per missing field: the 12 security controls that cannot be rated from
+    the code become one row, and so on. Notes the code check removed are dropped."""
+    from collections import OrderedDict
+    items = [it for it in items if not it[0].startswith("Removed after the code check")]
+    groups = OrderedDict()
+    for what, sec_, owner in items:
+        major = str(sec_).split(".")[0] if re.match(r"\d", str(sec_)) else sec_
+        groups.setdefault((owner, major), []).append((what, str(sec_)))
+    out = []
+    for (owner, major), pairs in groups.items():
+        whats = [w for w, _ in pairs]
+        secs = list(dict.fromkeys(x for _, x in pairs))
+        sec_ = secs[0] if len(secs) == 1 else ", ".join(secs[:4]) + (" and more" if len(secs) > 4 else "")
+        whats = [re.sub(r"\s*\((?:Section |Document control|Cover)[^)]*\)$", "", w).strip() for w in whats]
+        if len(whats) == 1:
+            out.append((whats[0], sec_, owner))
+            continue
+        by_prefix, parts = OrderedDict(), []
+        for w in whats:
+            head_, _, tail_ = w.partition(":")
+            if tail_ and len(head_) < 32:
+                by_prefix.setdefault(head_, []).append(tail_.strip())
+            else:
+                parts.append(w)
+        parts += [f"{k}: " + ", ".join(v) if len(v) > 1 else f"{k}: {v[0]}" for k, v in by_prefix.items()]
+        text = "; ".join(parts)
+        out.append((text, sec_, owner))
+    return out
+
 def _dedup(items):
     seen, out = set(), []
     for it in items:
@@ -2213,23 +2270,6 @@ def _quality_appendix(doc, tables, store):
             anchor = doc.new_para(block['text'], anchor)._p
 
 
-def _fact_table(doc, tables, store, summary, anchor):
-    """The findings the executive summary cites, so every [file:F12] can be looked up. Kept under 1.2: the report
-    layout drops any heading that is not in the template."""
-    from core import exec_summary as ES
-    index = ES.finding_index(store)
-    cited = {f for r in summary.get("risks") or [] for f in r["facts"]}
-    for text in ES.paragraphs(summary):
-        cited |= set(ES.cited_ids(text))
-    cited = sorted(cited & set(index), key=lambda k: (k.rsplit(":F", 1)[0], int(k.rsplit(":F", 1)[1])))
-    if not cited:
-        return
-    rows_ = [[k, index[k].get("severity") or index[k].get("category") or "",
-              f"{index[k]['lines'][0]}-{index[k]['lines'][-1]}", index[k].get("statement") or ""] for k in cited]
-    table = _table_after(doc, tables[26], anchor, ["Fact ID", "Severity or type", "Lines", "Finding"], rows_)
-    _col_widths(table, [1.9, 1.0, .7, 3.4])
-
-
 def _glossary(doc):
     """Appendix G: every technical term the report uses, explained in one line."""
     from .plain import glossary
@@ -2299,7 +2339,8 @@ def _label_unknowns(doc):
                     continue
                 row_label = cells[0].text.strip() if i else ""
                 col_label = head[i] if i < len(head) and head[i] != row_label else ""
-                label = row_label if len(cells) == 2 else " ".join(x for x in (_specific(row_label), _specific(col_label)) if x)
+                label = (row_label if len(cells) == 2 else col_label if len(rows) > 8 else
+                         " ".join(x for x in (_specific(row_label), _specific(col_label)) if x))
                 set_cell(cell, lead.sub(placeholder(label or col_label), text, count=1))
 
 
@@ -2321,7 +2362,8 @@ def _label_bare_inserts(doc):
                     continue
                 row_label = cells[0].text.strip() if i else ""
                 col_label = head[i] if i < len(head) and head[i] != row_label else ""
-                label = row_label if len(cells) == 2 else " ".join(x for x in (_specific(row_label), _specific(col_label)) if x)
+                label = (row_label if len(cells) == 2 else col_label if len(rows) > 8 else
+                         " ".join(x for x in (_specific(row_label), _specific(col_label)) if x))
                 set_cell(cell, cell.text.replace(BARE, placeholder(label or col_label)))
     section = ""
     for p in doc.d.paragraphs:

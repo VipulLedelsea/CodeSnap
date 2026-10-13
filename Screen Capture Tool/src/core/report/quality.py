@@ -83,7 +83,7 @@ def summary(store):
     source_names = {a['name'] for a in source}
     unmeasured = [name for name in benchmark['unmeasured'] if name in source_names]
     if unmeasured:
-        blockers.append(f"{len(unmeasured)} source file{'s' if len(unmeasured) != 1 else ''} ({', '.join(unmeasured)}): source completeness remains unconfirmed "
+        blockers.append(f"{len(unmeasured)} source file{'s' if len(unmeasured) != 1 else ''} ({', '.join(unmeasured[:3])}{f', and {len(unmeasured) - 3} more' if len(unmeasured) > 3 else ''}): source completeness remains unconfirmed "
                         "(no current original-file benchmark)")
     blockers += [r['artifact'] + ': original-file content differs' for r in benchmark['files']
                  if r['expected'] != r['matched'] or r['actual'] != r['matched']]
