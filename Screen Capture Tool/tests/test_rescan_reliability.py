@@ -280,7 +280,7 @@ def test_slow_status_poll_is_not_superseded_by_interval():
 const assert=require('node:assert/strict');let release,calls=0,renders=0;
 const fetch=()=>{calls++;return new Promise(resolve=>release=resolve)};
 const renderStatus=()=>renders++,renderFlow=()=>{},setRunning=()=>{},startAnalyzing=()=>{},stopAnalyzing=()=>{};
-let lastEventCount='[]',_program='';const loadReports=()=>{};
+let lastEventCount='[]',_program='',_view='codesnap';const markActivePrograms=()=>{},loadReports=()=>{};
 '''+function('pollStatus')+r'''
 (async()=>{
   const first=pollStatus();await pollStatus();await pollStatus();

@@ -381,8 +381,9 @@ def _deep_start(slug: str, artifact_ids=None) -> dict:
 
     def work():
         from core.model import ProgramStore
+        from core import slots
         try:
-            with ProgramStore.open(slug) as st:
+            with slots.slot(slug), ProgramStore.open(slug) as st:
                 from core import pipeline
                 if pipeline.staged() and not artifact_ids:
                     res = pipeline.run_staged(st, client, progress=lambda d, t: job.update(done=d, total=t))
@@ -470,7 +471,9 @@ def api_program(slug: str):
             "report": {"built_at": store.get_meta("report_built_at"),
                        "current": store.get_meta("report_stamp") == revision},
             "waiting": sum(1 for a in store.artifacts() if a["status"] == "captured"),
-            "session_running": _session.running(),
+            "session_running": _session.running() and _session.program == slug,
+            "worker_running": _session.worker_running(slug),
+            "capture_elsewhere": _session.running() and _session.program != slug,
         }
 
 
@@ -506,7 +509,7 @@ def api_program_pending_process(slug: str):
     if _session.running() and _session.program == slug:
         return {"ok": True, "waiting": waiting, "note": "The running capture session is analysing them."}
     if not _session.process_pending(slug):
-        return JSONResponse({"error": "Another program is being processed. Retry when it finishes."}, status_code=409)
+        return {"ok": True, "waiting": waiting, "note": "Already analysing in the background."}
     return {"ok": True, "waiting": waiting, "note": "Analysing in the background."}
 
 
@@ -579,8 +582,7 @@ def api_program_artifact_rebuild(slug: str, artifact_id: int):
         if not store.artifact(artifact_id):
             return JSONResponse({"error": "File not found"}, status_code=404)
         from core import deepdive
-        pending_worker = _session._pending
-        capture_worker_running = _session.running() or (pending_worker is not None and pending_worker.poll() is None)
+        capture_worker_running = (_session.running() and _session.program == slug) or _session.worker_running(slug)
         if ((capture_worker_running and deepdive._active(store)) or
                 any(store.capture_progress(a["id"]).get("analysing") for a in store.artifacts())):
             return JSONResponse({"error": "Wait for current analysis to finish before rebuilding a saved capture."}, status_code=409)
@@ -1397,14 +1399,18 @@ def api_displays():
 
 
 @app.post("/api/session/stop")
-def api_session_stop():
-    _session.stop()
+def api_session_stop(program: str | None = None):
+    _session.stop(program)
     return {"running": _session.running()}
 
 
 @app.get("/api/session/status")
-def api_session_status():
-    return {"running": _session.running(), "events": status.recent()}
+def api_session_status(program: str | None = None):
+    """Live events for one program (its own stream); without a program, the shared stream and the capture session."""
+    running = _session.running() and (program is None or _session.program == program)
+    working = running or (program is not None and _session.worker_running(program))
+    return {"running": running, "working": working, "events": status.recent(program=program or ""),
+            "active_programs": _session.active_programs()}
 
 
 def _serve_in_thread(host="127.0.0.1", port=8000):

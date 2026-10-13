@@ -2,6 +2,7 @@
 main thread, safest for the global hotkey listener). Live status flows through
 core.status (a shared file the web polls)."""
 
+import os
 import subprocess
 import sys
 import json
@@ -36,7 +37,7 @@ class SessionManager:
     def __init__(self):
         self._lock = threading.RLock()
         self._proc = None
-        self._pending = None
+        self._workers = {}      # program slug -> background analysis process (one per program, run side by side)
         self.program = None
         self._mode = (False, False, None)
         self._settings = self._load_saved()
@@ -102,14 +103,16 @@ class SessionManager:
 
     def _start_locked(self, single, idle_stop, region, project_mode, program, capture_kind, display) -> bool:
         mode = (bool(single), bool(project_mode), idle_stop)
-        if self.running() and (self.program != program or self._mode != mode):
-            raise RuntimeError("Stop the current capture session before switching programs or capture modes.")
+        if self.running() and self.program != program:
+            self._hand_off_locked()
+        elif self.running() and self._mode != mode:
+            raise RuntimeError("Stop the current capture session before switching capture modes.")
         self.configure(region, display)
         if self.running():
             return False
         from core import status
-        status.clear()
-        status.publish("Launching capture session...", "start")
+        status.clear(program)
+        status.publish("Launching capture session...", "start", program=program)
         # no flags -> hotkey app default mode (burst: auto-capture + phash dedup)
         # Frozen (bundled .app): the executable re-invokes itself with --capture.
         # Dev: run the dispatcher via python (main.py --capture).
@@ -131,30 +134,84 @@ class SessionManager:
             argv += ["--display", str(display)]
         if single:
             argv.append("--single")   # backup: single agent instead of the default team
-        self._proc = subprocess.Popen(argv, cwd=str(PROJECT))
+        self._proc = subprocess.Popen(argv, cwd=str(PROJECT), env=self._env(program))
         self.program, self._mode = program, mode
         self.configure(region, display)
         return True
 
+    @staticmethod
+    def _env(program):
+        env = dict(os.environ)
+        env.pop("CODESNAP_PROGRAM", None)
+        if program:
+            env["CODESNAP_PROGRAM"] = program   # routes the worker's status events to this program's own stream
+        return env
+
+    def _hand_off_locked(self):
+        """Move the capture session (one screen, one hotkey set) to another program without losing the old one's
+        analysis: its hotkey listener must go, so its saved captures continue in a hotkey-free background worker."""
+        from core import status
+        if self.capturing():
+            raise RuntimeError(f"A capture is in progress for {self.program}. Finish it (Cmd+Shift+1) before switching programs.")
+        old = self.program
+        self._proc.terminate()
+        try:
+            self._proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+        if old:
+            status.publish("Capture moved to another program - continuing analysis in the background", "info", program=old)
+            self._process_pending_locked(old)
+
+    def capturing(self) -> bool:
+        """True while the running session has a burst open (frames not yet saved)."""
+        if not self.running() or not self.program:
+            return False
+        from core import status
+        for e in reversed(status.recent(200, self.program)):
+            msg = e.get("msg", "")
+            if msg.startswith(("Saved capture", "Capture complete", "No frames", "Capture could not")) or e.get("kind") == "error":
+                return False
+            if e.get("kind") == "start":
+                return msg.startswith("Burst capture")
+        return False
+
+    def worker_running(self, program) -> bool:
+        proc = self._workers.get(program)
+        return proc is not None and proc.poll() is None
+
+    def active_programs(self) -> list:
+        with self._lock:
+            slugs = {slug for slug in self._workers if self.worker_running(slug)}
+            if self.running() and self.program:
+                slugs.add(self.program)
+            return sorted(slugs)
+
     def process_pending(self, program: str) -> bool:
-        """Analyse a program's saved-but-unanalysed captures in a background worker (no hotkeys, exits when done)."""
+        """Analyse a program's saved-but-unanalysed captures in a background worker (no hotkeys, exits when done).
+        Each program has its own worker, so programs never wait for each other."""
         with self._lock:
             return self._process_pending_locked(program)
 
     def _process_pending_locked(self, program: str) -> bool:
-        if self._pending is not None and self._pending.poll() is None:
+        if self.worker_running(program):
             return False
         base = [sys.executable, "--capture"] if getattr(sys, "frozen", False) else \
             [sys.executable, str(PROJECT / "src" / "main.py"), "--capture"]
-        self._pending = subprocess.Popen(base + ["--program", program, "--process-pending"], cwd=str(PROJECT))
+        self._workers[program] = subprocess.Popen(base + ["--program", program, "--process-pending"], cwd=str(PROJECT),
+                                                  env=self._env(program))
         return True
 
-    def stop(self) -> bool:
-        """Terminate the capture session and any background pending-analysis worker."""
+    def stop(self, program: str = None) -> bool:
+        """Terminate the capture session and background analysis. With a program, only that program's workers
+        (and the capture session if it is on that program); without one, everything."""
         with self._lock:
             stopped = False
-            for attr in ("_proc", "_pending"):
-                proc = getattr(self, attr)
+            procs = []
+            if program is None or self.program == program:
+                procs.append(self._proc)
+            procs += [p for slug, p in self._workers.items() if program in (None, slug)]
+            for proc in procs:
                 if proc is not None and proc.poll() is None:
                     try:
                         proc.terminate()
