@@ -99,3 +99,68 @@ def test_a_map_set_that_starts_below_its_header_is_reported_as_missing_its_start
     cut = "R00      DFHMDF POS=(3,12),LENGTH=12\n         DFHMDF POS=(5,2),LENGTH=6\n         DFHMSD TYPE=FINAL\n         END\n"
     assert not [r for r in check(whole, "A.bms")["reasons"] if "DFHMSD" in r]
     assert any("start probably not captured" in r for r in check(cut, "A.bms")["reasons"])
+
+
+def test_screens_read_a_column_off_their_neighbours_are_brought_to_one_offset():
+    source = [row for n in range(1, 8) for row in _routine(n)]
+    frames = _frames(source, height=30, step=14)
+    shifted = [("\n".join(" " + l if l.strip() else l for l in f) if i in (2, 3, 4) else "\n".join(f))
+               for i, f in enumerate(frames)]
+    fixed = analysis._equalize_frame_offsets(shifted)
+    for original, got in zip(["\n".join(f) for f in frames], fixed):
+        # every screen ends up at one common offset: 0 or the same number of spaces for all of them
+        assert got in (original, "\n".join(" " + l if l.strip() else l for l in original.split("\n")))
+    leading = {len(f.split("\n")[0]) - len(f.split("\n")[0].lstrip(" ")) - (len(frames[i][0]) - len(frames[i][0].lstrip(" ")))
+               for i, f in enumerate(fixed)}
+    assert len(leading) == 1
+
+
+def test_screens_that_agree_are_left_alone():
+    source = [row for n in range(1, 8) for row in _routine(n)]
+    frames = ["\n".join(f) for f in _frames(source, height=30, step=14)]
+    assert analysis._equalize_frame_offsets(frames) == frames
+
+
+def test_a_line_one_screen_read_twice_is_not_kept_twice():
+    rows = [f"  STATUS_{n} = {n};" for n in range(1, 9)]
+    twice = rows[:4] + [rows[3]] + rows[4:]
+    final = "\n".join(twice)
+    parts = ["\n".join(rows[:6]), "\n".join(rows[2:]), "\n".join(rows[1:7]), "\n".join(twice[1:8])]
+    out, dropped = analysis._collapse_doubled_lines(final, parts)
+    assert out.split("\n") == rows and dropped
+
+
+def test_a_line_that_really_repeats_is_kept():
+    rows = [f"  STATUS_{n} = {n};" for n in range(1, 9)]
+    twice = rows[:4] + [rows[3]] + rows[4:]
+    parts = ["\n".join(twice[:6]), "\n".join(twice[2:]), "\n".join(twice[1:8])]
+    out, dropped = analysis._collapse_doubled_lines("\n".join(twice), parts)
+    assert out.split("\n") == twice and not dropped
+
+
+def test_a_map_set_continuation_line_goes_back_to_column_16():
+    first = "         DFHMDF POS=(3,2),LENGTH=7,INITIAL='RECEIPT'," + " " * 11 + "X"
+    for wrong in (12, 14, 16, 17):
+        text = "\n".join(["M00      DFHMDI SIZE=(24,80)", first, " " * wrong + "ATTRB=ASKIP", "         END"])
+        fixed, lines = analysis._fix_macro_continuations(text)
+        assert fixed.split("\n")[2] == " " * 15 + "ATTRB=ASKIP" and (lines == [3] or wrong == 15)
+    other = "\n".join(["foo bar", first, "      ATTRB=ASKIP"])
+    assert analysis._fix_macro_continuations(other)[0] == other   # not a map set: left alone
+
+
+def test_a_vote_settles_a_line_read_at_another_indent_by_the_screens_that_agree():
+    rows = ["    05 A PIC X.", "    05 B PIC 9(9)V99 COMP-3.", "    05 C PIC X(8)."]
+    odd = [r.lstrip() for r in rows]
+    parts = ["\n".join(rows), "\n".join(rows), "\n".join(odd)]
+    out, changed = analysis._vote_lines("\n".join(odd), parts, [{}, {}, {}])
+    assert out.split("\n") == rows
+
+
+def test_a_schema_script_that_loads_a_table_it_never_creates_is_reported_as_missing_its_start():
+    from core.model.completeness import check
+    whole = ("-- schema\nCREATE TABLE a (x INT);\nCREATE TABLE b (y INT);\nINSERT INTO a VALUES (1);\nINSERT INTO b VALUES (2);\n")
+    cut = ("INSERT INTO a VALUES (1);\nINSERT INTO a VALUES (2);\nCREATE TABLE b (y INT);\nINSERT INTO b VALUES (2);\n")
+    loads_only = "INSERT INTO a VALUES (1);\nINSERT INTO a VALUES (2);\n"
+    assert not [r for r in check(whole, "s.sql")["reasons"] if "never creates" in r]
+    assert any("start probably not captured" in r for r in check(cut, "s.sql")["reasons"])
+    assert not [r for r in check(loads_only, "load.sql")["reasons"] if "never creates" in r]   # no CREATE at all: a plain data load

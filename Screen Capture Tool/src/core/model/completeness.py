@@ -112,6 +112,15 @@ def check(text: str, filename: str = "", language: str = "", errors: str = "") -
     asm_like = (pack and pack["id"] == "asm") or ext in ("bms", "dbd", "psb", "mfs") or fam == "cobol" and ext == "bms"
     if asm_like and not re.search(r"^\S*\s+END\b", "\n".join(body[-4:]), re.M | re.I):
         reasons.append("assembler/macro source has no END statement — end not captured")
+    if ext == "sql" or fam in ("sql", "plsql", "tsql"):
+        # A schema script that opens by loading a table it never creates has lost its top: the CREATE TABLE for that table was above.
+        code_text = "\n".join(l for l in lines if not l.lstrip().startswith("--"))
+        first = re.search(r"^\s*(?:INSERT\s+INTO|UPDATE|ALTER\s+TABLE)\s+([\w.\"\[\]]+)", code_text, re.I | re.M)
+        created = {m.group(1).lower() for m in re.finditer(r"CREATE\s+(?:OR\s+REPLACE\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w.\"\[\]]+)", code_text, re.I)}
+        statements = [m.group(0) for m in re.finditer(r"^\s*[A-Za-z]+", code_text, re.M)]
+        if first and created and statements and re.match(r"\s*(INSERT|UPDATE|ALTER)\b", statements[0], re.I) \
+                and first.group(1).lower() not in created:
+            reasons.append(f"the first statement loads {first.group(1)}, which this script never creates — start probably not captured")
     if ext == "bms":
         head = [l for l in body if not l.lstrip().startswith("*")][:6]
         if head and not any(re.search(r"\bDFHMSD\b(?!\s+TYPE=FINAL)", l) for l in head):

@@ -125,17 +125,17 @@ def test_unrelated_errors_are_not_swallowed_by_the_fallback(store):
         DD.analyse_file(store, Unrelated({}), art(store, "AIDINQ.cbl"))
 
 
-class TimesOutOnce(FakeClient):
+class TimesOutForOne(FakeClient):
+    """One file always times out (a passing failure is retried once, so a single timeout would be recovered)."""
     def create(self, **kw):
-        if not getattr(self, "failed", False):
-            self.failed = True
+        if "AIDINQ.cbl" in str(kw.get("messages")):
             raise TimeoutError("read timed out")
         return super().create(**kw)
 
 
 def test_a_failure_during_a_run_is_recorded_and_the_rest_continue(store):
     a, b = art(store, "AIDINQ.cbl"), art(store, "AIDDBD.asm")
-    client = TimesOutOnce({"purpose": "DBD.", "facts": [fact("Defines segment DISTRICT", [4, 4], "SEGM  NAME=DISTRICT", cat="data_read")]},
+    client = TimesOutForOne({"purpose": "DBD.", "facts": [fact("Defines segment DISTRICT", [4, 4], "SEGM  NAME=DISTRICT", cat="data_read")]},
                           {"verdicts": [{"id": 1, "verdict": "supported"}]})
     res = DD.run(store, client, artifact_ids=[a["id"], b["id"]], force=True)
     assert res["analysed"] == 1 and len(res["errors"]) == 1 and "TimeoutError" in res["errors"][0]
