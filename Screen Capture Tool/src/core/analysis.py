@@ -1160,44 +1160,62 @@ def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8
     sql_identity = _re.compile(r'^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW|(?:UNIQUE\s+)?INDEX)\s+([\w."\[\]]+)', _re.I)
     old_objects = {m.group(0).strip().upper() for row in merged if (m := sql_identity.match(row))}
     for k in range(max_k, min_overlap - 1, -1):
-        tail = merged[-k:]
-        # a 2-3 line overlap made only of punctuation ("}", "{", "END-IF.") is not evidence
-        if k < 4 and sum(len(_re.sub(r"\W", "", x)) for x in tail) < 12:
-            continue
-        for o in range(0, len(b) - k + 1):
-            window = b[o:o + k]
-            sims = []
-            for x, y in zip(tail, window):
-                score = _sim(x, y)
-                if score < 0.7:
-                    break
-                sims.append(score)
-            # every line must match (OCR noise allowed), not just the average
-            if len(sims) == k and sum(sims) / len(sims) >= thresh:
-                # A later repeated END-IF window cannot discard a new paragraph
-                # visible before it in this frame.
-                new_prefix = b[:o]
-                if any(_SOURCE_LABEL.fullmatch(line.strip()) and
-                       line.strip() not in old_labels for line in new_prefix):
-                    continue
-                if any(m.group(0).strip().upper() not in old_objects for row in new_prefix
-                       if (m := sql_identity.match(row))):
-                    continue
-                # a line cut off at the bottom of one screen is usually whole on the next — keep the whole copy
-                tail = [w if "[CUT OFF]" in t and "[CUT OFF]" not in w else t for t, w in zip(tail, window)]
-                # two screenshots read a line differently: keep the copy the pixel check verified
-                tail = [w if w != t and w.rstrip() in prefer and t.rstrip() not in prefer else t
-                        for t, w in zip(tail, window)]
-                result = merged[:-k] + tail + b[o + k:]
-                if notes is not None:
-                    for i, (x, y) in enumerate(zip(merged[-k:], window)):
-                        if (x.strip() != y.strip() and len(x.strip()) >= 6 and len(y.strip()) >= 6 and
-                                "[CUT OFF]" not in x + y and
-                                (x.rstrip() in prefer) == (y.rstrip() in prefer)):
-                            at = len(merged) - k + i
-                            notes.setdefault("overlap_conflicts", []).append(
-                                _conflict_context(result, at))
-                return result
+        # The last row of the screen before can be a row clipped by the screen edge that the reader guessed at. When a long,
+        # distinctive overlap holds except for that one or two unverified last rows, those rows are the doubtful part, not the
+        # overlap. Without this a repeated template (many paragraphs that differ only by a number) matches a short tail
+        # inside the wrong paragraph and the whole stretch is appended a second time.
+        for trim in (0, 1, 2):
+            end = len(merged) - trim
+            if end - k < 0:
+                continue
+            if trim and (k < 6 or any(not row.strip() or "[CUT OFF]" in row or _SOURCE_LABEL.fullmatch(row.strip())
+                                      for row in merged[end:])):
+                continue   # a paragraph label is never the doubtful row
+            tail = merged[end - k:end]
+            # a 2-3 line overlap made only of punctuation ("}", "{", "END-IF.") is not evidence
+            if k < 4 and sum(len(_re.sub(r"\W", "", x)) for x in tail) < 12:
+                continue
+            if trim and sum(len(_re.sub(r"\W", "", x)) for x in tail) < 40:
+                continue
+            for o in range(0, len(b) - k + 1):
+                window = b[o:o + k]
+                sims = []
+                for x, y in zip(tail, window):
+                    score = _sim(x, y)
+                    if score < 0.7:
+                        break
+                    sims.append(score)
+                # every line must match (OCR noise allowed), not just the average
+                if len(sims) == k and sum(sims) / len(sims) >= thresh:
+                    # A later repeated END-IF window cannot discard a new paragraph
+                    # visible before it in this frame.
+                    new_prefix = b[:o]
+                    if any(_SOURCE_LABEL.fullmatch(line.strip()) and
+                           line.strip() not in old_labels for line in new_prefix):
+                        continue
+                    if any(m.group(0).strip().upper() not in old_objects for row in new_prefix
+                           if (m := sql_identity.match(row))):
+                        continue
+                    if trim and any(_sim(x, y) >= 0.7 for x, y in zip(merged[end:], b[o + k:o + k + trim])):
+                        continue   # the rows after the overlap agree: they are not in doubt, a longer match would have found it
+                    # a line cut off at the bottom of one screen is usually whole on the next — keep the whole copy
+                    tail = [w if "[CUT OFF]" in t and "[CUT OFF]" not in w else t for t, w in zip(tail, window)]
+                    # two screenshots read a line differently: keep the copy the pixel check verified
+                    tail = [w if w != t and w.rstrip() in prefer and t.rstrip() not in prefer else t
+                            for t, w in zip(tail, window)]
+                    result = merged[:end - k] + tail + b[o + k:]
+                    if notes is not None:
+                        for i, (x, y) in enumerate(zip(merged[end - k:end], window)):
+                            if (x.strip() != y.strip() and len(x.strip()) >= 6 and len(y.strip()) >= 6 and
+                                    "[CUT OFF]" not in x + y and
+                                    (x.rstrip() in prefer) == (y.rstrip() in prefer)):
+                                at = end - k + i
+                                notes.setdefault("overlap_conflicts", []).append(
+                                    _conflict_context(result, at))
+                        if trim and end < len(result):
+                            # the rows dropped from the screen before are in doubt: flag what replaced them for review
+                            notes.setdefault("overlap_conflicts", []).append(_conflict_context(result, end))
+                    return result
     # A unique paragraph label or numbered maintenance comment establishes
     # position independently of repeated logic. Retain rows a later read skipped.
     marker = _re.compile(r"\d{2,}-[\w-]+\.|[A-Za-z_][\w]*:|\*.*\d.*")
