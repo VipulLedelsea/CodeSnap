@@ -1814,6 +1814,36 @@ def _upgrade_cut(merged: list, b: list) -> list:
     return out
 
 
+def _fuzzy_overlap(merged: list, lines: list, notes=None):
+    """Join a screen onto the text so far when their shared rows read differently (a separator comment drawn with other
+    dashes, a spacing change, an extra blank row), which the strict matcher in _stitch_two refuses. Rows are compared by their
+    letters and digits only. It needs a long run of distinctive agreeing rows, dense, at the end of the text so far and the
+    start of the new screen, so a repeated template routine cannot pull the screen onto the wrong place. Returns the joined
+    rows or None."""
+    key = lambda row: _re.sub(r"[\W_]+", "", row.replace("[CUT OFF]", "").lower())
+    tail = [i for i in range(max(0, len(merged) - 80), len(merged)) if key(merged[i])]
+    head = [j for j in range(min(len(lines), 80)) if key(lines[j])]
+    if len(tail) < 8 or len(head) < 8:
+        return None
+    blocks = _difflib.SequenceMatcher(None, [key(merged[i]) for i in tail], [key(lines[j]) for j in head],
+                                      autojunk=False).get_matching_blocks()
+    pairs = [(tail[a + n], head[b + n]) for a, b, size in blocks for n in range(size)]
+    if sum(1 for i, _ in pairs if len(key(merged[i])) >= 4) < 8:
+        return None
+    (first_i, first_j), (last_i, last_j) = pairs[0], pairs[-1]
+    if sum(1 for j in head if j < first_j) > 3:
+        return None   # the screen shows rows above the overlap that the text so far lacks: not a plain scroll
+    if sum(1 for i in tail if i > last_i) > 8:
+        return None   # the overlap must end near the end of the text so far
+    span_j = sum(1 for j in head if first_j <= j <= last_j)
+    span_i = sum(1 for i in tail if first_i <= i <= last_i)
+    if len(pairs) < 0.7 * span_j or span_i > 1.3 * span_j + 4:
+        return None
+    if notes is not None:
+        notes.setdefault("fuzzy_overlaps", []).append(len(pairs))
+    return merged + lines[last_j + 1:]
+
+
 def _bridge(merged: list, incoming: list):
     """A screenshot added later can fill the gap where two screens never overlapped: it holds the line that starts the
     far side of the gap, and ends on the line that follows it. Returns (merged, resolved_break) or None."""
@@ -1913,6 +1943,8 @@ def _stitch(parts: list, prefer, notes: dict) -> str:
             stitched = _anchored_frame(merged, lines, prefer, notes)
         if stitched is None:
             stitched = _prepend(merged, lines)   # a screenshot added later can show an earlier part of the file
+        if stitched is None:
+            stitched = _fuzzy_overlap(merged, lines, notes)
         if stitched is None:
             bridged = _bridge(merged, lines)
             if bridged is not None:

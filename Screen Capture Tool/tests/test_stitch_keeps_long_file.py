@@ -30,3 +30,16 @@ def test_mis_merged_duplicate_is_flagged_not_silently_replaced_by_one_screen(mon
     code, _, notes, _ = analysis.merge_verified(_frames(lines))
     assert len(code.splitlines()) > len(lines)
     assert notes.get("duplicate_headers")
+
+
+def test_real_overlap_with_separator_and_blank_row_noise_is_not_repeated():
+    """Two consecutive screens of a real capture (batch-test-10-09 USER.py): their 25 shared rows differ in a separator
+    drawn with other dashes and an extra blank row, so the strict matcher finds no overlap. The shared rows must still be
+    written once."""
+    import json
+    from pathlib import Path
+    fx = json.loads((Path(__file__).parent / "fixtures" / "overlap_noisy_frames.json").read_text())
+    code = analysis.stitch_parts([fx["a"], fx["b"]])
+    rows = [r for r in code.splitlines() if r.strip().startswith("class ")]
+    assert len(rows) == len(set(r.strip() for r in rows)), rows
+    assert len(code.splitlines()) < len(fx["a"].splitlines()) + len(fx["b"].splitlines()) - 15
