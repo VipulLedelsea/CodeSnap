@@ -15,7 +15,7 @@ def reading_models() -> list:
 def analysis_models() -> list:
     from core import analysis, deepdive, neighbor, pipeline
     return [pipeline.DRAFT_MODEL, pipeline.FINAL_MODEL, deepdive.DEFAULT_DEEP_MODEL, deepdive.DEFAULT_REVIEW_MODEL,
-            os.environ.get("CODESNAP_DEEP_MODEL"), analysis.MODEL, neighbor.MODEL]
+            os.environ.get("CODESNAP_DEEP_MODEL"), neighbor.MODEL]
 
 
 def check_models(client, models, now=None) -> list:

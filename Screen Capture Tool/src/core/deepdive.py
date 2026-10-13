@@ -946,8 +946,7 @@ def cross_file_candidates(facts, cap):
 
 
 def synthesize(store, client, model=None) -> dict:
-    from core.analysis import MODEL
-    model = model or MODEL
+    model = model or os.environ.get("CODESNAP_DEEP_MODEL") or DEFAULT_DEEP_MODEL   # Sonnet, not Opus
     dd = current_reviews(store)
     facts, index = [], {}
     for aid, r in dd.items():
