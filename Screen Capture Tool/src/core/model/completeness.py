@@ -112,6 +112,10 @@ def check(text: str, filename: str = "", language: str = "", errors: str = "") -
     asm_like = (pack and pack["id"] == "asm") or ext in ("bms", "dbd", "psb", "mfs") or fam == "cobol" and ext == "bms"
     if asm_like and not re.search(r"^\S*\s+END\b", "\n".join(body[-4:]), re.M | re.I):
         reasons.append("assembler/macro source has no END statement — end not captured")
+    if ext == "bms":
+        head = [l for l in body if not l.lstrip().startswith("*")][:6]
+        if head and not any(re.search(r"\bDFHMSD\b(?!\s+TYPE=FINAL)", l) for l in head):
+            reasons.append("map set has no DFHMSD header — start probably not captured")
     if ext == "sps" and not body[-1].rstrip().endswith("."):
         reasons.append("last SPSS command has no terminating period — end not captured")
     if ext in ("cfm", "cfc", "cfml"):

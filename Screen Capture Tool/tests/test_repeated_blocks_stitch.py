@@ -58,3 +58,44 @@ def test_clean_overlap_still_merges_exactly():
         merged = analysis._stitch_two(merged, frame)
         assert merged is not None
     assert [l.strip() for l in merged] == [l.strip() for l in source]
+
+
+def _routine(n):
+    return [f"R{n:02d}: PROC;",
+            f"  /* CHG-20{n:02d}-1{n:02d}: SETTLEMENT TOLERANCE. */",
+            "  STATUS = 'ACCEPT';",
+            f"  IF ABS(VARIANCE) > {n} THEN DO;",
+            "    STATUS = 'HOLD';",
+            "    REASON = 'SETTLEMENT_VARIANCE';",
+            "  END;",
+            "  IF PROCESSOR = 'OLDPAY' THEN DO;",
+            "    STATUS = 'ACCEPT';",
+            "    REASON = 'NEXT_DAY_PROCESSOR';",
+            "  END;",
+            "  /* INC-2021: drain stuck queue after three attempts. */",
+            "  IF RETRIES > 3 THEN DO;",
+            "    STATUS = 'ACCEPT';",
+            "    REASON = 'RETRY_OVERRIDE';",
+            "  END;",
+            "  AMOUNT = ABS(VARIANCE);",
+            f"END R{n:02d};"]
+
+
+def test_a_longer_match_inside_the_wrong_routine_does_not_skip_the_routines_between():
+    source = [row for n in range(1, 7) for row in _routine(n)]
+    # the first screen ends on the last body line of routine 3; the next starts only 5 rows earlier, so the true overlap is
+    # short, while "INC-2021 ... AMOUNT" (6 rows) also appears at the end of routines 4 and 5
+    stop = next(i for i, row in enumerate(source) if row == "END R03;")
+    first = source[stop - 31:stop]
+    second = source[stop - 5:stop - 5 + 44]
+    merged = analysis._stitch_two(first, second)
+    assert merged is not None
+    assert [l.strip() for l in merged] == [l.strip() for l in source[stop - 31:stop - 5 + 44]]
+
+
+def test_a_map_set_that_starts_below_its_header_is_reported_as_missing_its_start():
+    from core.model.completeness import check
+    whole = "MUNMAP   DFHMSD TYPE=&SYSPARM,MODE=INOUT\n* SYNTHETIC\nM00      DFHMDI SIZE=(24,80)\n         DFHMDF POS=(1,2)\n         DFHMSD TYPE=FINAL\n         END\n"
+    cut = "R00      DFHMDF POS=(3,12),LENGTH=12\n         DFHMDF POS=(5,2),LENGTH=6\n         DFHMSD TYPE=FINAL\n         END\n"
+    assert not [r for r in check(whole, "A.bms")["reasons"] if "DFHMSD" in r]
+    assert any("start probably not captured" in r for r in check(cut, "A.bms")["reasons"])

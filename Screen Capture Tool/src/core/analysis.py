@@ -1151,6 +1151,19 @@ def _conflict_context(lines, at):
     return context
 
 
+def _agrees_above(merged, at, b, o, rows=40, need=0.88):
+    """Do the rows above b[o] look like the rows above merged[at]? When the tail really sits at b[o], everything above it in
+    this screen is what was already read just before the tail, so the two agree row for row (OCR noise aside). Template
+    routines repeat the same last lines, so a match can sit inside the wrong routine; the routine header and the lines
+    with other numbers above it then disagree. True when there are too few rows to compare."""
+    n = min(o, at, rows)
+    pairs = [(merged[at - j], b[o - j]) for j in range(1, n + 1)
+             if merged[at - j].strip() and b[o - j].strip() and "[CUT OFF]" not in merged[at - j] + b[o - j]]
+    if len(pairs) < 3:
+        return True
+    return sum(_sim(x, y) >= 0.7 for x, y in pairs) >= need * len(pairs)
+
+
 def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8, prefer=frozenset(), notes=None) -> "list | None":
     """Merge frame b onto merged. Finds where the TAIL of merged reappears *inside* b
     (frames often re-show earlier lines), then appends only what follows. Returns the
@@ -1198,6 +1211,11 @@ def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8
                         continue
                     if trim and any(_sim(x, y) >= 0.7 for x, y in zip(merged[end:], b[o + k:o + k + trim])):
                         continue   # the rows after the overlap agree: they are not in doubt, a longer match would have found it
+                    # The rows just above the window in this screen must also be the rows just above the tail already read.
+                    # Template routines repeat the same last lines, so a long match can sit inside the wrong routine; the
+                    # rows above it then belong to a different routine and give it away.
+                    if not _agrees_above(merged, end - k, b, o):
+                        continue
                     # a line cut off at the bottom of one screen is usually whole on the next — keep the whole copy
                     tail = [w if "[CUT OFF]" in t and "[CUT OFF]" not in w else t for t, w in zip(tail, window)]
                     # two screenshots read a line differently: keep the copy the pixel check verified
