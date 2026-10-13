@@ -255,14 +255,15 @@ class _TrackedMessages:
 
     def create(self, **kwargs):
         from core import capture_gate
-        capture_gate.wait()
+        capture_gate.wait(program=getattr(self._tracker.budget, "program", None))
         if self._tracker.budget is not None:
             self._tracker.budget.check(self._tracker)
         began = time.monotonic()
         step = step_for(kwargs.get("system"))
         kwargs = cached_request(kwargs)
         try:
-            msg = self._messages.create(**kwargs)
+            with capture_gate.bound(getattr(self._tracker.budget, "program", None)):
+                msg = self._messages.create(**kwargs)
         except Exception as exc:
             self._tracker.record(step, kwargs.get("model"), None, int((time.monotonic() - began) * 1000),
                                  ok=False, error=f"{type(exc).__name__}: {exc}")
@@ -279,7 +280,7 @@ class _TrackedMessages:
     def stream(self, **kwargs):
         """Budget-checked, usage-recorded streaming (used for large outputs)."""
         from core import capture_gate
-        capture_gate.wait()
+        capture_gate.wait(program=getattr(self._tracker.budget, "program", None))
         if self._tracker.budget is not None:
             self._tracker.budget.check(self._tracker)
         step = step_for(kwargs.get("system"))

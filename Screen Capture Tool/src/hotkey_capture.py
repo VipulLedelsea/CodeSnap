@@ -725,6 +725,12 @@ class App:
         return kind
 
     def _analyse_burst(self, session_dir, artifact_id=None, kind=None):
+        from core import slots, status
+        with slots.slot(self.program or "", on_wait=lambda: status.publish(
+                "Queued - other programs are being analysed; this one starts when a slot is free", "info")):
+            return self._analyse_burst_now(session_dir, artifact_id, kind)
+
+    def _analyse_burst_now(self, session_dir, artifact_id=None, kind=None):
         if self.program and artifact_id is None:
             # Registration failed. Never bypass its target checks by importing a new file.
             self._unsaved_sessions.add(Path(session_dir))

@@ -225,7 +225,7 @@ def test_session_start_is_serialised(monkeypatch):
     monkeypatch.setattr("webapp.session.subprocess.Popen", lambda *a, **k: spawned.append(_FakePopen()) or spawned[-1])
     monkeypatch.setattr(SessionManager, "configure", lambda self, *a, **k: {})
     import core.status as status
-    monkeypatch.setattr(status, "clear", lambda: None)
+    monkeypatch.setattr(status, "clear", lambda *a, **k: None)
     monkeypatch.setattr(status, "publish", lambda *a, **k: None)
     mgr = SessionManager()
     threads = [threading.Thread(target=mgr.start) for _ in range(6)]
@@ -237,8 +237,8 @@ def test_session_start_is_serialised(monkeypatch):
 # ── 11. Stop terminates the pending worker too ──────────────────────────────
 def test_stop_terminates_pending_worker(monkeypatch):
     mgr = SessionManager()
-    mgr._pending = _FakePopen()
-    assert mgr.stop() is True and mgr._pending.terminated
+    mgr._workers['demo'] = _FakePopen()
+    assert mgr.stop() is True and mgr._workers['demo'].terminated
     assert mgr.stop() is False
 
 

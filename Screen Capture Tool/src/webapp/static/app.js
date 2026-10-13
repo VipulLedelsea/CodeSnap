@@ -394,20 +394,35 @@ function renderStatus(events) {
   box.scrollTop = box.scrollHeight;
 }
 
+// Programs keep running side by side: flag every program that is capturing or analysing in the picker.
+function markActivePrograms(active) {
+  const sel = $("progSelect");
+  if (!sel) return;
+  const on = new Set(active);
+  for (const o of sel.options) {
+    if (!o.value) continue;
+    const base = o.dataset.name || (o.dataset.name = o.textContent);
+    const label = on.has(o.value) ? base + " \u25CF running" : base;
+    if (o.textContent !== label) o.textContent = label;
+  }
+}
+
 async function pollStatus() {
   if (pollStatus.pending) return;
   pollStatus.pending = true;
   const request = pollStatus.sequence = (pollStatus.sequence || 0) + 1;
   try {
-    const r = await fetch("/api/session/status");
+    const forProgram = _view === "review" && _program ? _program : "";
+    const r = await fetch("/api/session/status" + (forProgram ? "?program=" + encodeURIComponent(forProgram) : ""));
     const d = await r.json();
-    if (request !== pollStatus.sequence) return;
+    if (request !== pollStatus.sequence || forProgram !== (_view === "review" && _program ? _program : "")) return;
+    markActivePrograms(d.active_programs || []);
     renderStatus(d.events || []);
     renderFlow(d.events || []);
     setRunning(d.running);
     if (d.running) setPaused(d.paused);
     const evs = d.events || [];
-    const analyzing = d.running && evs.some(e => e.kind === "tool") && !evs.some(e => e.kind === "done" || e.kind === "end");
+    const analyzing = (d.working || d.running) && evs.some(e => e.kind === "tool") && !evs.some(e => e.kind === "done" || e.kind === "end");
     if (analyzing) startAnalyzing(); else stopAnalyzing();
     const revision = JSON.stringify(d.events || []);
     if (revision !== lastEventCount) {
@@ -470,7 +485,7 @@ function idleStopValue() {
 
 $("startBtn").addEventListener("click", async () => {
   if (sessionRunning) {
-    await fetch("/api/session/stop", { method: "POST" });
+    await fetch("/api/session/stop" + (_view === "review" && _program ? "?program=" + encodeURIComponent(_program) : ""), { method: "POST" });
     toast("Session stopped.");
   } else {
     const single = false;   // single-agent backup available via --single, not exposed in the UI
@@ -1118,7 +1133,7 @@ async function loadProgram(poll) {
 let _progPoll = null;
 function scheduleProgramPoll(d) {
   if (_progPoll) clearTimeout(_progPoll);
-  const busy = d.progress && (d.progress.to_go > 0) || d.session_running || d.recapture_target;
+  const busy = d.progress && (d.progress.to_go > 0) || d.session_running || d.worker_running || d.recapture_target;
   _progPoll = setTimeout(() => { _progPoll = null; if (_view === "review" && _program && !document.hidden) loadProgram(true); else scheduleProgramPoll(d); }, busy ? 3000 : 10000);
 }
 let _display = "", _shotDisplay = "";
@@ -1164,7 +1179,7 @@ function _pbase() { return `/api/programs/${encodeURIComponent(_program)}`; }
 function renderCaptureBar(d) {
   const bar = $("progCapBar");
   const t = d.recapture_target;
-  const stuck = !d.session_running && d.artifacts.some(a => a.status === "captured" && !(a.pending && (a.pending.analysing || a.pending.paused)));
+  const stuck = !d.session_running && !d.worker_running && d.artifacts.some(a => a.status === "captured" && !(a.pending && (a.pending.analysing || a.pending.paused)));
   bar.innerHTML = (t ? `<div class="cb recap">${t.mode === "append"
       ? `Your next capture adds to <b>${escapeHtml(t.name)}</b> — just capture the lines that were missing.`
       : `Your next capture replaces <b>${escapeHtml(t.name)}</b> (the current version is kept).`} <button class="btn-link" data-cb="cancel" type="button">Cancel</button></div>` : "")

@@ -386,8 +386,9 @@ def _deep_start(slug: str, artifact_ids=None) -> dict:
 
     def work():
         from core.model import ProgramStore
+        from core import slots
         try:
-            with ProgramStore.open(slug) as st:
+            with slots.slot(slug), ProgramStore.open(slug) as st:
                 from core import pipeline
                 if pipeline.staged() and not artifact_ids:
                     res = pipeline.run_staged(st, client, progress=lambda d, t: job.update(done=d, total=t))
@@ -553,7 +554,9 @@ def api_program(slug: str):
             "report": {"built_at": store.get_meta("report_built_at"),
                        "current": store.get_meta("report_stamp") == revision},
             "waiting": sum(1 for a in store.artifacts() if a["status"] == "captured"),
-            "session_running": _session.running(),
+            "session_running": _session.running() and _session.program == slug,
+            "worker_running": _session.worker_running(slug),
+            "capture_elsewhere": _session.running() and _session.program != slug,
         }
 
 
@@ -596,7 +599,7 @@ def api_program_pending_process(slug: str):
     if bad:
         return JSONResponse({"error": bad}, status_code=400)
     if not _session.process_pending(slug):
-        return JSONResponse({"error": "Another program is being processed. Retry when it finishes."}, status_code=409)
+        return {"ok": True, "waiting": waiting, "note": "Already analysing in the background."}
     return {"ok": True, "waiting": waiting, "note": "Analysing in the background."}
 
 
@@ -687,18 +690,18 @@ def _analysis_busy(slug: str) -> bool:
 
 def _stop_analysis(slug: str, wait: float = 30.0) -> bool:
     from core import capture_gate
-    capture_gate.cancel_analysis(wait + 30)
+    capture_gate.cancel_analysis(wait + 30, slug)
     began = time.time()
     terminated = False
     while time.time() - began < wait:
         if not _analysis_busy(slug):
             break
         if not terminated and time.time() - began > 8:
-            _session.stop_pending()
+            _session.stop_pending(slug)
             terminated = True
         time.sleep(0.5)
     stopped = not _analysis_busy(slug)
-    capture_gate.clear_cancel()
+    capture_gate.clear_cancel(slug)
     return stopped
 
 
@@ -735,8 +738,7 @@ def api_program_artifact_rebuild(slug: str, artifact_id: int):
         if not store.artifact(artifact_id):
             return JSONResponse({"error": "File not found"}, status_code=404)
         from core import deepdive
-        pending_worker = _session._pending
-        capture_worker_running = _session.running() or (pending_worker is not None and pending_worker.poll() is None)
+        capture_worker_running = (_session.running() and _session.program == slug) or _session.worker_running(slug)
         if ((capture_worker_running and deepdive._active(store)) or
                 any(store.capture_progress(a["id"]).get("analysing") for a in store.artifacts())):
             return JSONResponse({"error": "Wait for current analysis to finish before rebuilding a saved capture."}, status_code=409)
@@ -1588,8 +1590,8 @@ def api_displays():
 
 
 @app.post("/api/session/stop")
-def api_session_stop():
-    _session.stop()
+def api_session_stop(program: str | None = None):
+    _session.stop(program)
     return {"running": _session.running()}
 
 
@@ -1616,8 +1618,12 @@ def api_session_park():
 
 
 @app.get("/api/session/status")
-def api_session_status():
-    return {"running": _session.running(), "paused": _session.paused(), "events": status.recent()}
+def api_session_status(program: str | None = None):
+    """Live events for one program (its own stream); without a program, the shared stream and the capture session."""
+    running = _session.running() and (program is None or _session.program == program)
+    working = running or (program is not None and _session.worker_running(program))
+    return {"running": running, "paused": running and _session.paused(), "working": working, "events": status.recent(program=program or ""),
+            "active_programs": _session.active_programs()}
 
 
 def _serve_in_thread(host="127.0.0.1", port=8000):
