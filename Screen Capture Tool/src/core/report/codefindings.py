@@ -117,3 +117,70 @@ def short(text, limit=230):
         close = first.find(")", len(out))
         out = first[:close + 1] if 0 <= close <= len(out) + 80 else out[:out.rfind("(")].rstrip(",;:- ")
     return out
+
+
+# ── program level: what the files do together ────────────────────────────────────────────────────────────────
+# The whole-program review records what holds the files together: the order they run in, the data one hands to the
+# next, rules copied between them and places where they disagree. The report states those once, for the program,
+# and drops the single-file findings they already cover.
+
+FLOW = re.compile(r"end[- ]to[- ]end|overall flow|how the (program|application|system) runs", re.I)
+AGREE = re.compile(r"\b(agree|agrees|are the same|is the same|same (values?|thresholds?|precision|baselines?)|match(es)?)\b", re.I)
+CONFLICT = re.compile(r"\b(differ|differs|different|differently|shifted|mismatch|misaligned|disagree|would read|never|bypass|"
+                      r"ignores?|not (managed|defined|tested|checked|handled|applied)|undefined|truncat\w*|only the first|"
+                      r"first \d+ characters|although|no way|would be triggered)\b", re.I)
+SERIOUS = re.compile(r"different record layout|would read|bypass|never|no way|ignores|would be triggered|first \d+ characters|"
+                     r"differ\w* from file to file", re.I)
+_CITE_LINES = re.compile(r"^(?P<file>.+?) lines (?P<a>\d+)\D+(?P<b>\d+)$")
+
+
+def _spans(cites):
+    out = {}
+    for c in cites or []:
+        m = _CITE_LINES.match(c.strip())
+        if m:
+            out.setdefault(m.group("file"), []).append((int(m.group("a")), int(m.group("b"))))
+    return out
+
+
+def program_items(observations):
+    """Split the whole-program observations into the end-to-end flow, risks (files that disagree or break each other),
+    debt (the same rule copied into several files) and agreements (nothing to report)."""
+    flow, risks, debt = None, [], []
+    for o in observations or []:
+        text = f"{o.get('title', '')}. {o.get('statement', '')}"
+        files = list(o.get("files") or _spans(o.get("cites")))
+        item = {"title": o.get("title", "").rstrip("."), "text": o.get("statement", ""), "files": files,
+                "spans": _spans(o.get("cites")), "basis": o.get("basis"),
+                "severity": "high" if SERIOUS.search(text) else "medium", "weight": len(files), "cites": o.get("cites") or []}
+        if FLOW.search(o.get("title", "")):
+            flow = item
+        elif CONFLICT.search(o.get("title", "")) and len(files) >= 1:      # the headline says files disagree or break each other
+            risks.append(item)
+        elif AGREE.search(o.get("title", "")) and len(files) >= 3 and re.search(r"hard.?code", text, re.I):
+            debt.append(item)
+    return {"flow": flow, "risks": risks, "debt": debt}
+
+
+def absorb(single, program):
+    """Single-file findings whose lines fall inside a program-level observation are covered by it; the rest remain."""
+    spans = [it["spans"] for it in program["risks"] + program["debt"]]
+
+    def covered(f):
+        lines = f.get("lines") or []
+        if not lines:
+            return False
+        a, b = lines[0], lines[-1]
+        return any(a <= hi and b >= lo for s in spans for lo, hi in s.get(f["file"], []))
+    return [f for f in single if not covered(f)]
+
+
+def program_rating(item):
+    high = item["severity"] == "high"
+    n = len(item["files"])
+    likelihood = 4 if high or n >= 3 else 3
+    impact = 4 if high else 3
+    return (likelihood, impact,
+            f"{likelihood}: the whole-program review found this where {n} file{'s' if n != 1 else ''} meet; whether production runs this path is to confirm",
+            f"{impact}: " + ("it can change payments, ledger entries or the audit trail" if high
+                             else "the effect depends on how the business uses these files") + "; to confirm with the business owner")
