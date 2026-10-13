@@ -28,6 +28,31 @@ FIELDS = [
     ("client_short", "Name used in place of hidden names (e.g. CLIENT)"),
     ("redact_terms", "Names to hide in the report, comma separated (real client names, schema or host prefixes)"),
 ]
+# Business inputs the report would otherwise ask for again and again. Each one is shown in the "Business inputs" group of
+# the form, goes to the executive summary, and closes the open items listed in CLOSES once every key it needs is entered.
+BUSINESS_INPUTS = [
+    ("users_volumes", "Users by group and business volumes (for example 40 clerks, 12,000 payments a month)"),
+    ("run_times", "Availability target, recovery time and point, batch window and peak volumes"),
+    ("hosting_cost", "Current licence, hosting and support cost per year, by platform"),
+    ("incident_history", "Incidents and support tickets in the last 24 months"),
+    ("change_backlog", "Change requests waiting and changes planned"),
+    ("available_skills", "Named people who can maintain each platform, and cover"),
+    ("test_coverage", "Existing tests and baseline outputs"),
+    ("documentation", "Design documents, run books and data dictionaries that exist"),
+    ("change_drivers", "Known drivers of change (regulation, vendor end of support, cost, risk)"),
+    ("year_introduced", "Year introduced and major rewrites"),
+]
+FIELDS += BUSINESS_INPUTS
+BUSINESS_KEYS = [k for k, _ in BUSINESS_INPUTS]
+# open-item wording -> the inputs that close it (all of them must be entered)
+CLOSES = [
+    (r"Number of users by group", ["users_volumes"]),
+    (r"Availability, RTO, RPO", ["run_times"]),
+    (r"Current licensing and capacity costs", ["hosting_cost"]),
+    (r"Ticket counts for 24 months", ["incident_history", "available_skills"]),
+    (r"Known drivers of change", ["change_drivers"]),
+    (r"Year introduced and major rewrites", ["year_introduced"]),
+]
 DEFAULTS = {"version": "v1.0", "classification": "Confidential", "firm": "Ledelsea", "prepared_by": "Ledelsea"}
 
 

@@ -125,7 +125,8 @@ def run(store, client, report_docx, model=None) -> dict:
         return (D._tool(msg, TOOL["name"]) or {}).get("items") or []
 
     found = [it for part in D.parallel(ask, pieces) for it in part]
-    items = verified(found, text)
+    from core import report_numbers
+    items = verified(found, text) + report_numbers.check(text, report_numbers.truth(store))
     store.set_meta("report_consistency", {"ran_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": model, "items": items,
                                           "pieces": len(pieces)})
     return {"items": items}

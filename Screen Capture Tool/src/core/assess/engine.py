@@ -127,6 +127,11 @@ def run_assessment(store, *, scan: bool = True, online: bool = False, today=None
     health = pipeline_health(store)
     facts = _facts(components)
     facts["components"] = len(components)
+    from core import deepdive
+    facts["review_high"] = sum(
+        1 for found in deepdive.review_facts(store).values() for f in found
+        if f.get("severity") in ("critical", "high") and f.get("category") in ("defect", "data_integrity", "error_handling")
+        and not deepdive.is_capture_artifact(f.get("statement")))
     facts["high_risk"] = 0
     for c in components:
         ci = comp_inputs.get(c["name"]) or {}

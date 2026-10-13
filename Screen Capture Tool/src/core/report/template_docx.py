@@ -87,7 +87,21 @@ class Doc:
             el = el.getnext()
         return None
 
+    inputs = {}      # the report details entered for this program; set when the build starts
+    supplied = []
+
     def unknown(self, what, section, owner="Business owner"):
+        """The text to show where something is not known. When the client entered the information, it is shown instead and
+        the open item is not raised."""
+        from .settings import CLOSES, FIELDS
+        for pattern, keys in CLOSES:
+            if re.search(pattern, what, re.I) and all((self.inputs.get(k) or "").strip() for k in keys):
+                labels = dict(FIELDS)
+                for k in keys:
+                    entry = (labels[k].split(" (")[0], self.inputs[k].strip(), section)
+                    if entry not in self.supplied:
+                        self.supplied.append(entry)
+                return "; ".join(self.inputs[k].strip() for k in keys)
         self.open_items.append((what, section, owner))
         return placeholder(what)
 
@@ -335,6 +349,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     app_id = s["app_id"] or f"APP-{num}"
     name = report["program"]
     doc = Doc()
+    doc.inputs, doc.supplied = s, []
     T = list(doc.d.tables)      # the template's tables, fixed before any new table is inserted
     comps = a["components"]
     from . import evidence as EV
@@ -432,9 +447,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     plat_of = {c_["name"]: c_["platform"] for c_ in AM["components"]}
     shared_stores = [n_ for n_, s_ in AM["stores"].items() if len(s_["readers"] | s_["writers"]) > 1
                      and len({plat_of.get(x) for x in s_["readers"] | s_["writers"]}) == 1]
-    _suspect = re.compile(r"duplicated verbatim|defined twice|identical paragraph name|repeated verbatim|blocks of duplicated|"
-                          r"truncated|dangling|syntactically incomplete|corrupted or incompletely|begins mid|two fields both named|"
-                          r"identical screen position|compile error", re.I)
+    _suspect = DDV.CAPTURE_ARTIFACT
     _high = [(x, f_) for x in code_arts for f_ in DDV.review_facts(store).get(x["id"], [])
              if f_.get("severity") == "high" and f_["category"] in ("defect", "data_integrity", "error_handling")]
     review_high = [f"{x['name']}: {P.lower_first(f_['statement'].rstrip('.'))} ({EV.cite(f_['lines'])})"
@@ -600,7 +613,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                                    f"{sum(1 for r_ in BR if r_['rating'] == 'High')} risk{'s' if sum(1 for r_ in BR if r_['rating'] == 'High') != 1 else ''} rated High in 9.1" if top else "None"),
             "End-of-life exposure": "; ".join(f"{t.get('name')} {t.get('version') or t.get('cycle') or ''}".strip()
                                               + (f" (ended {t['eol']})" if t.get("eol") else f" ({_status_word(t).lower()})")
-                                              for t in eol[:5]) or ("None identified; deployed versions are not confirmed (3.2), so exposure is not ruled out"
+                                              for t in eol[:5]) or ("Not determined: no end-of-life technology was found in the supplied code, but deployed versions are not confirmed (3.2), so exposure is not ruled out"
                                                     if any(not t.get("version") for t in techs) else "None identified"),
             "Recommended disposition": f"{disposition}: {_disp_plain(v)}",
             "Recommended timing": horizon}
@@ -1016,7 +1029,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         obs_src.insert(0, ("Core business data is fragmented across platforms", frag + " See the ownership matrix in 5.5.",
                            "Every copy can drift from the others, so totals and balances can disagree between systems; any "
                            "modernization must first decide which copy is authoritative and how the rest are reconciled."))
-    obs_src = [(t, (f"The application runs on {len(HP)} platforms: {', '.join(HP)}." if t.startswith("The application spans")
+    obs_src = [(t, (f"The supplied code points to {len(HP)} platforms: {', '.join(HP)}." if t.startswith("The application spans")
                     else w), m) for t, w, m in obs_src]
     obs = [f"{t}. {w} {m}" for t, w, m in obs_src]
     obs.insert(0, f"The current source identifies {len(FX['data_stores'])} data store(s), excluding placeholders and display files (3.1).")
@@ -1216,7 +1229,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     doc.replace("Separate remediation that can be addressed independently", [
         ("Quick wins that reduce risk now, whatever is decided about modernization: "
          + _and([_lc(x) for x in stab[:6]]) + ".") if stab else
-        (f"Quick wins that can be done now, each a small fix after the rule is confirmed: {_and(small_[:6])} in 7.3.") if small_ else
+        (f"Quick wins that can be done now, each a small-effort item (effort S, whatever its priority) once the rule is confirmed: {_and(small_[:6])} in 7.3.") if small_ else
         "There are no quick wins separate from the modernization work.",
         (f"Debt that is better retired through the recommended {_noun(disposition)} (Section 12) than fixed now: "
          + _and([_lc(x) for x in mod[:6]]) + ".") if mod else
@@ -1710,6 +1723,9 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     rows(T[41], oi)
     doc.new_para(f"{len(blocking)} of the {len(oi)} open items block issue of the report as final (marked 'Blocks issue', "
                  f"due in 14 days); the rest are due within 75 days of the report date.", T[41]._tbl)
+    if doc.supplied:
+        doc.new_para("Entered by the client and used in place of open items: "
+                     + "; ".join(f"{label}: {value} (Section {sec})" for label, value, sec in doc.supplied) + ".", T[41]._tbl)
     if metadata is not None:
         metadata.update(verdict=v, final=final, blocking=[item[0] for item in blocking])
     _glossary(doc)
@@ -1735,6 +1751,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                     priority_reasons=[r_["title"] for r_ in BR[:2]], full_summary=bool(_es))
     RRV.apply_to_docx(doc.d, store)
     _label_bare_inserts(doc)
+    _move_tails_to_appendices(doc)
     _fill_toc(doc)
     buf = io.BytesIO()
     doc.d.save(buf)
@@ -2183,6 +2200,43 @@ def _table_after(doc, src, anchor_el, head, data):
         set_cell(t.rows[0].cells[i], h)
     rows(t, data)
     return t
+
+
+# Long registers that are already in priority order: the main body keeps the top rows and the rest go to an appendix, so the
+# report is shorter to read and nothing is left out. (first header cell, rows kept, appendix title, what the rows are ranked by)
+TAIL_TABLES = [
+    ("Risk ID", 12, "Risk register, continued", "score, highest first"),
+    ("Debt ID", 10, "Technical debt register, continued", "priority, highest first"),
+    ("Item", 25, "Open items, continued", "due date, earliest first"),
+]
+
+
+def _move_tails_to_appendices(doc, tables=TAIL_TABLES, spare=3):
+    """Keep the top rows of each long ranked register in place and move the remaining rows to a new appendix with a note.
+    A table that is only a few rows over the limit is left whole."""
+    from copy import deepcopy
+    letters = iter("IJKLMNOP")
+    for table in list(doc.d.tables):
+        head = [c.text.strip() for c in table.rows[0].cells]
+        plan = next((t for t in tables if head and head[0] == t[0] and (t[0] != "Item" or "Description" in head)), None)
+        body_rows = len(table.rows) - 1
+        if plan is None or body_rows <= plan[1] + spare:
+            continue
+        _, keep, title, ranked = plan
+        letter = next(letters)
+        tail = deepcopy(table._tbl)
+        from docx.table import Table
+        copy_table = Table(tail, table._parent)
+        for row in list(copy_table.rows)[1:keep + 1]:
+            tail.remove(row._tr)
+        for row in list(table.rows)[keep + 1:]:
+            table._tbl.remove(row._tr)
+        heading = doc.d.add_paragraph(f"Appendix {letter}: {title}", "Heading 1")
+        intro = doc.d.add_paragraph(f"Rows {keep + 1} to {body_rows} of {body_rows}, ranked by {ranked}. The first {keep} rows are in the "
+                                    "main report.")
+        intro._p.addnext(tail)
+        doc.new_para(f"Showing the first {keep} of {body_rows} rows, ranked by {ranked}. The remaining {body_rows - keep} are in "
+                     f"Appendix {letter}.", table._tbl, italic=True)
 
 
 def _quality_appendix(doc, tables, store):

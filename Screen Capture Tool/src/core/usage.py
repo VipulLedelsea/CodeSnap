@@ -66,7 +66,9 @@ def _step_table():
             table += [(analysis.EXTRACT_JSON_SYSTEM_PROMPT, "transcribe"), (analysis.EXTRACT_SYSTEM_PROMPT, "transcribe"),
                       (analysis.EXTRACT_INDENT_SYSTEM_PROMPT, "transcribe"), (analysis.FINALIZE_SYSTEM_PROMPT, "classify"),
                       (analysis.FIX_SYSTEM_PROMPT, "fix"), (analysis.EXPLAIN_SYSTEM_PROMPT, "explain_error"),
-                      (analysis.INDENT_REVIEW_SYSTEM, "indent_review"), (analysis.SYSTEM_PROMPT, "analyse")]
+                      (analysis.INDENT_REVIEW_SYSTEM, "indent_review"), (analysis.SYSTEM_PROMPT, "analyse"),
+                      # first read (plain) and second read, so their cost and use can be told apart; both used to be "other"
+                      (analysis.EXTRACT_PLAIN_SYSTEM_PROMPT, "read_first"), (analysis.REREAD_SYSTEM_PROMPT, "reread")]
         except Exception:
             pass
         try:
@@ -79,6 +81,8 @@ def _step_table():
             from core.model.extract import STRUCTURE_SYSTEM
             from core.project import PROJECT_SYSTEM
             from core.extractors.ui import UI_SYSTEM
+            from core.neighbor import SYSTEM as NEIGHBOR_SYSTEM
+            table += [(NEIGHBOR_SYSTEM, "neighbor_reread")]
             table += [(COLUMN_REVIEW_SYSTEM, "column_review"), (STRUCTURE_SYSTEM, "structure"),
                       (PROJECT_SYSTEM, "project_map"), (UI_SYSTEM, "ui_screen")]
         except Exception:

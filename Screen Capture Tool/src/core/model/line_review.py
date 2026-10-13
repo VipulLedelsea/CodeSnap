@@ -6,7 +6,7 @@ from PIL import Image
 from core import colfix, deepdive
 from core.analysis import clean_source, source_mode, _normalize_extract, _SOURCE_LABEL
 from core.verify import _line_map, REASONS
-from core.model import confirmed
+from core.model import confirmed, edges
 
 # Spacing-only and compile-fix flags never change what the program does; do not make the person answer them.
 _SKIP = {REASONS['spacing'], REASONS['edited']}
@@ -16,8 +16,9 @@ def items(store, art):
     lines = (art.get('transcription') or '').splitlines()
     flags = (store.verification(art['id']) or {}).get('flags') or []
     concerns = deepdive.current_concerns(store, art) or []
+    edge_flags = edges.flags(store, art)
     by_line = {}
-    for flag in [*flags, *concerns]:
+    for flag in [*flags, *concerns, *edge_flags]:
         if flag.get('reason') in _SKIP:
             continue
         n = flag.get('line')
@@ -26,8 +27,9 @@ def items(store, art):
     out = []
     for n, reasons in sorted(by_line.items()):
         reasons = list(dict.fromkeys(reasons))
-        gap = REASONS['break'] in reasons
-        if reasons == [REASONS['break']] and confirmed.is_marked_missing(store, art.get('name'), art.get('transcription'), n):
+        edge_reasons = {edges.START_ASK, edges.END_ASK}
+        gap = REASONS['break'] in reasons or bool(edge_reasons & set(reasons))
+        if set(reasons) <= {REASONS['break'], *edge_reasons} and confirmed.is_marked_missing(store, art.get('name'), art.get('transcription'), n):
             continue
         out.append({'line': n, 'text': lines[n - 1], 'reasons': reasons, 'gap': gap})
     return out
@@ -152,9 +154,12 @@ def detail(store, art, line):
         screenshots.append({'id': evidence['id'], 'frame': evidence['ord']+1, 'width': width, 'height': height,
                             'band': band, 'text': observed})
     screenshots.sort(key=lambda e: e['band'] is None)
-    gap_only = next((i['reasons'] == [REASONS['break']] for i in items(store, art) if i['line'] == line), False)
+    here = next((i['reasons'] for i in items(store, art) if i['line'] == line), [])
+    gap_only = here == [REASONS['break']]
+    edge = {edges.START_ASK: edges.START_ASK, edges.END_ASK: edges.END_ASK}.get(here[0]) if len(here) == 1 else None
     return {'artifact_id': art['id'], 'name': art['name'], 'line': line, 'old_text': lines[line-1],
-            'text_hash': deepdive._hash(code), 'question': GAP_QUESTION if gap_only else question(lines[line-1], readings),
+            'text_hash': deepdive._hash(code),
+            'question': edge or (GAP_QUESTION if gap_only else question(lines[line-1], readings)),
             'context': [{'line': n, 'text': lines[n-1], 'focus': n == line}
                         for n in range(max(1, line-1), min(len(lines), line+1)+1)],
             'screenshots': screenshots[:6], 'readings': readings,

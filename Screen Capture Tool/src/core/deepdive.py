@@ -272,6 +272,19 @@ def capture_quality(store, art, concerns=None) -> dict:
                 c = drop_end_reasons(c)
         if c["partial"]:
             issues.append({"kind": "partial", "lines": [], "reason": "; ".join(c["reasons"]), "advice": ADVICE["partial"]})
+        from core.model import edges
+        for edge in edges.flags(store, art):
+            issues.append({"kind": edge["kind"], "lines": [str(edge["line"])],
+                           "reason": "the first line shown may not be the top of the file" if edge["kind"] == "start"
+                           else "the last line shown may not be the end of the file",
+                           "advice": "confirm it in the review, or add a screenshot of the missing part"})
+            if edges.marked_missing(store, art, edge["kind"]):
+                issues.append({"kind": "partial", "lines": [], "advice": ADVICE["partial"],
+                               "reason": "lines are missing at the " + ("start" if edge["kind"] == "start" else "end") + " of the file"})
+        from core.model.completeness import shifted_spacing
+        for a, b in shifted_spacing(lines)[:3] if c.get("spacing") else []:
+            issues.append({"kind": "spacing", "lines": _ranges(list(range(a, b + 1))),
+                           "reason": "indented one column off the rest of the file", "advice": ADVICE["spacing"]})
     for c in concerns or []:
         ln = c.get("line")
         if isinstance(ln, int) and 0 < ln <= len(lines):
@@ -383,6 +396,19 @@ def rescan_requests(store) -> list:
 NOT_REACHED = re.compile(r"\b(is|are) never (called|invoked|executed)\b|\bnever called\b|\bcannot work as written\b|"
                          r"\bonly in theory\b|\bneither\b[^.]*\bis passed\b|\bpossible injection point, but\b", re.I)
 _DEAD = re.compile(r"\b(is|are) never (called|invoked|executed)\b|\bnever called\b", re.I)
+
+
+# Wording that marks a finding as something a bad capture produces (a repeated block, a cut-off line, a half-read
+# statement) rather than a defect in the source. The report body, the executive summary and the cross-file synthesis
+# all use this one test, so a capture problem is raised as a capture concern and never as a code defect.
+CAPTURE_ARTIFACT = re.compile(
+    r"duplicated verbatim|defined twice|identical paragraph name|repeated verbatim|blocks of duplicated|"
+    r"truncated|dangling|syntactically incomplete|corrupted or incompletely|begins mid|two fields both named|"
+    r"identical screen position|compile error|duplicate(?:d)? (?:cobol )?paragraph|paragraph names? (?:is|are) duplicated", re.I)
+
+
+def is_capture_artifact(statement) -> bool:
+    return bool(CAPTURE_ARTIFACT.search(statement or ""))
 
 
 def review_facts(store) -> dict:
@@ -924,6 +950,8 @@ def synthesize(store, client, model=None) -> dict:
     facts, index = [], {}
     for aid, r in dd.items():
         for f in r.get("facts") or []:
+            if is_capture_artifact(f.get("statement")):
+                continue
             fid = f"F{aid}.{f['id']}"
             index[fid] = (r["name"], f)
             facts.append((fid, r["name"], f))

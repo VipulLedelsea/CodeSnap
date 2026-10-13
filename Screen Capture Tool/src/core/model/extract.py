@@ -125,7 +125,7 @@ def _create(client, model, header, body):
 
 def extract_structure(client, code: str, *, filename: str = "", language: str = "", model: str | None = None) -> dict:
     if model is None:
-        from core.analysis import MODEL as model
+        from core.analysis import READ_MODEL as model
     entities, relations, calls = [], [], []
     parts = list(chunks(code))
     for index, (start, lines) in enumerate(parts, 1):

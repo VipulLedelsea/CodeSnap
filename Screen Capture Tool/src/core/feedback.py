@@ -15,6 +15,8 @@ Operations:
   and `old_text` must be copied exactly from the source context, including leading spaces. `new_text` must be the complete
   corrected line, preserving all unchanged spacing and text. Never infer missing code or propose this operation unless the
   analyst supplied the correction and the exact existing line appears in context.
+- artifact.delete_line {artifact, line, old_text}  (remove one line that is not in the file, such as a repeated line or editor text;
+  later line numbers move up by one; only when the analyst asked for the line to be removed)
 - entity.rename {key, name}
 - entity.set_attrs {key, attrs}  (e.g. {"no_pii": true} = holds no student data; {"pii": "student ID"} = does;
   {"hardcoded_secret": false} = not a secret; {"store_type": "database"})
@@ -139,9 +141,17 @@ def _carry_quality_concerns(store, correction):
         concerns = carried.get("concerns") or []
     else:
         return
-    manual[aid] = {"hash": _hash(art.get("transcription")),
-                   "concerns": [c for c in concerns if c.get("line") != p.get("line")],
-                   "resolved_lines": sorted(set((carried.get("resolved_lines") or []) + [p["line"]]))}
+    n = p.get("line")
+    if correction.get("op") == "artifact.delete_line":
+        # the line is gone, so every later line number moved up by one
+        up = lambda line: line - 1 if isinstance(line, int) and line > n else line
+        manual[aid] = {"hash": _hash(art.get("transcription")),
+                       "concerns": [{**c, "line": up(c.get("line"))} for c in concerns if c.get("line") != n],
+                       "resolved_lines": sorted({up(x) for x in carried.get("resolved_lines") or [] if x != n})}
+    else:
+        manual[aid] = {"hash": _hash(art.get("transcription")),
+                       "concerns": [c for c in concerns if c.get("line") != n],
+                       "resolved_lines": sorted(set((carried.get("resolved_lines") or []) + [n]))}
     store.set_meta("manual_capture_concerns", manual)
 
 
@@ -158,10 +168,10 @@ def apply(store, ops: list, note: str = "", today=None, client=None) -> dict:
         done.append(r)
         if r.get("warning"):
             warnings.append(f"{r['description']}: {r['warning']}")
-        elif item["op"] in ("artifact.replace_line", "artifact.confirm_line"):
+        elif item["op"] in ("artifact.replace_line", "artifact.confirm_line", "artifact.delete_line"):
             refresh.add(payload["artifact"])
             _carry_quality_concerns(store, store.correction(r["id"]))
-            action = "Confirmed" if item["op"] == "artifact.confirm_line" else "Corrected"
+            action = {"artifact.confirm_line": "Confirmed", "artifact.delete_line": "Deleted"}.get(item["op"], "Corrected")
             source_changes.append(f"{action} {payload['artifact']} line {payload['line']} and refreshed its analysis.")
     for artifact_name in sorted(refresh):
         warnings.extend(_refresh_source(store, artifact_name, client))
@@ -177,11 +187,11 @@ def undo(store, correction_id: int, today=None, client=None) -> dict:
     correction = store.correction(correction_id)
     r = C.undo(store, correction_id)
     warnings = []
-    if correction and correction["op"] == "artifact.replace_line":
+    if correction and correction["op"] in ("artifact.replace_line", "artifact.delete_line"):
         warnings = _refresh_source(store, correction["payload"]["artifact"], client)
     run_assessment(store, today=today)
     source_change = ([f"Restored {correction['payload']['artifact']} line {correction['payload']['line']} and refreshed its analysis."]
-                     if correction and correction["op"] == "artifact.replace_line" else [])
+                     if correction and correction["op"] in ("artifact.replace_line", "artifact.delete_line") else [])
     return {**r, "warnings": warnings, "impact": source_change + diff(before, snapshot(store), LABELS)}
 
 

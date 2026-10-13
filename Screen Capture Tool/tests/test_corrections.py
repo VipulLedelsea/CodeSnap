@@ -273,3 +273,69 @@ def test_corrections_api(tmp_path, monkeypatch):
     p = client.post(f"/api/programs/{slug}/corrections/interpret", json={"text": "AIDCALC should be called X"}).json()
     assert p["changes"][0]["op"] == "entity.rename"
     assert client.post(f"/api/programs/{slug}/corrections/interpret", json={"text": ""}).status_code == 400
+
+
+def test_removing_editor_junk_blanks_the_line_and_keeps_later_line_numbers(program):
+    art = program.current_artifact("AIDCALC.cbl")
+    lines = art["transcription"].splitlines()
+    junk = "Ln 150, Col 12   Spaces: 4   UTF-8   LF"
+    lines.insert(10, junk)
+    program.fill_artifact(art["id"], artifact_type=art["artifact_type"], language=art["language"], transcription="\n".join(lines))
+    later_line = lines[20]
+    out = feedback.apply(program, [{"op": "artifact.replace_line", "payload": {
+        "artifact": "AIDCALC.cbl", "line": 11, "old_text": junk, "new_text": ""}}], note="not source")
+    assert not out["warnings"] and "Remove AIDCALC.cbl line 11" in out["applied"][0]["description"]
+    current = program.current_artifact("AIDCALC.cbl")
+    got = current["transcription"].splitlines()
+    assert got[10] == "" and len(got) == len(lines) and got[20] == later_line
+    feedback.undo(program, out["applied"][0]["id"])
+    assert program.current_artifact("AIDCALC.cbl")["transcription"].splitlines()[10] == junk
+    with pytest.raises(C.CorrectionError):
+        C.validate("artifact.replace_line", {"artifact": "A", "line": 1, "old_text": junk})      # no new_text at all is still refused
+
+
+def test_deleting_a_line_shifts_the_later_lines_flags_and_corrections_and_undo_puts_it_back(program):
+    art = program.current_artifact("AIDCALC.cbl")
+    lines = art["transcription"].splitlines()
+    dup = lines[9]
+    lines.insert(10, dup)                                              # a repeated line at 11
+    program.fill_artifact(art["id"], artifact_type=art["artifact_type"], language=art["language"], transcription="\n".join(lines))
+    later_old = lines[29]
+    later_new = later_old.replace("AIDAUDIT", "AIDCHECK") if "AIDAUDIT" in later_old else later_old + " "
+    verification = {"lines": len(lines), "verified": len(lines) - 2, "reread": 0, "confirmed": 0, "joined": 0, "flagged": 2,
+                    "unchecked": 0, "gaps": [], "flags": [{"line": 11, "text": dup.strip(), "reason": "x"},
+                                                           {"line": 40, "text": lines[39].strip(), "reason": "y"}]}
+    verification["headline"] = headline(verification)
+    program.set_verification(art["id"], verification)
+    fix = feedback.apply(program, [{"op": "artifact.replace_line", "payload": {
+        "artifact": "AIDCALC.cbl", "line": 30, "old_text": later_old, "new_text": later_new}}], note="fix")
+    assert not fix["warnings"]
+    out = feedback.apply(program, [{"op": "artifact.delete_line", "payload": {
+        "artifact": "AIDCALC.cbl", "line": 11, "old_text": dup}}], note="repeated")
+    assert not out["warnings"] and "Delete AIDCALC.cbl line 11" in out["applied"][0]["description"]
+    got = program.current_artifact("AIDCALC.cbl")["transcription"].splitlines()
+    assert len(got) == len(lines) - 1 and got[10] == lines[11] and got[28] == later_new
+    flags = program.verification(art["id"])["flags"]
+    assert [f["line"] for f in flags] == [39] and program.verification(art["id"])["lines"] == len(lines) - 1
+    assert program.corrections()[0]["payload"]["line"] == 29                   # the earlier correction moved up with its line
+    C.apply_corrections(program)                                               # a replay does not delete anything again
+    assert program.current_artifact("AIDCALC.cbl")["transcription"].splitlines() == got
+    feedback.undo(program, out["applied"][0]["id"])
+    back = program.current_artifact("AIDCALC.cbl")["transcription"].splitlines()
+    assert back == lines[:29] + [later_new] + lines[30:] and program.corrections()[0]["payload"]["line"] == 30
+    assert sorted(f["line"] for f in program.verification(art["id"])["flags"]) == [11, 40]
+
+
+def test_a_deletion_is_relocated_by_its_neighbours_after_a_restitch():
+    from types import SimpleNamespace
+    from core.model.restitch import _correction_positions
+    current = ["A.", "  MOVE 1 TO X.", "  MOVE 2 TO Y.", "B."]                  # the repeated line is already deleted
+    rebuilt = ["A.", "  MOVE 1 TO X.", "  MOVE 1 TO X.", "  MOVE 2 TO Y.", "B."]   # the new stitch has it again
+    delete = {"id": 1, "op": "artifact.delete_line", "payload": {
+        "artifact": "A.cbl", "line": 2, "old_text": "  MOVE 1 TO X.", "_around": ["A.", "  MOVE 2 TO Y."]}}
+    store = SimpleNamespace(corrections=lambda: [delete])
+    art = {"name": "A.cbl", "transcription": "\n".join(current)}
+    # both copies sit next to a different neighbour pair, so only the one between "A." and "MOVE 2" fits: none does here
+    assert _correction_positions(store, art, "\n".join(rebuilt)) == []
+    delete["payload"]["_around"] = ["  MOVE 1 TO X.", "  MOVE 2 TO Y."]
+    assert _correction_positions(store, art, "\n".join(rebuilt)) == [(delete, 3)]

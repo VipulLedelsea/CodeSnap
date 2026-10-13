@@ -10,6 +10,8 @@ from tests.test_deepdive import FakeClient, fact, RUN1
 
 @pytest.fixture
 def store(tmp_path):
+    if not RUN1.exists():
+        pytest.skip(f"fixture run1_program is not present in this checkout ({RUN1}); it is not in the repository")
     shutil.copytree(RUN1, tmp_path / "run1")
     with ProgramStore.open("run1", root=tmp_path) as st:
         yield st

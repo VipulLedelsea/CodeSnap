@@ -231,7 +231,9 @@ _FIXED_COLUMN_CLAUSE = (
 
 _PANE_CLAUSE = (
     "Do NOT include the editor's line-number gutter, fold arrows, breakpoint dots, minimaps, "
-    "scrollbars, tab bars, or status bars \u2014 only the content itself. If several windows are "
+    "scrollbars, tab bars, or status bars \u2014 only the content itself. The editor's own text is never source: "
+    "skip the status bar under the code (for example 'Ln 150, Col 12', 'Spaces: 4', 'UTF-8', 'LF'), file tab "
+    "titles and breadcrumbs, even when they sit directly under the last line of code. If several windows are "
     "visible, transcribe ONLY the primary focused editor pane; ignore other windows, the dock, and "
     "menu bars. If a line is cut off at the screen edge or truly unreadable, transcribe what is "
     "visible and end that line's string with the marker [CUT OFF] \u2014 never guess the hidden part. "
@@ -902,8 +904,28 @@ def _strip_indent_guides(text: str) -> str:
     return "\n".join(out)
 
 
+# An editor's status bar read as the last line of a screenshot: "Ln 150, Col 12", "Spaces: 4", "UTF-8  LF". Source code
+# does not contain these, so such a line at the edge of a frame is the editor, not the file.
+_STATUS_BAR = _re.compile(r"\b(?:Ln|Line)\s+\d+\s*,\s*(?:Col|Column)\s+\d+|\b(?:Spaces|Tab Size):\s*\d+\b|"
+                          r"\bUTF-?8\b.*\b(?:LF|CRLF)\b", _re.I)
+
+
+def drop_status_bar(text: str) -> str:
+    lines = text.split("\n")
+    for _ in range(3):
+        if lines and not lines[-1].strip():
+            lines.pop()
+        elif lines and _STATUS_BAR.search(lines[-1]):
+            lines.pop()
+        else:
+            break
+    while lines and _STATUS_BAR.search(lines[0]):
+        lines.pop(0)
+    return "\n".join(lines)
+
+
 def clean_source(text: str, mode: str | None = None) -> str:
-    return _clean_source(text, mode)
+    return drop_status_bar(_clean_source(text, mode))
 
 
 def source_mode(raw_parts: list) -> str | None:
@@ -1007,6 +1029,189 @@ def merge_frames(raw_parts: list, metas: list | None = None):
     return code, parts
 
 
+def _vote_lines(final, parts, metas, min_ratio=0.85):
+    """Settle each stitched line by what the screenshots that show it read. Every line of a file is on two to nine screenshots,
+    and a misread (a comma read as a period, a zero for the letter O) is usually on one of them. A line is replaced only when
+    the other readings of it outweigh the current one at least two to one, at least two screenshots agree on the replacement,
+    and the replacement is nearly the same text (so a different line that was matched by position cannot win). Pixel-verified
+    readings count double. Returns (final text, [(line number, old text, new text)])."""
+    import collections
+    from core import verify
+    lines = final.split("\n")
+    votes = [collections.Counter() for _ in lines]
+    frames = [collections.defaultdict(set) for _ in lines]
+    for k, (part, meta) in enumerate(zip(parts, metas)):
+        rows = part.split("\n")
+        status = (meta or {}).get("status")
+        status = status if isinstance(status, list) and len(status) == len(rows) else None
+        for j, i in enumerate(verify._line_map(part, final, carry_replacements=True)):
+            if i is None or not rows[i].strip() or "[CUT OFF]" in rows[i]:
+                continue
+            votes[j][rows[i].rstrip()] += 2.0 if status and status[i] in ("verified", "reread") else 1.0
+            frames[j][rows[i].rstrip()].add(k)
+    changed = []
+    for j, line in enumerate(lines):
+        tally = votes[j]
+        if len(tally) < 2 or not line.strip() or "[CUT OFF]" in line:
+            continue
+        mine = tally.get(line.rstrip(), 0.0)
+        # Two identical long lines in a row are rarely real source: a screenshot read a line twice and skipped its neighbour.
+        # The repeated text then has no claim over a different reading of the same place, even a single one that ties it.
+        twin = len(line.strip()) >= 25 and ((j + 1 < len(lines) and lines[j] == lines[j + 1]) or (j and lines[j] == lines[j - 1]))
+        alternatives = [(w, t) for t, w in tally.items() if t != line.rstrip()
+                        and _difflib.SequenceMatcher(None, line.rstrip(), t, autojunk=False).ratio() >= (0.7 if twin else min_ratio)]
+        if not alternatives:
+            continue
+        weight, best = max(alternatives)
+        enough = (weight >= mine and len(frames[j][best]) >= 1) if twin else (weight >= 2 * max(mine, 1.0) and len(frames[j][best]) >= 2)
+        if enough:
+            changed.append((j + 1, line, best))
+            lines[j] = best
+    return "\n".join(lines), changed
+
+
+def _trim_unverified_edges(parts, metas, max_rows=3, min_verified=0.8):
+    """Drop the rows at the top or bottom edge of a screenshot that the pixel check could not match, when the neighbouring
+    screenshot shows the same place again. A row cut by the edge of the screen is read half-seen, sometimes as two rows, and
+    such a row is in the text twice or wrong. The check only applies to a screenshot whose other rows were matched (so the check
+    works on it), and only when the lines next to the dropped rows are also on the neighbouring screenshot (so the rows are not
+    the only place the lines are shown)."""
+    out = [p.split("\n") for p in parts]
+    dropped = []
+    key = lambda l: _re.sub(r"\s+", " ", l).strip()
+    for k, lines in enumerate(out):
+        status = (metas[k] or {}).get("status") if k < len(metas) else None
+        if not isinstance(status, list) or len(status) != len(lines) or len(lines) < 12:
+            continue
+        verified = sum(1 for x in status if x in ("verified", "reread")) / len(lines)
+        if verified < min_verified:
+            continue
+        for edge in ("tail", "head"):
+            neighbour = k + 1 if edge == "tail" else k - 1
+            if not 0 <= neighbour < len(out):
+                continue
+            n = 0
+            seq = range(len(lines) - 1, -1, -1) if edge == "tail" else range(len(lines))
+            for i in seq:
+                if status[i] in ("unchecked", "cut") and lines[i].strip() and n < max_rows:
+                    n += 1
+                else:
+                    break
+            if not n:
+                continue
+            kept = lines[:len(lines) - n] if edge == "tail" else lines[n:]
+            near = [key(l) for l in (kept[-3:] if edge == "tail" else kept[:3]) if len(_re.sub(r"\W", "", l)) >= 6]
+            seen = {key(l) for l in out[neighbour]}
+            if len(near) >= 2 and sum(1 for l in near if l in seen) >= 2:
+                dropped.append((k, edge, n))
+                lines[:] = kept
+                status[:] = status[:len(status) - n] if edge == "tail" else status[n:]
+    return ["\n".join(lines) for lines in out], dropped
+
+
+def _statement_rows(lines):
+    """[(line index, indent mod 4)] for each COBOL statement line (area B, not a comment): statements sit at steps of four."""
+    out = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if len(line) < 8 or not stripped or line[6:7] == "*" or stripped.startswith("*"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent >= 11:
+            out.append((i, indent % 4))
+    return out
+
+
+def _align_frame_columns(parts, min_run=8, min_file=60):
+    """Move left by one column the stretches of a screenshot that were read one column to the right of the file's own pattern.
+    The editor can shift sideways by a column between screenshots (a small horizontal scroll), and the pixel check then agrees
+    with the read, because the text really sits there on that screen. COBOL statements sit at steps of four from the margin, so
+    when the file as a whole shares one indent remainder and eight or more statements in a row on a screen have the next one,
+    that stretch is off by one column and the file is not. The stretch is taken back over the lines just above its first
+    statement (a paragraph name or division line), and forward to the end of the screen when no normal statement follows.
+    Returns (parts, [(screen index, first line, last line)])."""
+    import collections
+    split = [p.split("\n") for p in parts]
+    rows = [_statement_rows(lines) for lines in split]
+    pooled = collections.Counter(r for one in rows for _, r in one)
+    total = sum(pooled.values())
+    if total < min_file:
+        return parts, []
+    major, count = pooled.most_common(1)[0]
+    if count / total < 0.85:
+        return parts, []
+    bad = (major + 1) % 4
+    out, moved = [], []
+    for k, (lines, one) in enumerate(zip(split, rows)):
+        regions, i = [], 0
+        while i < len(one):
+            if one[i][1] != bad:
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(one) and one[j + 1][1] == bad:
+                j += 1
+            if j - i + 1 >= min_run:
+                start = one[i - 1][0] + 1 if i else 0
+                end = len(lines) - 1 if j == len(one) - 1 else one[j][0]
+                regions.append((start, end))
+            i = j + 1
+        for start, end in regions:
+            for n in range(start, end + 1):
+                if lines[n].startswith(" "):
+                    lines[n] = lines[n][1:]
+            moved.append((k, start + 1, end + 1))
+        out.append("\n".join(lines))
+    return out, moved
+
+
+def _align_indent_grid(parts, min_run=8, min_lines=60, min_share=0.95):
+    """The same repair for source with an ordinary indentation step (two or four spaces): a stretch of a screenshot read one
+    column to the left or right of the file's own grid. The file must be almost entirely on a grid of 2 or 4 (95% of its
+    indented lines), and the stretch must be eight or more consecutive indented lines that are ALL one column off it, so a
+    single hand-aligned continuation line is never touched. Lines with tabs and lines at column one are left alone.
+    Returns (parts, [(screen index, first line, last line)])."""
+    import collections
+    split = [p.split("\n") for p in parts]
+    rows = []
+    for lines in split:
+        one = []
+        for i, line in enumerate(lines):
+            indent = len(line) - len(line.lstrip(" "))
+            if line.strip() and "\t" not in line and indent > 0 and not line.lstrip().startswith(("*", "[CUT OFF]")):
+                one.append((i, indent))
+        rows.append(one)
+    flat = [ind for one in rows for _, ind in one]
+    if len(flat) < min_lines:
+        return parts, []
+    unit = next((u for u in (4, 2) if sum(1 for x in flat if x % u == 0) / len(flat) >= min_share), None)
+    if unit is None:
+        return parts, []
+    moved, out = [], []
+    for k, (lines, one) in enumerate(zip(split, rows)):
+        i = 0
+        while i < len(one):
+            rem = one[i][1] % unit
+            if rem not in (1, unit - 1):
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(one) and one[j + 1][1] % unit == rem:
+                j += 1
+            if j - i + 1 >= min_run:
+                # Which way? The one that puts the shallowest line of the stretch on the grid, at one step or deeper. With
+                # a two-space grid an odd indent is off either way; if both ways fit, nothing is changed.
+                shallow = min(ind for _, ind in one[i:j + 1])
+                ways = [d for d in (-1, 1) if (shallow + d) % unit == 0 and shallow + d >= unit]
+                if len(ways) == 1:
+                    for n, _ in one[i:j + 1]:
+                        lines[n] = lines[n][1:] if ways[0] < 0 else " " + lines[n]
+                    moved.append((k, one[i][0] + 1, one[j][0] + 1))
+            i = j + 1
+        out.append("\n".join(lines))
+    return out, moved
+
+
 def _observed_cobol_columns(parts):
     """Use an observed valid copy of a misaligned paragraph/comment, never invent padding."""
     from collections import Counter
@@ -1065,6 +1270,17 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     if (mode == "columns" and not any((m or {}).get('spacing', {}).get('calibrated') for m in metas)
             and source_kind('\n'.join(raw_parts)) in ('cobol', 'copybook')):
         cleaned = _observed_cobol_columns(cleaned)
+    cleaned, trimmed = _trim_unverified_edges(cleaned, metas)
+    if trimmed:
+        notes["edge_rows_dropped"] = trimmed
+    if mode == "columns" and source_kind('\n'.join(raw_parts)) in ('cobol', 'copybook'):
+        cleaned, moved = _align_frame_columns(cleaned)
+        if moved:
+            notes["column_shifted_frames"] = moved
+    elif mode is None:
+        cleaned, moved = _align_indent_grid(cleaned)
+        if moved:
+            notes["column_shifted_frames"] = moved
     parts = _dedup_best(cleaned) or [c for c in cleaned if c.strip()]
     prefer = {k for k, v in statuses.items() if v in ("verified", "reread")}
     stitched = _stitch(parts, prefer, notes)
@@ -1079,9 +1295,20 @@ def merge_verified(raw_parts: list, metas: list | None = None):
             statuses[k] = "joined"
     keep = mode or is_column_sensitive(best) or detect_format(best)
     final = best
+    if best is stitched and len(cleaned) > 1:
+        final, voted = _vote_lines(final, cleaned, metas)
+        if voted:
+            notes["voted_lines"] = voted
     from core.spacing import reconcile
     final,spacing_notes=reconcile(final,cleaned,metas)
     notes.update(spacing_notes)
+    if mode != "columns":
+        # Each screenshot's indentation is only relative to its own text until the pixel check has placed it, so a stretch that
+        # is one column off its file's grid shows up here, on the finished text, not on the individual screens.
+        aligned, moved = _align_indent_grid([final])
+        if moved:
+            final = aligned[0]
+            notes["indent_runs_moved"] = [(a, b) for _, a, b in moved]
     verify.align_line_evidence(final, raw_parts, cleaned, metas, notes)
     verify.spacing_agreement(final, cleaned, metas, notes)
     # Conflicting reads are evidence of uncertainty even if either isolated row
@@ -1157,6 +1384,7 @@ def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8
     merged list, or None if no overlap is found."""
     max_k = min(len(merged), 60)
     old_labels = {row.strip() for row in merged}
+    old_collapsed = {" ".join(row.split()) for row in merged}
     sql_identity = _re.compile(r'^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW|(?:UNIQUE\s+)?INDEX)\s+([\w."\[\]]+)', _re.I)
     old_objects = {m.group(0).strip().upper() for row in merged if (m := sql_identity.match(row))}
     for k in range(max_k, min_overlap - 1, -1):
@@ -1182,6 +1410,17 @@ def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8
                     continue
                 if any(m.group(0).strip().upper() not in old_objects for row in new_prefix
                        if (m := sql_identity.match(row))):
+                    continue
+                # Whatever this screen shows above the overlap was already on an earlier screen, so it is skipped as a repeat.
+                # Several lines never seen before mean the "overlap" is a different copy of a repeated template (two
+                # procedures that end alike), and skipping them would drop real lines.
+                # (A row is "seen" when an earlier row is nearly the same text: a separator comment read with a different
+                # number of dashes is the same line, a procedure header with a different number is not.)
+                unseen = [row for row in new_prefix
+                          if len(_re.sub(r"\W", "", row)) >= 6 and " ".join(row.split()) not in old_collapsed
+                          and not any(_difflib.SequenceMatcher(None, _re.sub(r"[\W_]", "", row), _re.sub(r"[\W_]", "", m),
+                                                               autojunk=False).ratio() >= 0.93 for m in merged[-200:])]
+                if len(unseen) > max(1, len(new_prefix) // 8):
                     continue
                 # a line cut off at the bottom of one screen is usually whole on the next — keep the whole copy
                 tail = [w if "[CUT OFF]" in t and "[CUT OFF]" not in w else t for t, w in zip(tail, window)]
@@ -1439,6 +1678,22 @@ def stitch_parts(parts: list) -> str:
     return _stitch(parts, frozenset(), {})
 
 
+def _drop_cut_duplicates(lines: list) -> list:
+    """A row cut by the screen edge is read as part of a line, with the [CUT OFF] marker; when the whole line follows or
+    precedes it in the stitched text, the partial row is a repeat of that line (and a misread of its start does not stop it being
+    one: the two rows are nearly the same text). It is dropped. A cut row with no whole line beside it is kept."""
+    out = []
+    for i, line in enumerate(lines):
+        if "[CUT OFF]" in line and line.strip():
+            base = line.replace("[CUT OFF]", "").strip()
+            near = [lines[j] for j in (i - 1, i + 1) if 0 <= j < len(lines) and lines[j].strip() and "[CUT OFF]" not in lines[j]]
+            if len(base) >= 8 and any(_difflib.SequenceMatcher(None, base, n.strip(), autojunk=False).ratio() >= 0.75
+                                      and len(n.strip()) >= 0.8 * len(base) for n in near):
+                continue
+        out.append(line)
+    return out
+
+
 def _stitch(parts: list, prefer, notes: dict) -> str:
     from core.verify import sideways_merge_ex, sideways_views
     frames = []
@@ -1505,6 +1760,13 @@ def _stitch(parts: list, prefer, notes: dict) -> str:
             nxt = next((l for l in lines if l.strip()), "")
             notes.setdefault("breaks", []).append((prev.rstrip(), nxt.rstrip()))
         merged = _upgrade_cut(stitched if stitched is not None else merged + [""] + lines, lines)
+    merged = _drop_cut_duplicates(merged)
+    from core.cobol.detect import detect_kind
+    if detect_kind("\n".join(merged)) == "cobol":
+        from core.dedupe import drop_repeated_paragraphs
+        merged, repeated = drop_repeated_paragraphs(merged)
+        if repeated:
+            notes["repeated_paragraphs"] = repeated
     return "\n".join(merged)
 
 
@@ -1695,7 +1957,7 @@ def fix_source(client, code: str, language: str, errors: str) -> str:
     if len(code) > MAX_FIX_CHARS:
         raise FixRejected("the file is too long to correct in one call; the original was kept")
     kwargs = dict(
-        model=MODEL,
+        model=READ_MODEL,
         max_tokens=FIX_MAX_TOKENS,
         system=FIX_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": (
@@ -1784,7 +2046,7 @@ def explain_error(client, language: str, errors: str, code: str = "") -> str:
         return ""
     try:
         msg = client.messages.create(
-            model=TEXT_MODEL, max_tokens=300, system=EXPLAIN_SYSTEM_PROMPT,
+            model=TEXT_MODEL, max_tokens=1024, system=EXPLAIN_SYSTEM_PROMPT,
             messages=[{"role": "user", "content":
                        f"Language: {language or 'unknown'}\n\nCompiler error:\n{errors}\n\nCode:\n{code[:4000]}"}],
         )

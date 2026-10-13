@@ -8,6 +8,7 @@ from .store import entity_key
 OPS = {
     "artifact.confirm_line": ("artifact", "line", "old_text"),
     "artifact.replace_line": ("artifact", "line", "old_text", "new_text"),
+    "artifact.delete_line": ("artifact", "line", "old_text"),
     "entity.rename": ("key", "name"),
     "entity.set_attrs": ("key", "attrs"),
     "entity.delete": ("key",),
@@ -78,7 +79,10 @@ def _rels(store, kind, a, b, deep=False):
 def validate(op, payload):
     if op not in OPS:
         raise CorrectionError(f"unknown correction: {op}")
-    missing = [k for k in OPS[op] if payload.get(k) in (None, "")]
+    # an empty new_text on a line correction is allowed: it blanks the line (removes editor junk) and keeps every later
+    # line number where it was
+    missing = [k for k in OPS[op] if payload.get(k) in (None, "") and not (op == "artifact.replace_line" and k == "new_text"
+                                                                           and payload.get(k) == "")]
     if missing:
         raise CorrectionError(f"{op} needs {', '.join(missing)}")
     if op == "entity.add" and payload["kind"] not in ENTITY_KINDS:
@@ -91,14 +95,14 @@ def validate(op, payload):
         raise CorrectionError("severity must be critical, high, medium, low or info")
     if op == "finding.add" and payload["category"] not in FINDING_CATEGORIES:
         raise CorrectionError(f"unknown finding category {payload['category']}")
-    if op in ("artifact.replace_line", "artifact.confirm_line"):
+    if op in ("artifact.replace_line", "artifact.confirm_line", "artifact.delete_line"):
         if not isinstance(payload.get("line"), int) or isinstance(payload.get("line"), bool) or payload["line"] < 1:
             raise CorrectionError("line must be a positive whole number")
         if not isinstance(payload.get("old_text"), str) or (op == "artifact.replace_line" and not isinstance(payload.get("new_text"), str)):
             raise CorrectionError("old_text and new_text must be text")
         if op == "artifact.replace_line" and payload["old_text"] == payload["new_text"]:
             raise CorrectionError("the corrected line is unchanged")
-        if op == "artifact.replace_line" and (
+        if op == "artifact.replace_line" and payload["new_text"] != "" and (
                 len(payload["new_text"].splitlines()) != 1 or payload["new_text"].splitlines()[0] != payload["new_text"]):
             raise CorrectionError("the corrected line must be exactly one line of text")
     for k in ("attrs",):
@@ -111,8 +115,10 @@ def describe(c) -> str:
     name = lambda k: (p.get(k) or "").split(":", 1)[-1]
     short = lambda s: str(s or "").strip()[:70] + ("…" if len(str(s or "").strip()) > 70 else "")
     return {
+        "artifact.delete_line": lambda: f"Delete {p.get('artifact')} line {p.get('line')} (not in the file): {short(p.get('old_text'))}",
         "artifact.confirm_line": lambda: f"Confirmed {p.get('artifact')} line {p.get('line')} against its screenshot",
-        "artifact.replace_line": lambda: f"Correct {p.get('artifact')} line {p.get('line')}: "
+        "artifact.replace_line": lambda: f"Remove {p.get('artifact')} line {p.get('line')} (left blank)" if p.get("new_text") == ""
+        else f"Correct {p.get('artifact')} line {p.get('line')}: "
                                            f"{short(p.get('old_text'))} → {short(p.get('new_text'))}",
         "entity.rename": lambda: f"Rename {name('key')} → {p.get('name')}",
         "entity.set_attrs": lambda: f"Set {', '.join(f'{k}={v}' for k, v in p.get('attrs', {}).items())} on {name('key')}",
@@ -188,10 +194,80 @@ def _resolve_verification_line(store, artifact_id, line):
     store.set_verification(artifact_id, verification)
 
 
+LINE_OPS = ("artifact.replace_line", "artifact.confirm_line", "artifact.delete_line")
+
+
+def _shift_lines(store, art, n, delta, skip_id=None, only=None):
+    """Keep every record that points at a line number of `art` true after line n was removed (delta -1) or put back (+1):
+    the other line corrections, the line flags and the line count. Returns the ids of the corrections that were moved, so an
+    undo moves back exactly those."""
+    moved = []
+    for other in store.corrections():
+        q = other["payload"]
+        if other["id"] == skip_id or other["op"] not in LINE_OPS or q.get("artifact") != art["name"]:
+            continue
+        if only is not None and other["id"] not in only:
+            continue
+        if isinstance(q.get("line"), int) and q["line"] >= (n + 1 if delta < 0 else n):
+            q = dict(q)
+            q["line"] += delta
+            store.update_correction(other["id"], payload=q)
+            moved.append(other["id"])
+    verification = copy.deepcopy(store.verification(art["id"]))
+    if verification:
+        flags = []
+        for f in verification.get("flags") or []:
+            line = f.get("line")
+            if isinstance(line, int) and delta < 0 and line == n:
+                continue          # the flagged line itself is gone
+            flags.append({**f, "line": line + delta} if isinstance(line, int) and line >= (n + 1 if delta < 0 else n) else f)
+        dropped = len(verification.get("flags") or []) - len(flags)
+        verification["flags"] = flags
+        verification["flagged"] = max(0, int(verification.get("flagged") or 0) - dropped)
+        verification["lines"] = max(0, int(verification.get("lines") or 0) + delta)
+        shifted_gaps = []
+        for g in verification.get("gaps") or []:
+            if isinstance(g, dict):
+                g = {k: (v + delta if k in ("line", "after", "before") and isinstance(v, int) and v >= n else v) for k, v in g.items()}
+            shifted_gaps.append(g)
+        verification["gaps"] = shifted_gaps
+        store.set_verification(art["id"], verification)
+    return moved
+
+
 def apply_one(store, c) -> str | None:
     op, p = c["op"], dict(c["payload"])
     changed = False
-    if op in ("artifact.replace_line", "artifact.confirm_line"):
+    if op == "artifact.delete_line":
+        art = store.current_artifact(p["artifact"])
+        if not art:
+            return f"file {p['artifact']!r} not found"
+        reviewed_version = p.get('_reviewed_artifact_id', (p.get('_before') or {}).get('artifact_id'))
+        if reviewed_version is not None and reviewed_version != art['id']:
+            return 'this file was recaptured; review this line again or explicitly rebase the correction'
+        if p.get('_applied_to') == art['id']:
+            return None               # already removed from this version of the file
+        lines = (art.get("transcription") or "").splitlines()
+        n = p["line"]
+        if n > len(lines):
+            return f"line {n} is outside this {len(lines)}-line file"
+        if lines[n - 1] != p["old_text"]:
+            return f"line {n} no longer matches the reviewed text"
+        manual = copy.deepcopy((store.get_meta("manual_capture_concerns") or {}).get(str(art["id"])))
+        p.setdefault("_before", {"artifact_id": art["id"], "text": lines[n - 1],
+                                 "text_hash": hashlib.sha1((art.get("transcription") or "").encode()).hexdigest()[:16],
+                                 "verification": copy.deepcopy(store.verification(art["id"])),
+                                 "manual_concerns": manual})
+        p["_reviewed_artifact_id"] = art["id"]
+        p["_around"] = [lines[n - 2] if n > 1 else None, lines[n] if n < len(lines) else None]
+        del lines[n - 1]
+        trailing = "\n" if (art.get("transcription") or "").endswith("\n") else ""
+        store.fill_artifact(art["id"], artifact_type=art["artifact_type"], language=art["language"],
+                            transcription="\n".join(lines) + trailing)
+        p["_shifted"] = _shift_lines(store, art, n, -1, skip_id=c["id"])
+        p["_applied_to"] = art["id"]
+        changed = True
+    elif op in ("artifact.replace_line", "artifact.confirm_line"):
         if op == "artifact.confirm_line":
             p['new_text'] = p['old_text']
         art = store.current_artifact(p["artifact"])
@@ -347,6 +423,36 @@ def undo(store, correction_id) -> dict:
     op, p = c["op"], c["payload"]
     if op == "entity.merge":
         raise CorrectionError("merges can't be undone automatically — re-extract the affected files")
+    if op == "artifact.delete_line":
+        art = store.current_artifact(p["artifact"])
+        if not art or p.get("_reviewed_artifact_id") not in (None, art["id"]) or p.get("_applied_to") != art["id"]:
+            raise CorrectionError("this file was recaptured, so the deleted line can't be safely put back")
+        lines = (art.get("transcription") or "").splitlines()
+        n, (above, below) = p["line"], (p.get("_around") or [None, None])
+        if (n > 1 and above is not None and (n - 2 >= len(lines) or lines[n - 2] != above)) or \
+                (below is not None and (n - 1 >= len(lines) or lines[n - 1] != below)):
+            raise CorrectionError("the lines around it changed again, so it can't be safely put back")
+        store.update_correction(correction_id, active=False)
+        lines.insert(n - 1, p["old_text"])
+        trailing = "\n" if (art.get("transcription") or "").endswith("\n") else ""
+        store.fill_artifact(art["id"], artifact_type=art["artifact_type"], language=art["language"],
+                            transcription="\n".join(lines) + trailing)
+        _shift_lines(store, art, n, +1, skip_id=correction_id, only=set(p.get("_shifted") or []))
+        before = p.get("_before") or {}
+        was = [f for f in (before.get("verification") or {}).get("flags") or [] if f.get("line") == n]
+        verification = copy.deepcopy(store.verification(art["id"]))
+        if verification and was:                     # the line's own doubt comes back with it
+            verification["flags"] = sorted([*(verification.get("flags") or []), *was], key=lambda f: f.get("line") or 0)
+            verification["flagged"] = int(verification.get("flagged") or 0) + len(was)
+            store.set_verification(art["id"], verification)
+        with store.transaction():
+            manual = store.get_meta("manual_capture_concerns") or {}
+            if before.get("manual_concerns") is None:
+                manual.pop(str(art["id"]), None)
+            else:
+                manual[str(art["id"])] = before["manual_concerns"]
+            store.set_meta("manual_capture_concerns", manual)
+        return {"id": correction_id, "undone": describe(c)}
     if op in ("artifact.replace_line", "artifact.confirm_line"):
         art = store.current_artifact(p["artifact"])
         if art and p.get('_reviewed_artifact_id', (p.get('_before') or {}).get('artifact_id')) not in (None, art['id']):

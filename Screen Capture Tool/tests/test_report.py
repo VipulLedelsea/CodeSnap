@@ -154,3 +154,16 @@ def test_report_api_waits_for_deep_analysis(tmp_path, monkeypatch):
     # Starting it is an explicit POST; afterwards the report waits on the running job.
     assert client.post(f"/api/programs/{slug}/report/prepare").status_code == 200
     assert started == [slug]
+
+
+def test_business_inputs_reach_the_word_report_and_close_their_open_items(program):
+    from core.report import settings
+    before = docx_bytes(program, today=TODAY)
+    settings.save(program, {"users_volumes": "40 clerks and 12,000 payments a month", "hosting_cost": "$180,000 a year in total"})
+    after = docx_bytes(program, today=TODAY)
+    text = lambda data: "\n".join(p.text for p in docx.Document(io.BytesIO(data)).paragraphs) + "\n".join(
+        c.text for t in docx.Document(io.BytesIO(data)).tables for r in t.rows for c in r.cells)
+    assert "12,000 payments a month" not in text(before) and "12,000 payments a month" in text(after)
+    assert "Entered by the client and used in place of open items" in text(after)
+    assert "Current licensing and capacity costs per platform" in text(before)
+    assert "Current licensing and capacity costs per platform" not in text(after)

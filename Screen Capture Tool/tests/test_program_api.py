@@ -41,7 +41,7 @@ def test_create_list_and_detail(api, tmp_path):
     aid = seed(slug, tmp_path)
     d = api.get(f"/api/programs/{slug}").json()
     assert d["coverage"]["files"] == 1 and d["artifacts"][0]["entities"] == 3 and d["artifacts"][0]["frames"] == 1
-    assert d["artifacts"][0]["cost"] == 0.0013 and isinstance(d["usage_by_step"], list)
+    assert d["artifacts"][0]["cost"] == 0.0006  # structure runs on the reading model (Sonnet), not Opus and isinstance(d["usage_by_step"], list)
     assert d["usage_by_step"][0]["step"] == "structure"
     art = api.get(f"/api/programs/{slug}/artifacts/{aid}").json()
     assert {e["name"] for e in art["entities"]} == {"Billing.py", "Billing", "calculate"}
@@ -80,3 +80,12 @@ def test_import_and_session_start(api, tmp_path):
     assert api.post("/api/session/start?program=missing").status_code == 404
     r = api.post(f"/api/session/start?program={slug}&idle_stop=3").json()
     assert r["program"] == slug and r["project_mode"] is True and api.started["program"] == slug
+
+
+def test_program_detail_carries_the_budget_so_the_page_can_show_spend_against_it(api, tmp_path):
+    slug = api.post("/api/programs", json={"name": "Spend"}).json()["program"]["slug"]
+    seed(slug, tmp_path)
+    assert api.get(f"/api/programs/{slug}").json()["budget_usd"] is None
+    api.post(f"/api/programs/{slug}/budget", json={"budget_usd": 25})
+    d = api.get(f"/api/programs/{slug}").json()
+    assert d["budget_usd"] == 25 and d["usage"]["calls"] >= 1 and d["usage"]["cost"] > 0

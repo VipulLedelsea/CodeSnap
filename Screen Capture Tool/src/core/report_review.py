@@ -208,7 +208,7 @@ def _ask(store, client, model, art, claims):
         v = got.get(i) or {"verdict": "cannot_check"}
         verdict = gate(v, c["text"], text=text)
         out[c["key"]] = {"verdict": verdict, "correction": (v.get("correction") or "")[:300], "why": (v.get("why") or "")[:300],
-                         "file": art["name"], "lines": v.get("lines"), "id": c["id"], "kind": c["kind"]}
+                         "file": art["name"], "lines": v.get("lines"), "id": c["id"], "kind": c["kind"], "basis": D._hash(text)}
     return out
 
 
@@ -231,10 +231,15 @@ def fair_facts(dd, names, cap, per_file_min=3):
     return out
 
 
-def _ask_program(store, client, model, claims):
+def _program_facts(store):
     dd = store.get_meta("deepdive") or {}
     names = {str(a["id"]): a["name"] for a in store.artifacts()}
-    facts = fair_facts(dd, names, 600)
+    return fair_facts(dd, names, 600)
+
+
+def _ask_program(store, client, model, claims):
+    facts = _program_facts(store)
+    basis = D._hash("\n".join(facts))
     body = ("Source findings already checked against quotes in the code:\n" + "\n".join(facts)
             + "\n\nClaims (these span several files; decide from the findings above):\n"
             + "\n".join(claim_line(i, c) for i, c in enumerate(claims, 1)))
@@ -247,7 +252,7 @@ def _ask_program(store, client, model, claims):
         v = got.get(i) or {}
         verdict = gate(v, c["text"], findings=len(facts))
         out[c["key"]] = {"verdict": verdict, "correction": (v.get("correction") or "")[:300], "why": (v.get("why") or "")[:300],
-                         "file": None, "lines": None, "id": c["id"], "kind": c["kind"]}
+                         "file": None, "lines": None, "id": c["id"], "kind": c["kind"], "basis": basis}
     return out
 
 
@@ -258,10 +263,20 @@ def run(store, client, report_docx, model=None) -> dict:
     model = model or os.environ.get(MODEL_ENV) or pipeline.FINAL_MODEL
     arts = {a["name"]: a for a in store.artifacts() if (a.get("transcription") or "").strip()}
     claims = extract_claims(report_docx, list(arts))
-    by_file, spanning = {}, []
+    # A claim is checked again only when what it was checked against has changed: the text of the file it names, or, for a
+    # claim that spans files, the set of findings. Re-analysing after editing three files then re-checks only their claims.
+    earlier = (store.get_meta("report_review") or {}).get("verdicts") or {}
+    program_basis = D._hash("\n".join(_program_facts(store)))
+    by_file, spanning, verdicts, errors, reused = {}, [], {}, [], 0
     for c in claims:
-        (by_file.setdefault(c["files"][0], []) if len(c["files"]) == 1 else spanning).append(c)
-    verdicts, errors = {}, []
+        single = len(c["files"]) == 1
+        basis = D._hash(arts[c["files"][0]].get("transcription") or "") if single else program_basis
+        old = earlier.get(c["key"])
+        if old and old.get("basis") == basis and (old.get("file") == c["files"][0] if single else old.get("file") is None):
+            verdicts[c["key"]] = old
+            reused += 1
+            continue
+        (by_file.setdefault(c["files"][0], []) if single else spanning).append(c)
     with ThreadPoolExecutor(max_workers=12) as pool:
         jobs = [pool.submit(_ask, store, client, model, arts[n], cs[i:i + CHUNK])
                 for n, cs in by_file.items() for i in range(0, len(cs), CHUNK)]
@@ -276,7 +291,8 @@ def run(store, client, report_docx, model=None) -> dict:
     counts = {}
     for v in verdicts.values():
         counts[v["verdict"]] = counts.get(v["verdict"], 0) + 1
-    return {"claims": len(claims), "counts": counts, "errors": errors}
+    return {"claims": len(claims), "counts": counts, "errors": errors,
+            "reused": reused}
 
 
 def verdicts(store) -> dict:

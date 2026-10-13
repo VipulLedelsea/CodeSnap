@@ -465,7 +465,13 @@ $("startBtn").addEventListener("click", async () => {
     const captureDisplay = pickedRegion ? pickedRegionDisplay : _display;
     if (captureDisplay) params.set("display", captureDisplay);
     const qs = params.toString();
-    await fetch("/api/session/start" + (qs ? "?" + qs : ""), { method: "POST" });
+    let started = await fetch("/api/session/start" + (qs ? "?" + qs : ""), { method: "POST" });
+    if (started.status === 409) {
+      const info = await started.json().catch(() => ({}));
+      if (!info.needs_confirm) { toast(info.error || "Could not start the capture."); return; }
+      if (!window.confirm(info.error)) return;      // analysis is paused while the capture runs; the user decides
+      started = await fetch("/api/session/start?" + (qs ? qs + "&" : "") + "confirm=true", { method: "POST" });
+    }
     const manual = idle === 0;
     toast((single ? "Single-agent (backup)" : "Team") + " session launched — switch to your editor and press Cmd+Shift+1"
       + (manual ? ". Manual mode: it won't auto-stop, press Cmd+Shift+1 again to finish." : "."));
@@ -926,6 +932,15 @@ function _issues(list) {
   return escapeHtml(txt.charAt(0).toUpperCase() + txt.slice(1));
 }
 function _lines(ls) { return ls && ls.length ? ` (line${ls.length > 1 || String(ls[0]).includes("–") ? "s" : ""} ${ls.slice(0, 6).join(", ")}${ls.length > 6 ? "…" : ""})` : ""; }
+function _spendLine(d) {
+  const u = d.usage || {};
+  if (!u.calls) return "";
+  const money = n => "$" + (n >= 100 ? n.toFixed(0) : n.toFixed(2));
+  const limit = d.budget_usd;
+  const used = limit ? ` · ${Math.round(100 * u.cost / limit)}% of the ${money(limit)} budget` : " · no budget cap set";
+  const warn = limit && u.cost >= 0.8 * limit ? ' class="pp-warn"' : "";
+  return `<div class="pp-spend"${warn}>Spent ${money(u.cost || 0)} on ${u.calls} calls${used}</div>`;
+}
 function renderProgress(d) {
   const p = d.progress || {};
   const box = $("progProgress");
@@ -942,7 +957,8 @@ function renderProgress(d) {
       <span>${busy ? bits.join(" · ") + ` — ${p.to_go} to go` : "Nothing left to process"}${attn ? ` · <em>${attn} need${attn > 1 ? "" : "s"} recapture</em>` : ""}</span>
     </div>
     ${busy ? `<button class="btn-link" data-stop-analysis type="button">Stop analysis</button>` : ""}
-    <div class="pp-bar">${seg(p.done, "ok")}${seg(p.needs_recapture + p.failed, "bad")}${seg(p.reviewing + p.reading, "busy")}${seg(p.waiting, "wait")}</div>`;
+    <div class="pp-bar">${seg(p.done, "ok")}${seg(p.needs_recapture + p.failed, "bad")}${seg(p.reviewing + p.reading, "busy")}${seg(p.waiting, "wait")}</div>
+    ${_spendLine(d)}`;
 }
 document.addEventListener("click", async (ev) => {
   const b = ev.target.closest && ev.target.closest("[data-stop-analysis]");
@@ -1731,8 +1747,11 @@ async function loadReportSettings() {
   let d;
   try { d = await _json(`/api/programs/${encodeURIComponent(program)}/report-settings`);
     if (program !== _program || request !== loadReportSettings.sequence) return; } catch (e) { if (program !== _program) return; box.textContent = e.message; return; }
+  const field = f => `<label>${escapeHtml(f.label)}<input type="text" data-k="${_attr(f.key)}" value="${_attr(d.values[f.key] || "")}" spellcheck="false"></label>`;
+  const details = d.fields.filter(f => f.group !== "business"), business = d.fields.filter(f => f.group === "business");
   box.innerHTML = `<p class="project-hint" style="margin:4px 0 8px">Shown in the Word/PDF report. Anything left empty is written as "Unknown" and listed as an open item.</p>
-    <div class="rs-grid">${d.fields.map(f => `<label>${escapeHtml(f.label)}<input type="text" data-k="${_attr(f.key)}" value="${_attr(d.values[f.key] || "")}" spellcheck="false"></label>`).join("")}</div>
+    <div class="rs-grid">${details.map(field).join("")}</div>
+    ${business.length ? `<h4 style="margin:14px 0 4px">Business inputs</h4><p class="project-hint" style="margin:0 0 8px">Volumes, cost, incidents and skills. Enter them once: they go to the executive summary and close the matching open items in the report.</p><div class="rs-grid">${business.map(field).join("")}</div>` : ""}
     <button class="btn-secondary" id="rsSave" type="button">Save report details</button>`;
   $("rsSave").addEventListener("click", async () => {
     const body = {};
@@ -1846,7 +1865,7 @@ async function openLineReview(base, artifactId, queue) {
       <div class="lr-context-label">Edit line ${d.line} below · the neighbouring lines stay read-only</div>
       <div class="lr-code-block" role="group" aria-label="Edit source line with previous and following lines"><div class="lr-code-lines">${(d.context || [{line:d.line, text:d.old_text, focus:true}]).map(row => `<div class="lr-code-row${row.focus ? " focus" : ""}"><span class="lr-line-number">${row.line}</span>${row.focus ? `<textarea class="lr-text" aria-label="Complete source line" rows="1" wrap="off" spellcheck="false"></textarea>` : `<code>${escapeHtml(row.text) || " "}</code>`}</div>`).join("")}</div></div>
       <p class="project-hint">Selecting an option only previews it. Apply saves your answer; it can be undone.</p>
-      <div class="lr-actions"><button class="btn-primary lr-save" type="button">Confirm selected text</button>${d.gap ? '<button class="btn-secondary lr-missing" type="button">Lines are missing here</button>' : ""}<button class="btn-link lr-skip" type="button">Can't tell — next</button></div>
+      <div class="lr-actions"><button class="btn-primary lr-save" type="button">Confirm selected text</button>${d.gap ? '<button class="btn-secondary lr-missing" type="button">Lines are missing here</button>' : ""}<button class="btn-secondary lr-delete" type="button" title="Removes this line from the file, for example a repeated line or editor text. The lines below move up by one. It can be undone.">This line is not in the file — delete it</button><button class="btn-link lr-remove" type="button" title="Leaves the line blank so no line numbers change">Blank it instead</button><button class="btn-link lr-skip" type="button">Can't tell — next</button></div>
       <div class="lr-result" role="status" aria-live="polite"></div>`;
     dialog.querySelector(".lr-close").onclick = () => dialog.close();
     const input = dialog.querySelector(".lr-text"); input.value = d.old_text;
@@ -1896,11 +1915,11 @@ async function openLineReview(base, artifactId, queue) {
         await advance(true);
       } catch (error) { dialog.querySelector(".lr-result").textContent = error.message; }
     };
-    const save = async (text) => {
+    const save = async (text, remove = false, del = false) => {
       const buttons = dialog.querySelectorAll(".lr-actions button"); buttons.forEach(button => button.disabled = true);
       const result = dialog.querySelector(".lr-result"); result.textContent = "Saving your answer and checking the file…";
       try {
-        const answer = await _json(`${base}/artifacts/${artifactId}/review/${d.line}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ old_text: d.old_text, new_text: text, text_hash: d.text_hash }) });
+        const answer = await _json(`${base}/artifacts/${artifactId}/review/${d.line}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ old_text: d.old_text, new_text: text, text_hash: d.text_hash, ...(remove ? { remove: true } : {}), ...(del ? { delete: true } : {}) }) });
         _progSig = "";
         await loadProgram();
         if (!dialog.isConnected) return;
@@ -1925,6 +1944,8 @@ async function openLineReview(base, artifactId, queue) {
       }
     };
     dialog.querySelector(".lr-save").onclick = () => save(input.value);
+    dialog.querySelector(".lr-remove").onclick = () => save("", true);
+    dialog.querySelector(".lr-delete").onclick = () => { if (window.confirm(`Delete line ${d.line} from the file?\n\n${d.old_text}`)) save("", false, true); };
   };
   await show();
 }

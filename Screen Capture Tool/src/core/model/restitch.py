@@ -23,13 +23,13 @@ def _correction_positions(store, art, code):
     updates = []
     for correction in store.corrections():
         p = correction['payload']
-        if correction['op'] not in ('artifact.replace_line', 'artifact.confirm_line') or p.get('artifact') != art['name']:
+        if correction['op'] not in ('artifact.replace_line', 'artifact.confirm_line', 'artifact.delete_line') or p.get('artifact') != art['name']:
             continue
         index = p['line'] - 1
         if correction['op'] == 'artifact.confirm_line' and (
                 index >= len(old) or norm(old[index]) != norm(p['old_text'])):
             continue   # a confirmation of a line that is no longer there cannot block a rebuild
-        targets = {norm(p['old_text']), norm(p.get('new_text', p['old_text']))}
+        targets = {norm(p['old_text']), norm(p.get('new_text', p['old_text']))} - {''}   # a blanked line matches any blank row
         # Earlier rebases may have replaced old_text with the accepted value.
         # Saved screenshots can still contain the original reading; retain those
         # candidates, but require the same owner and unambiguous surrounding rows.
@@ -38,6 +38,18 @@ def _correction_positions(store, art, code):
                          (history.get('before') or {}).get('text')):
                 if isinstance(text, str):
                     targets.add(norm(text))
+        if correction['op'] == 'artifact.delete_line':
+            # the deleted line is no longer in the current text, so it is found by the two lines that surrounded it
+            above, below = (p.get('_around') or [None, None])
+            fits = [j for j, text in enumerate(new) if norm(text) == norm(p['old_text'])
+                    and (above is None or (j > 0 and norm(new[j - 1]) == norm(above)))
+                    and (below is None or (j + 1 < len(new) and norm(new[j + 1]) == norm(below)))]
+            if len(fits) > 1:
+                raise ValueError(f'Cannot safely relocate your deletion #{correction["id"]}: that line appears more than once '
+                                 'between the same neighbours. No changes were made.')
+            if fits:
+                updates.append((correction, fits[0] + 1))
+            continue                      # not found: the new stitching no longer has the line, so there is nothing to delete
         candidates = []
         for j, text in enumerate(new):
             if norm(text) not in targets:
@@ -137,7 +149,11 @@ def rebuild_saved_capture(store, artifact_id, progress=None):
             payload['line'] = line
             payload['_reviewed_artifact_id'] = new_id
             observed = code.splitlines()[line-1]
-            if correction['op'] == 'artifact.confirm_line':
+            if correction['op'] == 'artifact.delete_line':
+                payload['old_text'] = observed
+                payload.pop('_applied_to', None)     # the rebuilt text has the line again; the deletion is applied afresh
+                payload.pop('_shifted', None)
+            elif correction['op'] == 'artifact.confirm_line':
                 payload['old_text'] = observed
             elif normalized_line(observed) != normalized_line(payload['new_text']):
                 old_indent = len(payload['old_text']) - len(payload['old_text'].lstrip())
