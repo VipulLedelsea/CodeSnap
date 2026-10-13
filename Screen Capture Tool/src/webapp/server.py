@@ -228,7 +228,8 @@ def api_session_start(single: bool = False, idle_stop: float | None = None, regi
         if limit and spent >= limit:
             return JSONResponse({"error": f"API budget reached for this program (${spent:.2f} of ${limit:.2f}). "
                                           f"Raise the budget to keep capturing."}, status_code=402)
-    busy = [] if confirm or _session.running() else _programs_being_analysed()
+    # a capture only holds back analysis of its own program, so only that program needs the warning
+    busy = [] if confirm or _session.running() or not program else [p for p in _programs_being_analysed() if p == program]
     if busy:
         return JSONResponse({"error": "Analysis is running for " + ", ".join(busy) + ". A capture holds it until the capture "
                                       "ends. Start the capture anyway?", "needs_confirm": True, "busy": busy}, status_code=409)

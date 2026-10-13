@@ -939,6 +939,13 @@ class App:
         from core import deepdive, status
         from core.model import ProgramStore
         try:
+            # The free capture check runs first: a file that cannot be relied on is flagged now, with a notification, so it
+            # can be fixed with screenshots straight away instead of after the model review (or the whole program) finishes.
+            with ProgramStore.open(self.program) as store:
+                art = store.artifact(artifact_id)
+                early = deepdive.capture_quality(store, art) if art else None
+            if early and early["status"] == "rescan":
+                self._flag_attention(name, early["issues"])
             status.publish(f"Reviewing {name} line by line", "tool", stage="save")
             with ProgramStore.open(self.program) as store:
                 res = deepdive.run(store, self.client, artifact_ids=[artifact_id], program=False)
@@ -947,9 +954,22 @@ class App:
                 print("Code analysis: " + "; ".join(res["errors"]), file=sys.stderr)
             bad = next((r for r in q if r["artifact_id"] == artifact_id), None)
             if bad:
-                status.publish(f"{name} needs attention: " + "; ".join(i["reason"] for i in bad["issues"][:2]), "error", stage="done")
+                self._flag_attention(name, bad["issues"])
         except Exception as exc:  # noqa: BLE001
             print(f"Code analysis failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+    def _flag_attention(self, name, issues):
+        """Say once per file that it needs a look: a status line in its program's feed and a desktop notification."""
+        from core import status
+        from core.notify import notify
+        reason = "; ".join(i["reason"] for i in issues[:2])
+        status.publish(f"{name} needs attention: {reason}", "error", stage="done")
+        with self._state_lock:
+            seen = self.__dict__.setdefault("_flagged", set())
+            first = name not in seen
+            seen.add(name)
+        if first:
+            notify("CodeSnap", f"{name} needs attention - add screenshots from the program page. Analysis of the other files continues.")
 
     def _report_recapture(self, artifact_id):
         from core import deepdive, status
