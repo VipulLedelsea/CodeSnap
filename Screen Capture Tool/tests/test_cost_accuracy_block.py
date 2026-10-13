@@ -18,7 +18,7 @@ def test_structure_and_fix_use_the_reading_model_not_opus(monkeypatch):
             return types.SimpleNamespace(content=[block], usage=None, stop_reason="end_turn")
 
     extract.extract_structure(types.SimpleNamespace(messages=Messages()), "MOVE 1 TO X.", filename="A.cbl")
-    assert seen and set(seen) == {analysis.READ_MODEL} and analysis.READ_MODEL != analysis.MODEL
+    assert seen and set(seen) == {analysis.READ_MODEL} and "opus" not in analysis.READ_MODEL + analysis.MODEL
 
     seen.clear()
 

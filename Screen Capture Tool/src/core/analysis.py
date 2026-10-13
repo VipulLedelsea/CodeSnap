@@ -25,7 +25,7 @@ from pathlib import Path
 from core import robust as _robust
 from core.langpacks.formats import PROMPT_CLAUSE as _LEGACY_FORMAT_CLAUSE
 
-MODEL = _os.environ.get("CODESNAP_MODEL", "claude-opus-5-5")
+MODEL = _os.environ.get("CODESNAP_MODEL", "claude-sonnet-5")   # no step defaults to Opus; set CODESNAP_MODEL to change
 TEXT_MODEL = _os.environ.get("CODESNAP_TEXT_MODEL", "claude-sonnet-5-5")
 # Per-image extraction is an OCR-like task — use a cheaper/faster model to cut cost.
 # Reasoning steps (classify, fix) keep MODEL. Change if this model isn't available.
