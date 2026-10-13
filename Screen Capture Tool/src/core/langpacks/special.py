@@ -293,7 +293,6 @@ def looks_oracle_reports(text):
 
 
 def parse_oracle_forms(text, filename=""):
-    from .engine import parse_with
     fm = re.search(r'<FormModule\b[^>]*\bName="([^"]+)"', text)
     form = (fm.group(1) if fm else _stem(filename, "FORM")).upper()
     total = len(text.splitlines())

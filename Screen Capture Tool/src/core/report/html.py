@@ -3,8 +3,6 @@ import re
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from core.diagrams import svg
-
 LOGO = Path(__file__).resolve().parents[2] / "webapp" / "static" / "ledelsea_logo_t.png"
 CSS = """
 :root{--ink:#2A2521;--muted:#6F655C;--line:#E6DDD5;--copper:#BE6E4A;--copper-soft:#F7ECE5;--blue:#2E7DB0;--bg:#FFFFFF}

@@ -172,7 +172,7 @@ def _set_entity(store, e, *, name=None, attrs=None):
 
 def _resolve_verification_line(store, artifact_id, line):
     """A supplied replacement resolves character/cut-off doubt on that line, not gaps or possibly missing rows."""
-    from core.verify import REASONS, headline
+    from core.verify import headline
     verification = copy.deepcopy(store.verification(artifact_id))
     if not verification:
         return

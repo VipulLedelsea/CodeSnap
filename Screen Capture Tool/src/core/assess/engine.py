@@ -5,7 +5,7 @@ from core.security import scan as security_scan
 
 from .decide import confidence, default_impact, disposition, likelihood, risk_level, _no_path
 from .roadmap import roadmap, solutions
-from .scores import DIMENSIONS, LABELS, grade, program_scores, score_component, text_metrics
+from .scores import DIMENSIONS, LABELS, program_scores, score_component, text_metrics
 
 VERSION = "assess-v1"
 UNIT_KINDS = ("function", "paragraph", "section")

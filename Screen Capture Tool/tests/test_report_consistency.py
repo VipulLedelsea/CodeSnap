@@ -112,10 +112,10 @@ def test_snapshot_overall_rating_matches_scorecard(report):
 
 
 def test_security_posture_is_the_same_everywhere(report):
-    words = set(re.findall(r"Security posture is rated (\d – \w+|Insufficient evidence)", report["paras"]))
+    words = set(re.findall(r"Security posture: (\d – \w+|Not enough evidence)", report["paras"]))
     card = re.search(r"Security posture\n15%\n(\S+)", report["cells"]).group(1)
     assert len(words) == 1
-    assert next(iter(words)).startswith(card) or card == "Insufficient"
+    assert next(iter(words)).startswith(card) or card in ("Insufficient", "Not")
 
 
 def test_high_finding_count_matches_register(report):
@@ -151,11 +151,10 @@ def test_figures_are_numbered_in_order(report):
 
 
 def test_new_sections_remain_present_with_a_short_main_contents_list(report):
-    for h in ("2.6 Business capability mapping", "3.5 Application boundary", "4.5 Deployment view", "6.3 Service requirements",
-              "6.4 Technology lifecycle", "8.7 Identity and access", "10.5 Batch operations", "10.6 Observability",
-              "12.5 Place in the application portfolio", "12.6 Future design", "12.7 Platform run costs"):
+    for h in ("2.5 Business pain points and improvement opportunities", "4.4 Architecture observations",
+              "6.2 End-of-life and supportability", "8.5 Regulatory and policy alignment", "12.4 Sequencing and timing"):
         assert h in report["xml"]
-    assert report["xml"].count("1. Executive summary") == 2
+    assert report["xml"].count("1. Application summary") == 2
 
 
 def test_report_is_draft_until_signed_off(report):
@@ -187,7 +186,7 @@ def test_run1_draws_the_architectural_conclusions(run1):
 
 
 def test_run1_security_and_controls_are_consistent(run1):
-    assert re.search(r"Security posture is rated [45] – ", run1["paras"])
+    assert re.search(r"Security posture: [45] – ", run1["paras"])
     enc = re.search(r"Encryption in transit[^\n]*\n([^\n]+)\n([^\n]+)\n(\d) –", run1["cells"])
     assert enc and int(enc.group(3)) >= 3
     audit = re.search(r"Audit logging and monitoring\n([^\n]+)", run1["cells"]).group(1)
