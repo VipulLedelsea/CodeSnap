@@ -87,6 +87,7 @@ INQ = {"purpose": "Inquiry.", "facts": [fact("Receives map AIDMAP1", [18, 18], "
 
 @pytest.mark.parametrize("review", [{"verdicts": [{"id": 1, "verdict": "supported"}]},        # id 2 missing
                                     {"verdicts": [{"id": "x", "verdict": "??"}, "junk"]},       # malformed
+                                    {"verdicts": [{"id": 1}, {"id": 2, "why": "no verdict given"}]},   # verdict missing: was a KeyError
                                     {}])                                                       # empty
 def test_incomplete_or_malformed_review_keeps_facts_as_not_reviewed(store, review):
     res = DD.analyse_file(store, FakeClient(INQ, review), art(store, "AIDINQ.cbl"))

@@ -814,7 +814,8 @@ def analyse_file(store, client, art, model=None, review=True, review_model=None,
             if getattr(rmsg, 'stop_reason', None) == 'max_tokens':
                 raise ValueError('Independent source review was truncated; review remains incomplete.')
             return {int(v["id"]): v for v in (_tool(rmsg, REVIEW_TOOL["name"]) or {}).get("verdicts") or []
-                    if isinstance(v, dict) and str(v.get("id", "")).isdigit()}
+                    if isinstance(v, dict) and str(v.get("id", "")).isdigit()
+                    and v.get("verdict") in ("supported", "partly", "unsupported")}   # no verdict: counts as not reviewed
         verdicts = {}
         for got in parallel(check, fact_batches(kept)):
             verdicts.update(got)
