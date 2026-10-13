@@ -114,17 +114,38 @@ def test_live_long_running_claim_is_stolen_after_fifteen_minutes(store, tmp_path
     assert not store.claim_pending(aid, f'{os.getpid()}:second-worker')
 
 
-def test_running_worker_is_not_switched_to_new_program(tmp_path, monkeypatch):
+def test_running_worker_is_not_switched_while_a_capture_is_open(tmp_path, monkeypatch):
     from webapp import session
     monkeypatch.setattr(session, 'PROJECT', tmp_path)
     manager = session.SessionManager()
     manager._proc = SimpleNamespace(pid=os.getpid(), poll=lambda: None)
+    manager.program = 'current-program'
     spawned = []
     monkeypatch.setattr(session.subprocess, 'Popen', lambda argv, **kw: spawned.append(argv))
-    with pytest.raises(RuntimeError, match='switching programs'):
+    monkeypatch.setattr(session.SessionManager, 'capturing', lambda self: True)
+    with pytest.raises(RuntimeError, match='capture is in progress'):
         manager.start(program='different-program')
     assert not spawned
-    assert manager.program is None
+    assert manager.program == 'current-program'
+
+
+def test_capture_moves_to_another_program_and_the_old_one_keeps_analysing(tmp_path, monkeypatch):
+    from webapp import session
+    monkeypatch.setattr(session, 'PROJECT', tmp_path)
+    monkeypatch.setattr(session.SessionManager, 'configure', lambda self, *a, **k: {})
+    manager = session.SessionManager()
+    ended = []
+    manager._proc = SimpleNamespace(pid=os.getpid(), poll=lambda: 0 if ended else None,
+                                    terminate=lambda: ended.append('old'), wait=lambda timeout=None: 0)
+    manager.program = 'old-program'
+    spawned = []
+    monkeypatch.setattr(session.subprocess, 'Popen',
+                        lambda argv, **kw: spawned.append((argv, kw['env'].get('CODESNAP_PROGRAM'))) or SimpleNamespace(poll=lambda: None))
+    monkeypatch.setattr(session.SessionManager, 'capturing', lambda self: False)
+    assert manager.start(program='new-program') is True
+    assert ended == ['old']                                   # the old capture session (hotkeys) is released
+    assert [p for _, p in spawned] == ['old-program', 'new-program']   # its saved captures continue in a worker
+    assert '--process-pending' in spawned[0][0]
 
 
 def test_deep_review_bypasses_exhausted_program_budget(store, monkeypatch):
@@ -286,7 +307,7 @@ const assert = require('node:assert/strict');
 let lastEventCount = 0, _program = '', refreshes = 0, offset = 0;
 const events = () => Array.from({length: 60}, (_, i) => ({t: offset + i, kind: 'info', msg: 'event'}));
 const fetch = async () => ({json: async () => ({running: false, events: events()})});
-const renderStatus = () => {}, renderFlow = () => {}, setRunning = () => {}, stopAnalyzing = () => {};
+const _view = 'codesnap', markActivePrograms = () => {}, renderStatus = () => {}, renderFlow = () => {}, setRunning = () => {}, stopAnalyzing = () => {};
 const loadReports = () => refreshes++;
 (async () => {
   await pollStatus();
