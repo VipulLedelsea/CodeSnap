@@ -281,8 +281,10 @@ def recapture_outcome(store, art, q) -> dict | None:
 
 
 def file_state(store, art, q=None, dd=None, active=None) -> str:
-    """One word for where a file is: waiting, reading, reviewing, needs_recapture, failed or done."""
+    """One word for where a file is: waiting, paused, reading, reviewing, needs_recapture, failed or done."""
     if art["status"] == "captured":
+        if (store.pending_captures().get(art["id"]) or {}).get("paused"):
+            return "paused"
         return "reading" if store.capture_progress(art["id"]).get("analysing") else "waiting"
     if art["status"] == "failed":
         return "failed"

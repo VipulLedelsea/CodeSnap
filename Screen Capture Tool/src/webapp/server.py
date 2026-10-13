@@ -310,7 +310,7 @@ def _artifact_summary(store, artifact: dict) -> dict:
     out["frames"] = len(store.artifact_evidence(artifact["id"]))
     pend = store.pending_captures().get(artifact["id"])
     if pend:
-        out["pending"] = {k: pend.get(k) for k in ("kind", "error", "recapture_of", "attempts")}
+        out["pending"] = {k: pend.get(k) for k in ("kind", "error", "recapture_of", "attempts", "paused")}
         if artifact["status"] == "captured":
             out["pending"].update(store.capture_progress(artifact["id"]))
     out["cost"] = store.artifact_cost(artifact["id"])
@@ -346,7 +346,7 @@ def _progress(arts: list) -> dict:
         busy = a["state"] in ("waiting", "reading", "reviewing")
         if cur is None or busy or (a.get("pending") or {}).get("recapture_of"):
             by_file[key] = a["state"]
-    c = {k: sum(1 for v in by_file.values() if v == k) for k in ("done", "needs_recapture", "failed", "waiting", "reading", "reviewing")}
+    c = {k: sum(1 for v in by_file.values() if v == k) for k in ("done", "needs_recapture", "failed", "waiting", "reading", "reviewing", "paused")}
     total = len(by_file)
     finished = c["done"] + c["needs_recapture"] + c["failed"]
     return {"total": total, "finished": finished, "to_go": total - finished, **c,
@@ -484,8 +484,11 @@ def api_program_recapture(slug: str, payload: dict = Body(...)):
             raise HTTPException(status_code=409, detail="This version was replaced. Choose the current file.")
         if (store.pending_captures().get(art['id']) or {}).get('recapture_of'):
             raise HTTPException(status_code=409, detail="This is a pending replacement. Choose the original file to recapture or add screenshots.")
-        mode = "append" if (payload or {}).get("mode") == "append" else "replace"
+        paused = bool((store.pending_captures().get(art['id']) or {}).get('paused'))
+        mode = "append" if paused or (payload or {}).get("mode") == "append" else "replace"
         target = {"name": art["name"], "artifact_id": art["id"], "version": art["version"], "mode": mode}
+        if paused:
+            target["paused"] = True   # resuming: the next capture is added to this same file
         store.set_meta("recapture_target", target)
         return {"ok": True, "recapture_target": target}
 
@@ -500,7 +503,8 @@ def api_program_recapture_cancel(slug: str):
 @app.post("/api/programs/{slug}/pending/process")
 def api_program_pending_process(slug: str):
     with _open_program(slug) as store:
-        waiting = sum(1 for a in store.artifacts() if a["status"] == "captured")
+        paused = {k for k, v in store.pending_captures().items() if v.get("paused")}
+        waiting = sum(1 for a in store.artifacts() if a["status"] == "captured" and a["id"] not in paused)
     if not waiting:
         return {"ok": True, "waiting": 0}
     if _session.running() and _session.program == slug:
@@ -616,6 +620,19 @@ def api_program_artifact_retry(slug: str, artifact_id: int):
             store.retry_pending(artifact_id)
         except RuntimeError as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
+    return api_program_pending_process(slug)
+
+
+@app.post("/api/programs/{slug}/artifacts/{artifact_id}/finish")
+def api_program_artifact_finish(slug: str, artifact_id: int):
+    """Stop waiting for more of a paused file: analyse what has been captured."""
+    with _open_program(slug) as store:
+        info = store.pending_captures().get(artifact_id)
+        if not info or not info.get("paused"):
+            return JSONResponse({"error": "This file is not paused."}, status_code=400)
+        if (store.get_meta("recapture_target") or {}).get("artifact_id") == artifact_id:
+            store.set_meta("recapture_target", None)
+        store.update_pending(artifact_id, paused=False)
     return api_program_pending_process(slug)
 
 
@@ -1402,9 +1419,31 @@ def api_session_stop():
     return {"running": _session.running()}
 
 
+@app.post("/api/session/pause")
+def api_session_pause(paused: bool = True):
+    """Hold the running capture (or carry on with it); the same file stays open."""
+    try:
+        _session.control(paused=paused, park=False)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    return {"running": True, "paused": paused}
+
+
+@app.post("/api/session/park")
+def api_session_park():
+    """End the capture without analysing: saved to the program as a paused file to resume later."""
+    try:
+        _session.control(park=True)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    if not _session.program:
+        return JSONResponse({"error": "Saving for later needs a program. Pause instead, or stop the session."}, status_code=400)
+    return {"running": True, "parking": True}
+
+
 @app.get("/api/session/status")
 def api_session_status():
-    return {"running": _session.running(), "events": status.recent()}
+    return {"running": _session.running(), "paused": _session.paused(), "events": status.recent()}
 
 
 def _serve_in_thread(host="127.0.0.1", port=8000):
