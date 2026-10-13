@@ -277,6 +277,7 @@ EXTRACT_PLAIN_SYSTEM_PROMPT = (
 )
 
 READER = _os.environ.get("CODESNAP_READER", "plain").lower()
+FALLBACK_MAX_TOKENS = int(_os.environ.get("CODESNAP_FALLBACK_MAX_TOKENS", "16384"))   # the Sonnet re-read of a long frame
 PLAIN_MODEL = _os.environ.get("CODESNAP_PLAIN_MODEL", "claude-haiku-5-5")  # bake-off 10/07: 99.5% content, 0.19 extra lines/frame on 144 frames; Opus re-reads flagged lines
 PLAIN_MAX_BAD = float(_os.environ.get("CODESNAP_PLAIN_MAX_BAD", "0.10"))
 PLAIN_REQUIRE_CALIBRATION = _os.environ.get("CODESNAP_PLAIN_REQUIRE_CALIBRATION", "1") != "0"
@@ -462,9 +463,10 @@ def _plain_unverified(out: dict):
     return "unverified" if rows and bad / len(rows) > PLAIN_MAX_BAD else None
 
 
-def extract_plain(client, path: Path, *, calibration=None):
-    """Cheap first read: PLAIN_MODEL, plain lines, then the same pixel spacing and verification as the JSON path.
-    Returns (result, None) or (None, reason) when the frame must go to the JSON reader."""
+def extract_plain(client, path: Path, *, calibration=None, model=None, max_tokens=8192):
+    """Plain-lines read (default PLAIN_MODEL), then the same pixel spacing and verification as the JSON path.
+    Returns (result, None) or (None, reason) when the frame must go to the next reader."""
+    model = model or PLAIN_MODEL
     from core import spacing
     if PLAIN_REQUIRE_CALIBRATION:
         with spacing.frame(path, calibration) as (_, origin, _evidence):
@@ -472,8 +474,8 @@ def extract_plain(client, path: Path, *, calibration=None):
                 return None, "uncalibrated"
     b64 = base64.standard_b64encode(_robust.read_bytes(path)).decode()
     msg = client.messages.create(
-        model=PLAIN_MODEL,
-        max_tokens=8192,
+        model=model,
+        max_tokens=max_tokens,
         system=EXTRACT_PLAIN_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": _media_type(path), "data": b64}},
@@ -488,25 +490,32 @@ def extract_plain(client, path: Path, *, calibration=None):
         return None, "empty"
     out = {"raw": raw, "observed_raw": raw, "corrections": []}
     out["raw"], out["verify"], out["respaced_lines"] = measured_frame(client, path, raw, calibration=calibration)
-    out["verify"].update(numbers=[], numbers_seen=False, numbers_rejected=0, reader=PLAIN_MODEL)
+    out["verify"].update(numbers=[], numbers_seen=False, numbers_rejected=0, reader=model)
     reason = _plain_unverified(out)
     return (None, reason) if reason else (out, None)
 
 
 def extract_structured(client, path: Path, *, calibration=None) -> dict:
-    """One screenshot -> {'raw', 'corrections', 'verify', ...}. With CODESNAP_READER=plain the frame is read by
-    PLAIN_MODEL first and only goes to the JSON reader (EXTRACT_MODEL) when that read is not trustworthy."""
-    reason = None
+    """One screenshot -> {'raw', 'corrections', 'verify', ...}. With CODESNAP_READER=plain (the default) the frame is
+    read by PLAIN_MODEL (Haiku) first. If that read errors, is cut off or is not trustworthy, READ_MODEL (Sonnet) reads
+    it as plain lines too, with a larger output limit. Only when that also fails does the JSON reader (EXTRACT_MODEL) run."""
+    reasons = []
     if READER == "plain":
-        try:
-            out, reason = extract_plain(client, path, calibration=calibration)
-        except Exception as exc:
-            out, reason = None, "error:" + type(exc).__name__
-        if out is not None:
-            return out
+        for model, limit in ((PLAIN_MODEL, 8192), (READ_MODEL, FALLBACK_MAX_TOKENS)):
+            try:
+                out, reason = extract_plain(client, path, calibration=calibration, model=model, max_tokens=limit)
+            except Exception as exc:
+                out, reason = None, "error:" + type(exc).__name__
+            if out is not None:
+                if reasons:
+                    out.setdefault("verify", {})["reader_fallback"] = "; ".join(reasons)
+                return out
+            reasons.append(f"{model}: {reason}")
+            if reason == "uncalibrated":
+                break   # the frame's calibration does not depend on the model; the next plain read would stop here too
     result = extract_json(client, path, calibration=calibration)
-    if reason:
-        result.setdefault("verify", {})["reader_fallback"] = reason
+    if reasons:
+        result.setdefault("verify", {})["reader_fallback"] = "; ".join(reasons)
     return result
 
 
