@@ -125,7 +125,7 @@ def test_app_logs_pipeline_usage_to_program(tmp_path, monkeypatch):
         assert store.artifact_cost(store.artifacts()[0]["id"]) == pytest.approx(0.016)
 
 
-def test_text_steps_use_text_model_and_vision_steps_use_main_model(tmp_path):
+def test_text_steps_use_text_model_and_screenshot_steps_use_the_read_model(tmp_path):
     import team
     from core.cobol.columns import review_columns
     tracker = UsageTracker()
@@ -140,8 +140,8 @@ def test_text_steps_use_text_model_and_vision_steps_use_main_model(tmp_path):
     review_columns(client, [shot], "000100 MOVE A TO B.")
     models = {r["step"]: r["model"] for r in tracker.take(everything=True)}
     assert {models[s] for s in ("classify", "explain_error", "analyst", "diagram")} == {analysis.TEXT_MODEL}
-    assert {models[s] for s in ("transcribe", "column_review")} == {analysis.MODEL}
-    assert analysis.MODEL == "claude-opus-5-5" and analysis.TEXT_MODEL == "claude-sonnet-5-5"
+    assert {models[s] for s in ("transcribe", "column_review")} == {analysis.READ_MODEL}     # Sonnet 5, not Opus: see analysis.READ_MODEL
+    assert analysis.READ_MODEL == "claude-sonnet-5" and analysis.TEXT_MODEL == "claude-sonnet-5-5" and analysis.MODEL == "claude-opus-5-5"
 
 
 def test_cache_prefix_preserves_prompt_and_leaves_images_uncached(monkeypatch):

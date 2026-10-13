@@ -152,6 +152,7 @@ def test_deepdive_does_not_swallow_other_errors_by_message_text():
 
 def test_temperature_is_not_sent_to_opus(monkeypatch, tmp_path):
     monkeypatch.setenv("CODESNAP_EXTRACT_TEMPERATURE", "0")
+    monkeypatch.setattr(analysis, "EXTRACT_MODEL", "claude-opus-5-5")      # Opus rejects temperature, whichever model reads
     monkeypatch.setattr(analysis, "measured_frame", lambda c, p, raw, calibration=None: (raw, {}, 0))
     png = tmp_path / "a.png"
     png.write_bytes(b"\x89PNG....")
@@ -465,3 +466,11 @@ def test_cache_path_hashes_an_unchanged_file_once(tmp_path, monkeypatch):
 
 def test_single_re_import_in_analysis():
     assert len(re.findall(r"^import re as _re$", (SRC_DIR / "core" / "analysis.py").read_text(), re.M)) == 1
+
+
+def test_screenshots_are_reread_by_sonnet_not_opus():
+    from core.cobol import columns
+    assert analysis.READ_MODEL == "claude-sonnet-5" and analysis.EXTRACT_MODEL == analysis.READ_MODEL
+    assert analysis.PLAIN_MODEL == "claude-haiku-5-5" and analysis.READ_MODEL != analysis.PLAIN_MODEL     # a second opinion is a different model
+    assert columns.__dict__.get("MODEL") in (None, analysis.READ_MODEL) and not analysis.READ_MODEL.startswith("claude-opus")
+    assert analysis._accepts_temperature(analysis.READ_MODEL)

@@ -356,3 +356,11 @@ def test_routines_defined_in_provided_files_are_not_missing():
                        {"category": "external", "kind": "table", "name": "T1"}]}
     arts = [{"transcription": "     C    CALCAID     BEGSR\n     C                ENDSR\n"}]
     assert [m["name"] for m in _missing(cov, arts)] == ["AIDRPT"]
+
+
+def test_retain_with_fixes_scores_as_fix_in_place_not_as_doing_nothing():
+    base = {"no_path": [], "platforms": 4, "program_code": "retain", "posting": 0}
+    plain = OP.scores(base)[0]
+    fixed = OP.scores({**base, "fixes": 8})[0]
+    assert plain[0] == "Retain" and fixed[0] == "Retain (fix findings in place)"
+    assert OP.weighted(fixed) > OP.weighted(plain)

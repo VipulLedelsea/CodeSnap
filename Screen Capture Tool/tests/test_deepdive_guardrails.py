@@ -125,21 +125,39 @@ def test_unrelated_errors_are_not_swallowed_by_the_fallback(store):
         DD.analyse_file(store, Unrelated({}), art(store, "AIDINQ.cbl"))
 
 
-class TimesOutOnce(FakeClient):
+class TimesOut(FakeClient):
+    """Times out for its first `times` calls, then answers."""
+    times = 1
+
     def create(self, **kw):
-        if not getattr(self, "failed", False):
-            self.failed = True
+        self.failures = getattr(self, "failures", 0)
+        if self.failures < self.times:
+            self.failures += 1
             raise TimeoutError("read timed out")
         return super().create(**kw)
 
 
-def test_a_failure_during_a_run_is_recorded_and_the_rest_continue(store):
+def _timeouts(times):
+    return type("TimesOut%d" % times, (TimesOut,), {"times": times})
+
+
+def test_a_failure_during_a_run_is_recorded_and_the_rest_continue(store, monkeypatch):
+    monkeypatch.setattr(DD.time, "sleep", lambda s: None)
     a, b = art(store, "AIDINQ.cbl"), art(store, "AIDDBD.asm")
-    client = TimesOutOnce({"purpose": "DBD.", "facts": [fact("Defines segment DISTRICT", [4, 4], "SEGM  NAME=DISTRICT", cat="data_read")]},
+    client = _timeouts(2)({"purpose": "DBD.", "facts": [fact("Defines segment DISTRICT", [4, 4], "SEGM  NAME=DISTRICT", cat="data_read")]},
                           {"verdicts": [{"id": 1, "verdict": "supported"}]})
     res = DD.run(store, client, artifact_ids=[a["id"], b["id"]], force=True)
     assert res["analysed"] == 1 and len(res["errors"]) == 1 and "TimeoutError" in res["errors"][0]
     assert any(r["step"] == "deepdive" and not r["ok"] for r in store.runs())
+
+
+def test_one_passing_timeout_is_retried_and_nothing_is_lost(store, monkeypatch):
+    monkeypatch.setattr(DD.time, "sleep", lambda s: None)
+    a, b = art(store, "AIDINQ.cbl"), art(store, "AIDDBD.asm")
+    client = _timeouts(1)({"purpose": "DBD.", "facts": [fact("Defines segment DISTRICT", [4, 4], "SEGM  NAME=DISTRICT", cat="data_read")]},
+                          {"verdicts": [{"id": 1, "verdict": "supported"}]})
+    res = DD.run(store, client, artifact_ids=[a["id"], b["id"]], force=True)
+    assert res["analysed"] == 2 and not res["errors"]
 
 
 def test_max_tokens_truncation_is_logged_as_a_failure(store):
