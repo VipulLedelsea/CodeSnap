@@ -1,6 +1,6 @@
 import re
 
-from core.extractors.common import entity, mask, rel
+from core.extractors.common import entity, rel
 from core.langs.structure import connection_target, mask_connection
 from core.security.rules import SQL_WORDS
 

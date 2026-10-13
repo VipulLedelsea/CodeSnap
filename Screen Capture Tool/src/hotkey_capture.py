@@ -684,7 +684,6 @@ class App:
         status.publish(f"Screen read: {title} ({fields} fields, {actions} actions)", "done", stage="done")
 
     def _report_usage(self, records):
-        from core import status
         from core.usage import summarize
         total = summarize(records)
         steps = ", ".join(f"{k} ${v['cost']:.3f}" for k, v in sorted(total["by_step"].items(), key=lambda kv: -kv[1]["cost"]))

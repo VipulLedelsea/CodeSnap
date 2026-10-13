@@ -1,5 +1,3 @@
-import re
-
 from .apidefs import load_openapi, looks_like_wsdl, parse_openapi, parse_wsdl
 from .config import parse_json_config, parse_properties, parse_xml_config, parse_yaml_config
 from .spss import looks_like_spss, parse_spss

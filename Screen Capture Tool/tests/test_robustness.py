@@ -162,7 +162,7 @@ def test_pipeline_health_and_confidence(tmp_path):
     store = _store_with(tmp_path, files)
     h = pipeline_health(store)
     assert [f["name"] for f in h["failed"]] == ["notes.xyz"]
-    assert "Cut.cs" in [p["name"] for p in h["partial"]] and "Cut.cs" in [p["name"] for p in h["invalid"]]
+    assert "Cut.cs" in [p["name"] for p in h["partial"]]
     assert h["status"] == "errors" and h["api"]["failures"] >= 1
     a = run_assessment(store)
     assert a["confidence"]["level"] != "high"

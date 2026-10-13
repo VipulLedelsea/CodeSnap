@@ -1,6 +1,5 @@
 import hashlib
 import json
-import shutil
 
 from core import robust
 import sqlite3
@@ -14,7 +13,7 @@ from .kinds import (
     check_kind, validate_attrs,
 )
 from .schema import SCHEMA_VERSION, migrate
-from .workspace import programs_root, safe_filename, slugify, unique_dir
+from .workspace import programs_root, slugify, unique_dir
 
 DB_NAME = "program.db"
 

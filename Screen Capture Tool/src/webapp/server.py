@@ -1324,7 +1324,6 @@ def api_project_analyze(payload: dict = Body(...)):
     for r in scan_reports(REPORTS) + scan_reports(PENDING):
         if r.get("kind") == "report" and r.get("code"):
             lookup[r["name"]] = r
-    import re
     def _slug(x, default="File"):
         b = re.sub(r"[^A-Za-z0-9_]+", "_", (x or "").strip()).strip("_")
         return b or default

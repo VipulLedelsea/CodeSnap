@@ -3,7 +3,7 @@ import json
 import re
 from pathlib import Path
 
-from .common import entity, rel
+from .common import entity
 
 MARKER = "codesnap_ui_screen"
 PROMPT_VERSION = "ui-screen-v1"
