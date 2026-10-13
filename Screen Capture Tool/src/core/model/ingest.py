@@ -109,9 +109,13 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
     support=resolve(artifact['name'],artifact.get('language') or '')
     if artifact["artifact_type"] not in STRUCTURED_TYPES or not (artifact["transcription"] or "").strip():
         return {"entities": 0, "relations": 0, "skipped": True}
-    store.clear_artifact(artifact_id)
     code = artifact["transcription"]
     parsed = _parse_deterministic(code, artifact, prefer_llm=client is not None)
+    if parsed is None and client is None:
+        # Only a model can read this format and none is available (for example a line answered on a saved screenshot
+        # question). Keep the structure and status the file already has instead of wiping them and marking it failed.
+        return {"entities": 0, "relations": 0, "skipped": True, "needs_model": True}
+    store.clear_artifact(artifact_id)
     if parsed is None and client is not None:
         try:
             structure = extract_structure(client, code, filename=artifact["name"], language=artifact["language"])
@@ -137,8 +141,6 @@ def ingest_artifact(store, client, artifact_id: int) -> dict:
         _relink(store)
         return {**counts, "parser": parsed["parser"]}
     try:
-        if client is None:
-            raise ValueError("This visible source format requires model analysis; no analysis client is available.")
         structure = extract_structure(client, code, filename=artifact["name"], language=artifact["language"])
     except Exception as exc:
         store.log_run("structure", artifact_id=artifact_id, prompt_version=PROMPT_VERSION, ok=False,

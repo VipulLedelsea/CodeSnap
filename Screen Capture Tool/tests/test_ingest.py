@@ -247,3 +247,14 @@ def test_json_text_reply_accepted_and_missing_call_raises():
 
 def test_empty_program_resolved_is_unknown(store):
     assert store.coverage()["resolved_ratio"] is None
+
+
+def test_no_client_keeps_existing_structure_of_a_model_only_file(store, tmp_path):
+    """Answering a saved-screenshot question passes no client; a file only a model can read must keep its structure."""
+    aid = ingest_capture(store, FakeClient([BILLING]), shots(tmp_path, 1, "k"), report("class Billing: ...", ext="zzz", language="Unknown"))
+    assert store.artifact(aid)["status"] == "structured"
+    before = (len(store.entities()), len(store.relations()))
+    out = ingest_artifact(store, None, aid)
+    assert out.get("needs_model") and store.artifact(aid)["status"] == "structured"
+    assert (len(store.entities()), len(store.relations())) == before
+    assert all(r["ok"] for r in store.runs())
