@@ -62,6 +62,7 @@ HK_TOGGLE = "<cmd>+<shift>+1"
 HK_FULL = "<cmd>+<shift>+2"
 HK_REGION = "<cmd>+<shift>+8"
 HK_QUIT = "<cmd>+<shift>+9"
+HK_PAUSE = "<cmd>+<shift>+0"   # pause / resume the running capture (Cmd+Shift+3/4/5 are macOS screenshots)
 HK_READY = "<cmd>+<shift>+7"   # owned session: "I scrolled, capture the next part"
 
 CAPTURES_ROOT = Path("captures")  # scratch PNGs (gitignored); deleted on quit
@@ -161,6 +162,7 @@ class App:
         self._analysing = False                   # True while a capture is being analysed (single-file gate)
         self.team_mode = True                     # DEFAULT: multi-agent team (A2A). --single flips to backup single-agent.
         self._ready_event = threading.Event()     # set by Cmd+Shift+7 to advance an owned session
+        self.paused = False                       # burst capture is on hold (the file stays open; resume continues it)
         self.capture_enabled = False              # captures allowed (stays on during agent run)
         self.session_dir = None                   # current session's capture folder
         self.count = 0                            # captures taken this session
@@ -182,6 +184,8 @@ class App:
         self._futures = []                         # pending background reads
         self._fut_lock = threading.Lock()
         self.listener = None                       # set in main()
+
+    paused = False                            # class default: objects built without __init__ (tests) are never paused
 
     _LAZY = {"_state_lock": threading.Lock, "_session_start_lock": threading.Lock, "_kind_guess": dict, "_threads": list}
     _lazy_guard = threading.Lock()
@@ -212,6 +216,14 @@ class App:
             self._start_session()
         else:
             self._stop_session()
+
+    def toggle_pause(self):
+        """Cmd+Shift+0: hold the running capture, or carry on with it."""
+        if not (self.burst_mode and self.running):
+            print("(nothing to pause — no capture is running)")
+            return
+        from core import control
+        control.write(CAPTURES_ROOT, os.getpid(), paused=not control.read(CAPTURES_ROOT, os.getpid()).get("paused"))
 
     def on_full(self):
         self._capture("full")
@@ -322,6 +334,9 @@ class App:
             print(f"[burst] capturing display {pick_display(self.display)}")
         except Exception as exc:  # noqa: BLE001
             print(f"(display selection skipped: {exc})", file=sys.stderr)
+        from core import control
+        control.reset(CAPTURES_ROOT, os.getpid())
+        self.paused = False
         self.running = True
         self.capture_enabled = True
         print("[burst] Scroll through the file steadily. It captures automatically and "
@@ -415,7 +430,28 @@ class App:
         stop_reason = "stopped manually"
         from core import capture_gate
         capture_gate.begin()
+        parked = False
+        from core import control
         while self.running and kept < BURST_MAX_FRAMES:
+            ctl = control.read(CAPTURES_ROOT, os.getpid())
+            if ctl.get("park"):
+                if self._can_park():
+                    parked = True
+                    break
+                control.write(CAPTURES_ROOT, os.getpid(), park=False, paused=True)
+                status.publish("Saving for later works for a new file only — capture paused instead. "
+                               "Resume, or stop to analyse.", "info")
+                continue
+            if bool(ctl.get("paused")) != self.paused:
+                self.paused = bool(ctl.get("paused"))
+                status.publish("Capture paused — carry on with something else, then resume." if self.paused
+                               else "Capture resumed — keep scrolling", "info")
+                from core.notify import notify
+                notify("CodeSnap", "Capture paused" if self.paused else "Capture resumed")
+            if self.paused:
+                last_change = started = time.monotonic()    # the pause is not idle time
+                time.sleep(BURST_INTERVAL)
+                continue
             if self._own_window_in_front():
                 time.sleep(BURST_INTERVAL)
                 if kept == 0:
@@ -481,6 +517,9 @@ class App:
             # manual mode (idle_stop <= 0): never auto-stop — ends via Cmd+Shift+1 or the frame cap
             time.sleep(BURST_INTERVAL)
         capture_gate.end()
+        if parked:
+            self._park(session_dir, kept)
+            return
         status.publish(
             "Only one screenshot saved. If you scrolled, check the selected display and code area, "
             "then recapture; choose manual stop for a long file." if kept == 1 else
@@ -510,8 +549,36 @@ class App:
             self.capture_enabled = False
             self._analyse_burst(session_dir, artifact_id=artifact_id)   # inline (blocks this thread); one file at a time
 
+    def _can_park(self) -> bool:
+        """Saving for later builds one new paused file, or extends a paused one; replacing or adding to an
+        analysed file has to finish first."""
+        if not self.program:
+            return False
+        from core.model import ProgramStore
+        try:
+            with ProgramStore.open(self.program) as store:
+                target = store.get_meta("recapture_target") or {}
+        except Exception:  # noqa: BLE001
+            return False
+        return not target or bool(target.get("paused"))
+
+    def _park(self, session_dir, kept):
+        """End the session without analysing: the frames so far are saved as a paused file to resume later."""
+        from core import status
+        from core.notify import notify
+        self.running = self.capture_enabled = self.paused = False
+        artifact_id = self._register_capture(session_dir, park=True) if kept else None
+        if artifact_id:
+            status.publish("Paused and saved — resume this file from the program page whenever you're ready.",
+                           "done", stage="done")
+            notify("CodeSnap", "Capture saved — resume it later from the program page")
+        elif kept:
+            pass    # _register_capture already reported why nothing was saved
+        else:
+            status.publish("Nothing captured yet, so nothing was saved.", "info", stage="done")
+
     # --- every start/stop is a file: saved to the program before analysis, resumed if the worker stops ---
-    def _register_capture(self, session_dir):
+    def _register_capture(self, session_dir, park=False):
         if not self.program:
             return None
         imgs = sorted(Path(session_dir).glob("*.png"))
@@ -529,16 +596,28 @@ class App:
                 if target:
                     store.set_meta("recapture_target", None)
                 session_id = store.add_session(mode="burst", region=",".join(map(str, self.region)) if self.region else None)
-                append_to = target.get("artifact_id") if target.get("mode") == "append" else None
-                artifact_id = store.add_pending_capture(imgs, kind=self.capture_kind, session_id=session_id,
-                                                        recapture_of=target.get("name"), keep_frames_of=append_to)
-                if append_to:   # analyse the file's earlier screenshots together with the new ones
+                resumed = bool(target.get("paused"))
+                append_to = target.get("artifact_id") if target.get("mode") == "append" or resumed else None
+                if resumed:   # a paused file grows in place; it is analysed once, when it is finished
                     for i, e in enumerate(store.artifact_evidence(append_to), 1):
                         shutil.copyfile(store.evidence(e["id"])["abs_path"], Path(session_dir) / f"0000_{i:03d}.png")
-                store.claim_pending(artifact_id, self._owner)
-                self._track(artifact_id)
+                    artifact_id = append_to
+                    store.extend_paused(artifact_id, imgs, session_id=session_id, park=park)
+                else:
+                    artifact_id = store.add_pending_capture(imgs, kind=self.capture_kind, session_id=session_id,
+                                                            recapture_of=target.get("name"), keep_frames_of=append_to)
+                    if append_to:   # analyse the file's earlier screenshots together with the new ones
+                        for i, e in enumerate(store.artifact_evidence(append_to), 1):
+                            shutil.copyfile(store.evidence(e["id"])["abs_path"], Path(session_dir) / f"0000_{i:03d}.png")
+                    if park:
+                        store.update_pending(artifact_id, paused=True)
+                if not park:
+                    store.claim_pending(artifact_id, self._owner)
+                    self._track(artifact_id)
                 name = store.artifact(artifact_id)["name"]
-            what = ((f"added screenshots to {target['name']}" if target.get("mode") == "append" else
+            if park:
+                return artifact_id
+            what = ((f"added screenshots to {target['name']}" if target.get("mode") == "append" or target.get("paused") else
                      f"new version of {target['name']}") if target.get("name") else name)
             status.publish(f"Saved capture as {what} — analysing", "info")
             return artifact_id
@@ -562,7 +641,7 @@ class App:
                 if art is None:
                     store.clear_pending(aid)
                     continue
-                if self._is_inflight(aid) or art["status"] != "captured" or not store.claim_pending(aid, self._owner):
+                if info.get("paused") or self._is_inflight(aid) or art["status"] != "captured" or not store.claim_pending(aid, self._owner):
                     continue
                 self._track(aid)
                 todo.append((aid, info.get("kind") or "code", [e["abs_path"] for e in
@@ -1307,6 +1386,7 @@ def main() -> int:
         "  Cmd+Shift+1  start a session\n"
         "  Cmd+Shift+7  next capture (after you scroll)   [owned session]\n"
         "  Cmd+Shift+2 / 8  capture full screen / region  [manual]\n"
+        "  Cmd+Shift+0  pause / resume the running capture\n"
         "  Cmd+Shift+9  quit\n"
         "[idle] Press Cmd+Shift+1 to start."
     )
@@ -1317,6 +1397,7 @@ def main() -> int:
         HK_REGION: app.on_region,
         HK_QUIT: app.quit,
         HK_READY: app.ready,
+        HK_PAUSE: app.toggle_pause,
     })
     app.listener.start()
     try:

@@ -405,6 +405,7 @@ async function pollStatus() {
     renderStatus(d.events || []);
     renderFlow(d.events || []);
     setRunning(d.running);
+    if (d.running) setPaused(d.paused);
     const evs = d.events || [];
     const analyzing = d.running && evs.some(e => e.kind === "tool") && !evs.some(e => e.kind === "done" || e.kind === "end");
     if (analyzing) startAnalyzing(); else stopAnalyzing();
@@ -429,7 +430,29 @@ function setRunning(running) {
   $("statusFeed").style.display = running ? "block" : "none";
   $("devflow").style.display = running ? "flex" : "none";
   const fl = $("flowLabel"); if (fl) fl.style.display = running ? "flex" : "none";
+  $("pauseBtn").style.display = running ? "" : "none";
+  $("parkBtn").style.display = running && _view === "review" && _program ? "" : "none";
+  if (!running) setPaused(false);
 }
+let sessionPaused = false;
+function setPaused(paused) {
+  sessionPaused = !!paused;
+  $("pauseBtn").textContent = sessionPaused ? "Resume" : "Pause";
+  if (sessionRunning) $("status").textContent = sessionPaused ? "Paused" : "Session running";
+}
+$("pauseBtn").addEventListener("click", async () => {
+  try {
+    const r = await _json("/api/session/pause?paused=" + (!sessionPaused), { method: "POST" });
+    setPaused(r.paused);
+    toast(r.paused ? "Capture paused. Press Resume (or Cmd+Shift+0) to carry on with the same file." : "Capture resumed.");
+  } catch (e) { toast(e.message); }
+});
+$("parkBtn").addEventListener("click", async () => {
+  try {
+    await _json("/api/session/park", { method: "POST" });
+    toast("Saving what you've captured as a paused file. Resume it later from the file list.");
+  } catch (e) { toast(e.message); }
+});
 
 // Pause-tolerance slider: max position (61) = Manual (never auto-stop -> idle_stop 0)
 (function () {
@@ -918,7 +941,7 @@ async function loadPrograms(select) {
   await loadProgram();
 }
 const STATE = {
-  waiting: ["Waiting", "wait"], reading: ["Reading", "busy"], reviewing: ["Reviewing", "busy"],
+  waiting: ["Waiting", "wait"], paused: ["Paused", "wait"], reading: ["Reading", "busy"], reviewing: ["Reviewing", "busy"],
   needs_recapture: ["Needs attention", "attn"], failed: ["Couldn't read", "bad"], done: ["Done", "ok"],
 };
 const ISSUE = { cut: "lines cut off at the edge of the screen", break: "a gap between two screens, so lines may be missing",
@@ -945,19 +968,20 @@ function renderProgress(d) {
   const p = d.progress || {};
   const box = $("progProgress");
   if (!p.total) { box.innerHTML = `<div class="pp-head"><b>No files yet</b><span>Start a capture — each start/stop becomes one file.</span></div>`; return; }
-  const busy = p.reading + p.reviewing + p.waiting;
+  const busy = p.reading + p.reviewing + p.waiting + (p.paused || 0);
   const seg = (n, cls) => n ? `<i class="${cls}" style="flex:${n}"></i>` : "";
   const bits = [];
   if (p.reading) bits.push(`${p.reading} reading`);
   if (p.reviewing) bits.push(`${p.reviewing} being reviewed`);
   if (p.waiting) bits.push(`${p.waiting} waiting`);
+  if (p.paused) bits.push(`${p.paused} paused`);
   const attn = p.needs_recapture, bad = p.failed;
   box.innerHTML = `<div class="pp-head">
       <b>${p.finished} of ${p.total} files processed</b>
       <span>${busy ? bits.join(" · ") + ` — ${p.to_go} to go` : "Nothing left to process"}${attn ? ` · <em class="attn">${attn} need${attn > 1 ? "" : "s"} attention</em>` : ""}${bad ? ` · <em>${bad} couldn't be read</em>` : ""}</span>
     </div>
     ${busy ? `<button class="btn-link" data-stop-analysis type="button">Stop analysis</button>` : ""}
-    <div class="pp-bar">${seg(p.done, "ok")}${seg(p.needs_recapture, "attn")}${seg(p.failed, "bad")}${seg(p.reviewing + p.reading, "busy")}${seg(p.waiting, "wait")}</div>
+    <div class="pp-bar">${seg(p.done, "ok")}${seg(p.needs_recapture, "attn")}${seg(p.failed, "bad")}${seg(p.reviewing + p.reading, "busy")}${seg(p.waiting + (p.paused || 0), "wait")}</div>
     ${_spendLine(d)}`;
 }
 document.addEventListener("click", async (ev) => {
@@ -993,6 +1017,8 @@ function _fileRow(a, pendingFor) {
         <span class="pf-menu" tabindex="0">⋯<span class="pf-acts">
           <button class="btn-link" data-act="rename" type="button">Rename</button>
           <button class="btn-link" data-act="remove" type="button">Remove from analysis</button>
+          ${a.pending && a.pending.paused ? `<button class="btn-link" data-act="resume" type="button">Resume capture</button>
+          <button class="btn-link" data-act="finish" type="button">Finish &amp; analyse</button>` : ""}
           ${a.status === "captured" ? "" : `<button class="btn-link" data-act="recapture" type="button">Recapture</button>
           ${a.artifact_type === "ui_screen" ? "" : `<button class="btn-link" data-act="rebuild" type="button">Rebuild saved capture</button>`}
           <button class="btn-link" data-act="add" type="button">Add screenshots</button>`}
@@ -1138,7 +1164,7 @@ function _pbase() { return `/api/programs/${encodeURIComponent(_program)}`; }
 function renderCaptureBar(d) {
   const bar = $("progCapBar");
   const t = d.recapture_target;
-  const stuck = !d.session_running && d.artifacts.some(a => a.status === "captured" && !(a.pending && a.pending.analysing));
+  const stuck = !d.session_running && d.artifacts.some(a => a.status === "captured" && !(a.pending && (a.pending.analysing || a.pending.paused)));
   bar.innerHTML = (t ? `<div class="cb recap">${t.mode === "append"
       ? `Your next capture adds to <b>${escapeHtml(t.name)}</b> — just capture the lines that were missing.`
       : `Your next capture replaces <b>${escapeHtml(t.name)}</b> (the current version is kept).`} <button class="btn-link" data-cb="cancel" type="button">Cancel</button></div>` : "")
@@ -1226,6 +1252,12 @@ async function fileAction(el, act, targetId) {
         const r = await _json(`${actionBase}/artifacts/${id}/screenshots`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ images: files }) });
         toast(`Added ${r.added} screenshot(s); re-reading ${name} from all ${r.frames}. ${r.note || ""}`);
       }
+    } else if (act === "resume") {
+      await _json(`${actionBase}/recapture`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact_id: Number(id) }) });
+      toast(`Start a capture and carry on scrolling from where ${name} left off.`);
+    } else if (act === "finish") {
+      const r = await _json(`${actionBase}/artifacts/${id}/finish`, { method: "POST" });
+      toast(r.note || "Analysing what was captured.");
     } else if (act === "retry") {
       const r = await _json(`${actionBase}/artifacts/${id}/retry`, { method: "POST" });
       toast(r.note || "Queued.");

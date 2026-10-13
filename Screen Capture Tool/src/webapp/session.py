@@ -136,6 +136,18 @@ class SessionManager:
         self.configure(region, display)
         return True
 
+    def control(self, **changes) -> dict:
+        """Pause / resume / park the running capture (the worker polls these flags)."""
+        from core import control
+        with self._lock:
+            if not self.running():
+                raise RuntimeError("No capture is running.")
+            return control.write(PROJECT / 'captures', self._proc.pid, **changes)
+
+    def paused(self) -> bool:
+        from core import control
+        return self.running() and bool(control.read(PROJECT / 'captures', self._proc.pid).get('paused'))
+
     def process_pending(self, program: str) -> bool:
         """Analyse a program's saved-but-unanalysed captures in a background worker (no hotkeys, exits when done)."""
         with self._lock:

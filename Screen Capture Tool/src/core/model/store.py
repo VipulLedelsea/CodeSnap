@@ -355,6 +355,27 @@ class ProgramStore:
                                             "created": _now(), "attempts": 0, "error": None, "claim": None})
             return artifact_id
 
+    def extend_paused(self, artifact_id: int, images, session_id: int | None = None, park: bool = False) -> int:
+        """Add the screenshots of a resumed capture to a paused file, in place. Stays paused when `park`, otherwise it
+        becomes an ordinary waiting capture. Returns how many screenshots the file has now."""
+        with self.transaction() as db:
+            info = self.pending_captures().get(artifact_id)
+            if not info or not info.get("paused"):
+                raise ValueError("This file is not paused (it was already resumed or removed).")
+            have = [e["id"] for e in self.artifact_evidence(artifact_id)]
+            new = []
+            for path in images:
+                eid = self.add_evidence(Path(path), session_id=session_id)
+                if eid not in have and eid not in new:
+                    new.append(eid)
+            for order, eid in enumerate(new, len(have)):
+                db.execute("INSERT OR IGNORE INTO artifact_evidence(artifact_id,evidence_id,ord) VALUES (?,?,?)",
+                           (artifact_id, eid, order))
+            info.update(paused=park, claim=None, error=None)
+            self._set_pending(artifact_id, info)
+            db.execute("UPDATE artifact SET updated=? WHERE id=?", (_now(), artifact_id))
+            return len(have) + len(new)
+
     def update_pending(self, artifact_id: int, **changes):
         with self.transaction():
             info = self.pending_captures().get(artifact_id)
