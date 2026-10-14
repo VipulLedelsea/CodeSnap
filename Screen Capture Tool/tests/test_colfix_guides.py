@@ -65,3 +65,21 @@ def test_a_few_stray_rows_at_indent_one_do_not_shift_a_fixed_format_capture():
     rows = ["          05 FIELD-%03d PIC X(8)." % i for i in range(190)] + [" STRAY"] * 4 + ["      * COMMENT"] * 6
     part = "\n".join(rows)
     assert analysis._drop_margin_offset([part], _clicked(1)) == [part]
+
+
+def test_a_wavy_diagnostic_underline_under_a_row_is_not_a_row_of_its_own():
+    """Editors draw a red squiggle under code they flag; read as an extra row it doubles the count and breaks the matching."""
+    ink = np.zeros((300, 400), dtype=bool)
+    tops = [10 + i * 30 for i in range(8)]
+    for t in tops:
+        ink[t:t + 18, 150:170] = True            # the text row, 18 px tall
+        ink[t + 20:t + 25, 190:212] = True       # the squiggle, 5 px tall, two pixels below the text
+    assert len(colfix._rows(ink)) == 8
+
+
+def test_a_short_row_of_real_text_is_still_a_row():
+    ink = np.zeros((200, 300), dtype=bool)
+    for t in (10, 60, 110):
+        ink[t:t + 18, 50:80] = True              # tall rows
+    ink[160:166, 50:90] = True                   # a short row, but far from any row above it
+    assert len(colfix._rows(ink)) == 4

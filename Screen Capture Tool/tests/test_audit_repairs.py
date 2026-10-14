@@ -436,3 +436,17 @@ def test_usage_callback_can_save_during_capture_ingestion(store, tmp_path, monke
         assert len(store.runs()) == 1
     finally:
         app._pool.shutdown(wait=True)
+
+
+def test_a_cancelled_analysis_leaves_the_capture_waiting_but_a_real_failure_marks_it_failed(store, tmp_path):
+    """Starting another capture stops a program's analysis on purpose; those files must not need a manual Retry."""
+    import hotkey_capture
+    session = SimpleNamespace(program=store.info['slug'], _was_cancelled=hotkey_capture.App._was_cancelled)
+    waiting = store.add_pending_capture([image(tmp_path)])
+    broken = store.add_pending_capture([image(tmp_path, 'two.png')])
+    hotkey_capture.App._mark_failed(session, waiting, 'AnalysisCancelled: Analysis was stopped.')
+    hotkey_capture.App._mark_failed(session, broken, 'RuntimeError: api down')
+    assert store.artifact(waiting)['status'] == 'captured'
+    assert store.pending_captures()[waiting].get('error') in (None, '') and store.pending_captures()[waiting].get('claim') is None
+    assert store.artifact(broken)['status'] == 'failed'
+    assert 'api down' in store.pending_captures()[broken]['error']

@@ -83,8 +83,15 @@ def _rows(ink, min_h=4, max_h=80, join=2, bands_out=None, deco_out=None):
                 bands.append((start, y))
             start = None
     rows = []
-    for a, b in bands:
+    tall = sorted(b - a for a, b in bands if b - a >= 10)
+    typical = tall[len(tall) // 2] if tall else 0
+    for n, (a, b) in enumerate(bands):
         if not min_h <= b - a <= max_h:
+            continue
+        # A wavy diagnostic underline (editors draw one under code they flag) is a short band right under its row. Read as a row
+        # of its own it doubles the row count and the screenshot can no longer be matched to its text.
+        if (typical and n and b - a <= 0.45 * typical and a - bands[n - 1][1] <= 6
+                and bands[n - 1][1] - bands[n - 1][0] >= 10):
             continue
         cols = np.where(ink[a:b].any(0))[0]
         runs, s, prev = [], cols[0], cols[0]

@@ -807,9 +807,12 @@ class App:
             self._mark_failed(artifact_id, f"{type(exc).__name__}: {exc}")
             try:
                 from core import status
-                status.publish("Analysis failed — the capture is saved; use Retry on it in the program.", "error", stage="done")
-                from core.notify import notify
-                notify("CodeSnap", "Analysis failed — please try again.")
+                if self._was_cancelled(f"{type(exc).__name__}: {exc}"):
+                    status.publish("Analysis paused because another capture started; this file stays queued and is analysed when you finish.", "info", stage="done")
+                else:
+                    status.publish("Analysis failed — the capture is saved; use Retry on it in the program.", "error", stage="done")
+                    from core.notify import notify
+                    notify("CodeSnap", "Analysis failed — please try again.")
             except Exception:  # noqa: BLE001
                 pass
         finally:
@@ -917,6 +920,11 @@ class App:
         except Exception as exc:  # noqa: BLE001
             print(f"(screenshot text cache: {exc})", file=sys.stderr)
 
+    @staticmethod
+    def _was_cancelled(error) -> bool:
+        """Analysis stopped on purpose (a new capture started in the same program), as opposed to a read that went wrong."""
+        return str(error).startswith("AnalysisCancelled") or "Analysis was stopped" in str(error)
+
     def _mark_failed(self, artifact_id, error):
         if not (self.program and artifact_id):
             return
@@ -924,6 +932,11 @@ class App:
         try:
             with ProgramStore.open(self.program) as store:
                 if store.artifact(artifact_id) and artifact_id in store.pending_captures():
+                    if self._was_cancelled(error):
+                        # Not a failure: the capture is intact and still waiting, so it is analysed with the rest when the
+                        # session ends instead of needing a manual Retry on every file that was interrupted.
+                        store.update_pending(artifact_id, error=None, claim=None, stage=None)
+                        return
                     store.update_pending(artifact_id, error=error, claim=None)
                     store.set_status(artifact_id, "failed")
         except Exception:  # noqa: BLE001
