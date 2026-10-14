@@ -1479,7 +1479,12 @@ def _drop_margin_offset(raw_parts, metas):
         return raw_parts
     body = [l for r in raw_parts for l in r.split('\n') if l.strip() and '[CUT OFF]' not in l and '\t' not in l]
     indents = [len(l) - len(l.lstrip(' ')) for l in body]
-    if len(body) < 20 or sum(i == 0 for i in indents) > 0.02 * len(indents) or sum(i == 1 for i in indents) < 3:
+    if len(body) < 20 or sum(i == 0 for i in indents) > 0.02 * len(indents):
+        return raw_parts
+    # A real click offset moves every line, so the rows that belong at column one (labels, top-level statements) all show at
+    # indent one: 9% to 56% of the lines on real captures. A handful of stray rows (a copybook had 16 of 2,153) is not an
+    # offset, and shifting the whole capture would undo the columns the pixel measurement just set.
+    if sum(i == 1 for i in indents) < max(3, 0.03 * len(indents)):
         return raw_parts
     return ['\n'.join(l[1:] if l.startswith(' ') and l.strip() and '[CUT OFF]' not in l else l for l in r.split('\n'))
             for r in raw_parts]

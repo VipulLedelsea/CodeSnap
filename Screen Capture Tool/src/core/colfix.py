@@ -16,9 +16,41 @@ MAX_SHIFT = 8          # a measured column this far from the transcribed one mea
 MIN_GRID_FIT = 0.6     # how well glyph edges must sit on one character grid before we trust it
 
 
+def _drop_guides(ink, min_h=60, max_w=3):
+    """Remove the editor's indent guides: thin vertical lines (one to three pixels wide, the active guide is drawn heavier)
+    that run through several rows of text. They are ink to the threshold below, so every guided row would start at the guide
+    instead of at its first character, and rows fuse into one band and cannot be matched to their text. A glyph stroke is one
+    row tall; the line a guide draws is many rows tall and has no ink beside it, which is how the two are told apart."""
+    out = ink.copy()
+    h, w = ink.shape
+    long_runs = {}                                           # column -> [(top, bottom)] runs of at least min_h
+    for x in np.where(ink.sum(0) >= min_h)[0]:
+        ys = np.where(ink[:, x])[0]
+        for run in np.split(ys, np.where(np.diff(ys) > 2)[0] + 1):   # a gap of one or two pixels does not end a run
+            if run[-1] - run[0] + 1 >= min_h and len(run) >= 0.9 * (run[-1] - run[0] + 1):
+                long_runs.setdefault(int(x), []).append((int(run[0]), int(run[-1])))
+    done = set()
+    for x in sorted(long_runs):
+        for top, bottom in long_runs[x]:
+            if (x, top) in done:
+                continue
+            group = [x]                                      # the neighbouring columns that share this run
+            while len(group) < max_w + 1 and any(abs(t - top) <= 4 and abs(b - bottom) <= 4 for t, b in long_runs.get(group[-1] + 1, [])):
+                group.append(group[-1] + 1)
+            if len(group) > max_w:
+                continue                                     # wider than a guide: a scrollbar, border or block of text
+            span = slice(top, bottom + 1)
+            outside = [ink[span, nx].mean() for nx in (group[0] - 1, group[-1] + 1) if 0 <= nx < w]
+            if all(o < 0.5 for o in outside):
+                for gx in group:
+                    out[span, gx] = False
+                    done.add((gx, top))
+    return out
+
+
 def _ink(path):
     im = np.asarray(Image.open(path).convert("L")).astype(int)
-    return np.abs(im - np.median(im)) > 60
+    return _drop_guides(np.abs(im - np.median(im)) > 60)
 
 
 def _decorated(ink, a, b, runs) -> bool:
