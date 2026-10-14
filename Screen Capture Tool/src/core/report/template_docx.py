@@ -702,19 +702,11 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         + ". This is not a delivery forecast or budget. Validate scope, staffing and business policy before accepting the estimates or changing production behavior.",
     ]
     from core import exec_summary as ES
-    _es = ES.current(store)
-    _index = ES.finding_index(store) if _es else {}
-    if _es:
-        _rp = ES.report_paragraphs(_es, _index)
-        findings_txt = _rp["before"]
-    _last = doc.replace("Summarize in three to five", [Q.QUALIFICATION] + findings_txt)
-    if _es and _last is not None:
-        _anchor = _last._p
-        for t_ in _rp["risks"]:
-            _anchor = doc.new_para(t_, _anchor, bullet=True)._p
-        for t_ in _rp["after"]:
-            _anchor = doc.new_para(t_, _anchor)._p
-        doc.evidence_rows = ES.evidence_rows(_es, _index)
+    # The executive summary is its own document (<program>_executive_summary.docx); this section keeps the report's own findings
+    # and points to it, so the two never carry different versions of the same text.
+    _pointer = ([f"The executive summary is a separate document: {store.info['slug']}_executive_summary.docx."]
+                if ES.current(store) else [])
+    doc.replace("Summarize in three to five", [Q.QUALIFICATION] + _pointer + findings_txt)
     doc.replace("List any condition that warrants action", "Validate the source findings and approved business policy before production change. Prioritize any confirmed unintended control override or exposure:")
     imm = []
     owner_it = s["it_reviewer"] or "IT application owner (to be named)"
@@ -1782,7 +1774,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     from . import editorial
     editorial.apply(doc, a, evidence_quality, s, metadata=metadata, analysis_stage=_report_stage(store),
                     security_counts={severity: sum(f["severity"] == severity for f in sec_f) for severity in SEV},
-                    priority_reasons=[r_["title"] for r_ in BR[:2]], full_summary=bool(_es), evidence_rows=doc.evidence_rows)
+                    priority_reasons=[r_["title"] for r_ in BR[:2]], full_summary=False, evidence_rows=doc.evidence_rows)
     RRV.apply_to_docx(doc.d, store)
     _label_bare_inserts(doc)
     _move_tails_to_appendices(doc)

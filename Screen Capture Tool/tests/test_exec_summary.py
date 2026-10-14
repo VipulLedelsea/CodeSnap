@@ -98,10 +98,10 @@ def test_the_review_keeps_the_new_per_file_fields():
     assert DD._enum("nonsense", DD.RUN_MODES) == "not shown" and DD._enum("batch", DD.RUN_MODES) == "batch"
 
 
-def test_report_uses_the_checked_summary_and_lists_the_cited_findings(store):  # noqa: F811
+def test_the_summary_is_its_own_file_and_the_report_only_points_to_it(store):  # noqa: F811
     import io
     import docx
-    from core.report import docx_bytes
+    from core.report import docx_bytes, summary_doc
     a = art(store, "AidPaymentController.cs")
     name = a["name"]
     _review(store, a, [{"id": 1, "fact_id": "F1", "category": "defect", "severity": "high", "basis": "observed", "lines": [28, 28],
@@ -110,12 +110,17 @@ def test_report_uses_the_checked_summary_and_lists_the_cited_findings(store):  #
                           "reasons": ["a", "b", "c"], "risks": [{"text": "Unchecked approval", "severity": "High", "facts": [f"{name}:F1"]}],
                           "lifecycle": "Not verified", "lifecycle_verified": False, "decision": "Fix it", "confidence": "low",
                           "confidence_and_coverage": "One file."}), model="m")
-    d = docx.Document(io.BytesIO(docx_bytes(store, rescan=True)))
-    text = "\n".join(p.text for p in d.paragraphs)
-    cells = "\n".join(c.text for t in d.tables for r in t.rows for c in r.cells)
-    assert "Verdict: Remediate (" in text and f"Risk 1, High: Unchecked approval [{name}:F1]" in text
-    assert "<insert business purpose and users information here>" in text      # an unknown is asked for, not guessed
-    assert f"{name}:F1" in cells and "Approve sets the batch status." in cells
+    report = docx.Document(io.BytesIO(docx_bytes(store, rescan=True)))
+    text = "\n".join(p.text for p in report.paragraphs)
+    assert f"{store.info['slug']}_executive_summary.docx" in text                       # the report points to the separate file
+    assert "Verdict: Remediate (" not in text and "Unchecked approval" not in text     # and no longer carries the summary itself
+    assert "Evidence for the key findings" not in text                                  # the evidence appendix moved with the summary
+    own = docx.Document(io.BytesIO(summary_doc.docx_bytes(store)))
+    body = "\n".join(p.text for p in own.paragraphs)
+    cells = "\n".join(c.text for t in own.tables for r in t.rows for c in r.cells)
+    assert "Remediate (provisional)" in body and "Unchecked approval" in cells
+    assert "<insert business purpose and users information here>" in body              # an unknown is asked for, not guessed
+    assert "Approve sets the batch status." in cells and f"[{name}:F1]" not in body + cells   # tags become plain references
 
 
 def test_text_is_cut_to_whole_sentences_within_the_limit_and_unknowns_become_inserts():
