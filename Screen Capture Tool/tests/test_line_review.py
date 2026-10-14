@@ -280,3 +280,21 @@ def test_the_edge_question_is_asked_in_the_review_and_lines_missing_marks_the_fi
 def line_review_items(store, art):
     from core.model import line_review
     return line_review.items(store, art)
+
+
+def test_confirming_the_first_and_last_line_clears_the_start_and_end_not_captured_reasons():
+    """The structure check says a COBOL file starting at PROCEDURE DIVISION lost its start; once a person confirms line 1 is
+    the top (and the last line the end) that must stop making the file 'partial'."""
+    from core.model import confirmed, edges
+    from core.model.completeness import check
+    text = "       ENVIRONMENT DIVISION.\n       PROCEDURE DIVISION.\n           DISPLAY 'X'.\n           IF A = 1\n               STOP RUN\n           END-IF"
+    art = {"id": 1, "name": "A.cbl", "artifact_type": "code", "transcription": text}
+    c = check(text, "A.cbl", "")
+    assert c["partial"] and any("start not captured" in r for r in c["reasons"])
+    assert edges.settle(_Edges(), art, c)["partial"]                                   # nothing confirmed: still partial
+    lines = text.splitlines()
+    first = _Edges(confirmed_lines={"A.cbl": [confirmed.signature(lines, 1)]})
+    out = edges.settle(first, art, c)
+    assert not any("start not captured" in r for r in out["reasons"])                  # line 1 confirmed: the start reason goes
+    both = _Edges(confirmed_lines={"A.cbl": [confirmed.signature(lines, 1), confirmed.signature(lines, len(lines))]})
+    assert not any("end probably not captured" in r or "start not captured" in r for r in edges.settle(both, art, c)["reasons"])

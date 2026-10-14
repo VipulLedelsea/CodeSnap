@@ -227,6 +227,14 @@ END_REASONS = ("unclosed", "no PROCEDURE DIVISION", "ends mid-construct", "end p
                "rest of the program not captured")
 
 
+START_REASONS = ("start not captured", "start probably not captured", "start of the file probably not captured")
+
+
+def drop_start_reasons(result):
+    reasons = [r for r in result["reasons"] if not any(k in r for k in START_REASONS)]
+    return {**result, "reasons": reasons, "partial": bool(reasons)}
+
+
 def blank_tail(path):
     """Rows of empty editor space below the last line of text in a screenshot, or None if it cannot be measured."""
     try:

@@ -38,10 +38,8 @@ def pipeline_health(store) -> dict:
             unverified.append(a["name"])
         c = completeness(text, a["name"], a.get("language") or "",
                          a.get("validation_errors") if a.get("validation_ok") == 0 else "")
-        if c["partial"]:
-            from .completeness import end_reached, drop_end_reasons
-            if end_reached(store, a):
-                c = drop_end_reasons(c)
+        from . import edges
+        c = edges.settle(store, a, c)
         if c["partial"]:
             partial.append({"id": a["id"], "name": a["name"], "reasons": c["reasons"]})
         if (a.get("artifact_type") in (None, "code")):

@@ -93,3 +93,19 @@ def flags(store, art) -> list:
 def marked_missing(store, art, kind) -> bool:
     n = 1 if kind == "start" else len((art.get("transcription") or "").splitlines())
     return confirmed.is_marked_missing(store, art.get("name"), art.get("transcription"), n)
+
+
+def settle(store, art, result):
+    """Drop the completeness reasons about a file's start or end once that edge is proved or a person confirmed it.
+    Without this a confirmed first or last line stops the question being asked, yet the file stays "partial" because the
+    structure check still says its start or end was not captured."""
+    if not result.get("partial"):
+        return result
+    from .completeness import drop_end_reasons, drop_start_reasons
+    lines = (art.get("transcription") or "").splitlines()
+    ver = store.verification(art["id"]) or {}
+    if (ver.get("numbers") and ver.get("first_line") == 1) or start_evidence(art) or _confirmed(store, art, 1):
+        result = drop_start_reasons(result)
+    if lines and (end_evidence(store, art) or _confirmed(store, art, len(lines))):
+        result = drop_end_reasons(result)
+    return result

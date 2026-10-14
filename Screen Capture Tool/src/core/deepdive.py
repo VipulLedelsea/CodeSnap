@@ -266,10 +266,8 @@ def capture_quality(store, art, concerns=None) -> dict:
                        "advice": ADVICE.get(k, "check these lines against the screen")})
     if art.get("artifact_type") in (None, "code"):
         c = check(text, art["name"], art.get("language") or "")
-        if c["partial"]:
-            from core.model.completeness import end_reached, drop_end_reasons
-            if end_reached(store, art):
-                c = drop_end_reasons(c)
+        from core.model import edges
+        c = edges.settle(store, art, c)
         if c["partial"]:
             issues.append({"kind": "partial", "lines": [], "reason": "; ".join(c["reasons"]), "advice": ADVICE["partial"]})
         from core.model import edges
