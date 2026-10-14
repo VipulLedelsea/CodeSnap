@@ -1535,22 +1535,37 @@ def merge_verified(raw_parts: list, metas: list | None = None):
 def _drop_measured_margin(raw_parts, metas):
     """The same one-column click offset, judged on the lines the pixels placed. A capture also holds lines the pixel check
     could not measure (guides, squiggles, short or bracket-only rows), and those keep the model's own column, so they put
-    stray lines at column zero and defeat the whole-capture test above. A screenshot whose measured lines never reach column
-    zero but do sit at column one is one column right on its measured lines only; those lines move left by one, the
-    model-read lines stay where they were."""
-    out = []
-    for part, meta in zip(raw_parts, metas):
+    stray lines at column zero and defeat the whole-capture test above. The click is one position for the whole capture, so
+    it is judged over every calibrated screenshot together: a screenshot of a class body never shows a column-zero line, but
+    the capture as a whole does or does not. When no measured line anywhere reaches column zero and enough sit at column one,
+    every calibrated screenshot is one column right and its indented lines move left by one. When the capture as a whole is
+    not decisive, a screenshot whose own measured lines show it is judged alone and only its measured lines move."""
+    def parsed(part, meta):
         spacing = (meta or {}).get('spacing') or {}
         lines, status = part.split('\n'), spacing.get('line_status') or []
         if spacing.get('calibrated') is not True or len(status) != len(lines):
+            return lines, None
+        return lines, status
+
+    def measured_indents(lines, status):
+        return [len(l) - len(l.lstrip(' ')) for l, s in zip(lines, status)
+                if s == 'measured' and l.strip() and '[CUT OFF]' not in l and '\t' not in l]
+
+    views = [parsed(p, m) for p, m in zip(raw_parts, metas)]
+    pooled = [i for lines, status in views if status for i in measured_indents(lines, status)]
+    whole = len(pooled) >= 20 and min(pooled) == 1 and sum(i == 1 for i in pooled) >= max(3, 0.03 * len(pooled))
+    out = []
+    for part, (lines, status) in zip(raw_parts, views):
+        if status is None:
             out.append(part)
             continue
-        measured = [len(l) - len(l.lstrip(' ')) for l, s in zip(lines, status)
-                    if s == 'measured' and l.strip() and '[CUT OFF]' not in l and '\t' not in l]
-        if len(measured) < 5 or min(measured) != 1 or sum(i == 1 for i in measured) < max(2, 0.03 * len(measured)):
+        own = measured_indents(lines, status)
+        if whole:
+            out.append('\n'.join(l[1:] if l.startswith(' ') and l.strip() and '[CUT OFF]' not in l else l for l in lines))
+        elif len(own) >= 5 and min(own) == 1 and sum(i == 1 for i in own) >= max(2, 0.03 * len(own)):
+            out.append('\n'.join(l[1:] if s == 'measured' and l.startswith(' ') else l for l, s in zip(lines, status)))
+        else:
             out.append(part)
-            continue
-        out.append('\n'.join(l[1:] if s == 'measured' and l.startswith(' ') else l for l, s in zip(lines, status)))
     return out
 
 

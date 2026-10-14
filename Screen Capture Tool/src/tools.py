@@ -130,7 +130,7 @@ def _t_save_output(ctx, inp):
         try:
             from core.verify import summarize
             statuses, notes, read = ctx.verify_info
-            ctx.last_report["verification"] = summarize(content, statuses, notes, read_code=read)
+            ctx.last_report["verification"] = summarize(content, statuses, notes, read_code=read, name=('x.' + inp['extension'].lstrip('.')) if inp.get('extension') else (getattr(ctx, 'code_name', None) or ''))
         except Exception:  # noqa: BLE001 - the line check is a report extra
             pass
     if ctx.program_mode:

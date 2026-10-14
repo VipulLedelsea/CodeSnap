@@ -13,6 +13,7 @@ import numpy as np
 from PIL import Image
 
 MAX_SHIFT = 8          # a measured column this far from the transcribed one means the row was matched wrongly
+RULE_SLACK = 16        # the model miscounts the characters of a long divider; the pixels may correct it by this many
 MIN_GRID_FIT = 0.6     # how well glyph edges must sit on one character grid before we trust it
 
 
@@ -203,6 +204,12 @@ def _align(measured, lines):
 _RULE = re.compile(r"^(\S{0,8}?)(-|=|\*|_|#|\.)\2{7,}$")
 
 
+def _rule_only(line) -> bool:
+    """A separator line: a comment marker or nothing, then a run of one rule character (# -----, ======, /*****)."""
+    words = line.split()
+    return bool(words) and any(_RULE.match(w) for w in words) and all(_RULE.match(w) or len(w) <= 2 for w in words)
+
+
 def _anchored(plain, pairset, ri, li) -> bool:
     """A line with letters or digits identifies its screen row. A lone '}' or ');' matches every such row, so it is
     trusted only when both neighbours are matched to the neighbouring rows and one of them has letters or digits;
@@ -210,13 +217,15 @@ def _anchored(plain, pairset, ri, li) -> bool:
     if any(ch.isalnum() for ch in plain[li]):
         return True
     nb = [(ri - 1, li - 1), (ri + 1, li + 1)]
+    if _rule_only(plain[li]) and any(p in pairset for p in nb):
+        return True                             # a divider is found by its place between matched neighbours; only its length is corrected
     return all(p in pairset for p in nb) and any(0 <= l < len(plain) and any(ch.isalnum() for ch in plain[l]) for _, l in nb)
 
 
 def _measured_word(word, width):
     """Separator rules (------, ======, ******) are where the model miscounts characters; there the pixels decide."""
     m = _RULE.match(word)
-    if m and 0 < abs(width - len(word)) <= 2:
+    if m and 0 < abs(width - len(word)) <= RULE_SLACK:
         return m.group(1) + m.group(2) * (width - len(m.group(1)))
     return word
 
@@ -317,6 +326,21 @@ def respace(image_path, text: str, *, source_x=None) -> tuple:
         if new != plain[li] and same_words and len(new.split()) == len(plain[li].split()):
             lines[body[li][0]] = new
             changed += 1
+    # A divider whose dash count was misread has widths that match no row, so it is never paired. Between two matched rows
+    # with equal counts it still sits on a known row, and the pixels give its true length.
+    for (r1, l1), (r2, l2) in zip(m["pairs"], m["pairs"][1:]):
+        if not r2 - r1 == l2 - l1 > 1:
+            continue
+        for k in range(1, r2 - r1):
+            ri, li = r1 + k, l1 + k
+            line = plain[li]
+            if m["deco"][ri] or not _rule_only(line) or len(measured[ri]) != len(line.split()):
+                continue
+            cols = [c + base for c, _ in measured[ri]]
+            new = _rebuild(line, cols, [w for _, w in measured[ri]])
+            if new != line and len(new.split()) == len(line.split()):
+                lines[body[li][0]] = new
+                changed += 1
     return "\n".join(lines), changed
 
 

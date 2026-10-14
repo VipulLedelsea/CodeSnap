@@ -127,7 +127,7 @@ def rebuild_saved_capture(store, artifact_id, progress=None):
         source = Path(directory) / Path(art['name']).name
         source.write_text(code + '\n')
         validation = check_source(source)
-    verification = summarize(code, statuses, notes, read_code=code)
+    verification = summarize(code, statuses, notes, read_code=code, name=art['name'])
     update('Saving rebuilt analysis', len(frames), len(frames))
     with store.transaction():
         current = store.current_artifact(art['name'])

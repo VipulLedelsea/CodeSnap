@@ -32,7 +32,28 @@ REASONS = {
              "over this part more slowly and use Add screenshots",
     "edited": "changed by the compile-fix step after reading; compare it with the screenshot",
     "spacing": "screenshots disagree about this line's spacing; confirm its source margin and compare the saved readings",
+    "syntax": "the source stops parsing here: this line, or one just before it, may be misread, misplaced or missing; compare "
+              "it with the screenshot",
 }
+
+
+def syntax_error(code: str, name: str = ""):
+    """(line, message) where Python or JSON source first fails to parse, or None. An independent check that needs no
+    screenshot: a misread indent, a dropped bracket or a line stitched in twice usually breaks the parse. Other languages
+    are not checked here."""
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    try:
+        if ext in ("py", "pyw"):
+            import ast
+            ast.parse(code)
+        elif ext == "json":
+            import json
+            json.loads(code)
+    except SyntaxError as exc:
+        return exc.lineno or 1, exc.msg
+    except ValueError as exc:
+        return getattr(exc, "lineno", 1) or 1, getattr(exc, "msg", str(exc))
+    return None
 
 
 def best(a: str, b: str) -> str:
@@ -460,7 +481,7 @@ def align_line_evidence(code: str, raw_parts: list, clean_parts: list, metas: li
         notes["source_lines"] = source_lines
 
 
-def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: str | None = None) -> dict:
+def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: str | None = None, name: str = "") -> dict:
     """Counts for one file plus the lines to look at. `read_code` is the text as read, before any compile fix: lines
     that differ from it are reported as edited."""
     notes = notes or {}
@@ -472,7 +493,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
     norm = {_norm(k) for k in statuses}
     spacing_conflicts = set(notes.get('spacing_conflicts') or [])
     counts = {"verified": 0, "reread": 0, "confirmed": 0, "joined": 0, "flagged": 0, "unchecked": 0}
-    flags = []
+    flags, kinds = [], {}
     for i, l in enumerate(final_lines, 1):
         if not l.strip():
             continue
@@ -491,6 +512,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
                 s = "edited" if read_lines is not None and _norm(l) not in norm else "unchecked"
         if s in ("verified", "reread", "confirmed", "joined"):
             counts[s] += 1
+            kinds[i] = s
         elif s in REASONS:
             counts["flagged"] += 1
             flag = {"line": i, "text": l.strip()[:160], "reason": REASONS[s]}
@@ -499,6 +521,14 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
             flags.append(flag)
         else:
             counts["unchecked"] += 1
+            kinds[i] = "unchecked"
+    bad = syntax_error(code or "", name)
+    if bad and not any(f["line"] == bad[0] for f in flags):
+        line = min(bad[0], len(final_lines))
+        flags.append({"line": line, "text": final_lines[line - 1].strip()[:160], "reason": REASONS["syntax"]})
+        counts["flagged"] += 1
+        if kinds.get(line):
+            counts[kinds[line]] -= 1          # the line was already counted once; it now counts as flagged
     lines_ = final_lines
     for b in notes.get("breaks") or []:
         prev, nxt = b if isinstance(b, (list, tuple)) else ("", b)
