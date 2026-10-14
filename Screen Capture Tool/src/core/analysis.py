@@ -1363,12 +1363,15 @@ def _align_origins(parts, metas, min_anchored=3, tol=0.25):
     return out
 
 
-def _equalize_frame_offsets(parts, min_block=5, min_pairs=8, support=0.8, max_shift=12):
+def _equalize_frame_offsets(parts, min_block=5, min_pairs=8, support=0.8, max_shift=12, pinned=()):
     """Bring screenshots that sit some columns left or right of their neighbours to one common offset. The editor can
     scroll sideways by a column between screenshots, so a whole screen is then read that many columns away from the rest.
     Two neighbouring screens show some lines in common; when nearly all of those lines differ by the same one or two columns,
     that screen is shifted as a whole (up to a dozen columns: a larger move is a real scroll to other text). The common offset keeps the file's leftmost indent where it was, so a margin offset
-    that affects the whole capture is left for _drop_margin_offset. Returns the parts unchanged when nothing consistent is found."""
+    that affects the whole capture is left for _drop_margin_offset. Returns the parts unchanged when nothing consistent is found.
+    `pinned` are the screenshots whose columns the pixel check placed on the screen's own grid: they are never moved, and
+    the chain of offsets restarts from zero at each of them, so noisy indentation reads on lines the pixels could not
+    measure cannot pile up into a shift of the whole opening of a file."""
     import collections
     if len(parts) < 3:
         return parts
@@ -1387,13 +1390,13 @@ def _equalize_frame_offsets(parts, min_block=5, min_pairs=8, support=0.8, max_sh
                 la, lb = a[block.a + t], b[block.b + t]
                 if la.strip() and lb.strip() and "[CUT OFF]" not in la + lb and "\t" not in la + lb:
                     deltas.append(indent(lb) - indent(la))
-        if len(deltas) >= min_pairs:
+        if i not in pinned and len(deltas) >= min_pairs:
             delta, count = collections.Counter(deltas).most_common(1)[0]
             if delta and abs(delta) <= max_shift and count / len(deltas) >= support:
                 rel[i] = delta
     offsets, run = [], 0
-    for r in rel:
-        run += r
+    for i, r in enumerate(rel):
+        run = 0 if i in pinned else run + r
         offsets.append(run)
     if not any(offsets):
         return parts
@@ -1417,7 +1420,8 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     metas = list(metas or [])
     metas += [{}] * (len(raw_parts) - len(metas))
     raw_parts = _align_origins(raw_parts, metas)
-    raw_parts = _equalize_frame_offsets(raw_parts)
+    pinned = {k for k, m in enumerate(metas) if ((m or {}).get("spacing") or {}).get("calibrated")}
+    raw_parts = _equalize_frame_offsets(raw_parts, pinned=pinned)
     raw_parts = _drop_margin_offset(raw_parts, metas)
     mode = source_mode(raw_parts)
     statuses = verify.lookup(raw_parts, metas)
@@ -1528,6 +1532,28 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     return final, parts, notes, statuses
 
 
+def _drop_measured_margin(raw_parts, metas):
+    """The same one-column click offset, judged on the lines the pixels placed. A capture also holds lines the pixel check
+    could not measure (guides, squiggles, short or bracket-only rows), and those keep the model's own column, so they put
+    stray lines at column zero and defeat the whole-capture test above. A screenshot whose measured lines never reach column
+    zero but do sit at column one is one column right on its measured lines only; those lines move left by one, the
+    model-read lines stay where they were."""
+    out = []
+    for part, meta in zip(raw_parts, metas):
+        spacing = (meta or {}).get('spacing') or {}
+        lines, status = part.split('\n'), spacing.get('line_status') or []
+        if spacing.get('calibrated') is not True or len(status) != len(lines):
+            out.append(part)
+            continue
+        measured = [len(l) - len(l.lstrip(' ')) for l, s in zip(lines, status)
+                    if s == 'measured' and l.strip() and '[CUT OFF]' not in l and '\t' not in l]
+        if len(measured) < 5 or min(measured) != 1 or sum(i == 1 for i in measured) < max(2, 0.03 * len(measured)):
+            out.append(part)
+            continue
+        out.append('\n'.join(l[1:] if s == 'measured' and l.startswith(' ') else l for l, s in zip(lines, status)))
+    return out
+
+
 def _drop_margin_offset(raw_parts, metas):
     """A click placed one column left of the text leaves every line one space too far right. Source files have
     something at column one (a label, a comment, a declaration), so a whole capture whose leftmost line sits at
@@ -1535,16 +1561,16 @@ def _drop_margin_offset(raw_parts, metas):
     shown = [m for m in metas if m]
     clicked = [m for m in shown if (m.get('spacing') or {}).get('calibrated') is True and not (m.get('spacing') or {}).get('auto')]
     if not clicked or len(clicked) < 0.8 * len(shown):
-        return raw_parts
+        return _drop_measured_margin(raw_parts, metas)
     body = [l for r in raw_parts for l in r.split('\n') if l.strip() and '[CUT OFF]' not in l and '\t' not in l]
     indents = [len(l) - len(l.lstrip(' ')) for l in body]
     if len(body) < 20 or sum(i == 0 for i in indents) > 0.02 * len(indents):
-        return raw_parts
+        return _drop_measured_margin(raw_parts, metas)
     # A real click offset moves every line, so the rows that belong at column one (labels, top-level statements) all show at
     # indent one: 9% to 56% of the lines on real captures. A handful of stray rows (a copybook had 16 of 2,153) is not an
     # offset, and shifting the whole capture would undo the columns the pixel measurement just set.
     if sum(i == 1 for i in indents) < max(3, 0.03 * len(indents)):
-        return raw_parts
+        return _drop_measured_margin(raw_parts, metas)
     return ['\n'.join(l[1:] if l.startswith(' ') and l.strip() and '[CUT OFF]' not in l else l for l in r.split('\n'))
             for r in raw_parts]
 
