@@ -1305,6 +1305,45 @@ def _collapse_doubled_lines(final, parts, min_len=12):
     return "\n".join(l for i, l in enumerate(lines) if i not in skip), [d + 1 for d in drop]
 
 
+def _align_origins(parts, metas, min_anchored=3, tol=0.25):
+    """Give every screenshot of one capture the same column one. The crop and the scroll do not change within a capture, so the
+    screenshots that found column one from the picture itself (a COBOL comment's '*' sits in column 7) must agree with each
+    other, and a screenshot calibrated from a person's click that sits whole characters away from them is the one that is off.
+    It shows every line that many columns too far right or left, so the lines are moved back. Returns the parts, changed."""
+    import collections
+    evidence = [((m or {}).get("spacing") or {}) for m in metas]
+    anchored = [(e["calibration"]["source_x"], e["calibration"].get("pitch")) for e in evidence
+                if e.get("calibrated") is True and e.get("auto") and (e.get("calibration") or {}).get("source_x") is not None]
+    if len(anchored) < min_anchored:
+        return parts
+    pitches = [(e.get("calibration") or {}).get("pitch") for e in evidence if (e.get("calibration") or {}).get("pitch")]
+    pitch = sorted(pitches)[len(pitches) // 2] if pitches else None
+    if not pitch:
+        return parts
+    xs = sorted(x for x, _ in anchored)
+    consensus = xs[len(xs) // 2]
+    if sum(abs(x - consensus) <= tol * pitch for x in xs) < 0.8 * len(xs):
+        return parts                                       # the anchored screenshots do not agree: nothing to align to
+    out = list(parts)
+    for i, e in enumerate(evidence):
+        cal = e.get("calibration") or {}
+        if e.get("calibrated") is not True or e.get("auto") or cal.get("source_x") is None or i >= len(parts):
+            continue
+        d = (cal["source_x"] - consensus) / (cal.get("pitch") or pitch)
+        whole = round(d)
+        if whole == 0 or abs(d - whole) > tol or abs(whole) > 3:
+            continue
+        lines = []
+        for line in parts[i].split("\n"):
+            lead = len(line) - len(line.lstrip(" "))
+            if not line.strip() or "[CUT OFF]" in line or "\t" in line or lead + whole < 0:
+                lines.append(line)
+            else:
+                lines.append(" " * (lead + whole) + line.lstrip(" "))
+        out[i] = "\n".join(lines)
+    return out
+
+
 def _equalize_frame_offsets(parts, min_block=5, min_pairs=8, support=0.8, max_shift=12):
     """Bring screenshots that sit some columns left or right of their neighbours to one common offset. The editor can
     scroll sideways by a column between screenshots, so a whole screen is then read that many columns away from the rest.
@@ -1358,6 +1397,7 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     from core import verify
     metas = list(metas or [])
     metas += [{}] * (len(raw_parts) - len(metas))
+    raw_parts = _align_origins(raw_parts, metas)
     raw_parts = _equalize_frame_offsets(raw_parts)
     raw_parts = _drop_margin_offset(raw_parts, metas)
     mode = source_mode(raw_parts)

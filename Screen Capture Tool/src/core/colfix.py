@@ -302,7 +302,12 @@ def respace(image_path, text: str, *, source_x=None) -> tuple:
         if body[li][0] in protected or '\t' in plain[li] or m["deco"][ri] or not _anchored(plain, pairset, ri, li):
             continue
         cols = [c + base for c, _ in measured[ri]]
-        if any(abs(a - b) > MAX_SHIFT for a, b in zip(_starts(plain[li]), cols)):
+        shifts = {a - b for a, b in zip(_starts(plain[li]), cols)}
+        # A far-off column usually means the row was matched to the wrong line. The exception is a row whose every word is off by
+        # the same amount, on a screenshot whose column one is known: the words and the gaps between them are right and only the
+        # leading indentation was misread, so the pixels decide it.
+        uniform = m["absolute_columns"] and len(shifts) == 1 and min(cols) >= 0
+        if not uniform and any(abs(s) > MAX_SHIFT for s in shifts):
             continue
         new = _rebuild(plain[li], cols, [w for _, w in measured[ri]])
         from core.text import normalized_line

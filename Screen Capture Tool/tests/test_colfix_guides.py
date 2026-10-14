@@ -97,3 +97,46 @@ def test_a_column_review_cut_off_by_the_token_limit_keeps_the_issues_that_arrive
         content=[SimpleNamespace(text=cut)], stop_reason="max_tokens")))
     got = review_columns(client, [img], "MOVE A TO B\nADD 1 TO C\nSTOP RUN.")
     assert [i["line_text"] for i in got] == ["MOVE A TO B", "ADD 1 TO C"]
+
+
+def _meas(lines, cols, absolute=True):
+    """What colfix._measure returns for rows matched one to one with `lines`, each row's words starting at `cols`."""
+    body = [(i, l) for i, l in enumerate(lines) if l.strip()]
+    measured = [[(c, len(w)) for c, w in zip(cs, l.split())] for (_, l), cs in zip(body, cols)]
+    return {"lines": lines, "body": body, "plain": [l for _, l in body], "measured": measured,
+            "pairs": [(i, i) for i in range(len(body))], "base": 0, "absolute_columns": absolute,
+            "deco": [False] * len(body)}
+
+
+def test_a_row_whose_every_word_is_off_by_the_same_amount_gets_the_pixel_indentation(monkeypatch):
+    """The model wrote WHEN at indent 0 where the pixels place it at 16; only the leading indentation was misread."""
+    lines = ['WHEN "A"', "PERFORM 2000-A", 'WHEN "B"']
+    cols = [[16, 21], [20, 28], [16, 21]]
+    monkeypatch.setattr(colfix, "_measure", lambda *a, **k: _meas(lines, cols))
+    out, changed = colfix.respace("unused.png", "\n".join(lines), source_x=40.0)
+    assert changed == 3 and [len(l) - len(l.lstrip()) for l in out.split("\n")] == [16, 20, 16]
+
+
+def test_a_far_off_row_is_still_left_alone_without_a_known_margin_or_when_words_disagree(monkeypatch):
+    lines = ['WHEN "A"', "PERFORM 2000-A", 'WHEN "B"']
+    cols = [[16, 21], [20, 28], [16, 21]]
+    monkeypatch.setattr(colfix, "_measure", lambda *a, **k: _meas(lines, cols, absolute=False))
+    assert colfix.respace("unused.png", "\n".join(lines))[1] == 0                      # no calibrated margin
+    skewed = [[16, 40], [20, 28], [16, 21]]                                             # the words do not shift together
+    monkeypatch.setattr(colfix, "_measure", lambda *a, **k: _meas(lines, skewed))
+    out, changed = colfix.respace("unused.png", "\n".join(lines), source_x=40.0)
+    assert out.split("\n")[0] == 'WHEN "A"'
+
+
+def test_a_screenshot_calibrated_from_a_click_a_character_off_follows_the_anchored_ones():
+    """Frames that found column one from the picture (a COBOL comment's '*') agree; one calibrated by a click 13.7 px (one
+    character) to the left of them shows every line one column too far right."""
+    from core import analysis
+    anchored = {"spacing": {"calibrated": True, "auto": True, "calibration": {"source_x": 47.0}}}
+    clicked = {"spacing": {"calibrated": True, "calibration": {"source_x": 33.3, "pitch": 13.74}}}
+    metas = [anchored, anchored, anchored, clicked]
+    parts = ["       01 A.\n          05 B PIC X."] * 3 + ["        01 A.\n           05 B PIC X."]
+    out = analysis._align_origins(parts, metas)
+    assert out[3] == parts[0] and out[:3] == parts[:3]
+    clicked_far = {"spacing": {"calibrated": True, "calibration": {"source_x": 38.0, "pitch": 13.74}}}   # not a whole character
+    assert analysis._align_origins(parts, metas[:3] + [clicked_far]) == parts
