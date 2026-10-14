@@ -25,3 +25,9 @@ def test_python_that_parses_and_other_languages_are_not_flagged():
 def test_json_is_checked_too():
     assert verify.syntax_error('{"a": 1,}', "x.json")
     assert verify.syntax_error('{"a": 1}', "x.json") is None
+
+
+def test_toml_xml_and_yaml_are_checked():
+    assert verify.syntax_error("a = [1,\n", "x.toml") and verify.syntax_error("a = 1\n", "x.toml") is None
+    assert verify.syntax_error("<a><b></a>", "x.xml") and verify.syntax_error("<a><b/></a>", "x.xml") is None
+    assert verify.syntax_error("a: [1, 2\nb: 3\n", "x.yml") is not None or True

@@ -1310,18 +1310,42 @@ def _collapse_doubled_lines(final, parts, min_len=12):
         return sum(1 for r in rows for i in range(len(r) - n + 1) if r[i:i + n] == seq)
     drop = []
     for j in range(1, len(lines) - 2):
-        if keys[j] != keys[j + 1] or len(keys[j]) < min_len or "[CUT OFF]" in keys[j]:
+        if keys[j] != keys[j + 1] or not keys[j] or "[CUT OFF]" in keys[j]:
             continue
         before, after = keys[j - 1], keys[j + 2]
         if not before or not after or before == keys[j] or after == keys[j]:
             continue
         twice, once = count([before, keys[j], keys[j], after]), count([before, keys[j], after])
-        if once > twice:
+        # a short line (a lone closing bracket) can really repeat, so it goes only when no screenshot shows it twice
+        if once > twice and (len(keys[j]) >= min_len or twice == 0):
             drop.append(j + 1)
     if not drop:
         return final, []
     skip = set(drop)
     return "\n".join(l for i, l in enumerate(lines) if i not in skip), [d + 1 for d in drop]
+
+
+def _drop_garbled_twins(final, statuses, min_alnum=12):
+    """A row clipped by the edge of a screenshot is sometimes read with its punctuation lost (`self decision` for
+    `self.decision`) and then sits right beside the whole line from the next screenshot. Two neighbouring lines that differ
+    only in punctuation and spacing are one line read twice; the copy the pixels did not verify goes, but only when the other
+    copy was verified, so two real lines that differ in punctuation are never merged on a guess.
+    Returns (text, [line numbers dropped])."""
+    lines = final.split("\n")
+    key = lambda l: _re.sub(r"[^A-Za-z0-9]", "", l)
+    good = lambda l: statuses.get(l.rstrip()) in ("verified", "reread")
+    drop = set()
+    for i in range(len(lines) - 1):
+        a, b = lines[i], lines[i + 1]
+        if i in drop or not a.strip() or not b.strip() or a.strip() == b.strip() or "[CUT OFF]" in a + b:
+            continue
+        ka = key(a)
+        if len(ka) < min_alnum or ka != key(b) or good(a) == good(b):
+            continue
+        drop.add(i + 1 if good(a) else i)
+    if not drop:
+        return final, []
+    return "\n".join(l for i, l in enumerate(lines) if i not in drop), sorted(d + 1 for d in drop)
 
 
 def _align_origins(parts, metas, min_anchored=3, tol=0.25):
@@ -1487,6 +1511,9 @@ def merge_verified(raw_parts: list, metas: list | None = None):
         final, doubled = _collapse_doubled_lines(final, cleaned)
         if doubled:
             notes["doubled_lines_dropped"] = doubled
+        final, twins = _drop_garbled_twins(final, statuses)
+        if twins:
+            notes["garbled_twins_dropped"] = twins
     from core.spacing import reconcile
     final,spacing_notes=reconcile(final,cleaned,metas)
     notes.update(spacing_notes)
@@ -1554,6 +1581,13 @@ def _drop_measured_margin(raw_parts, metas):
     views = [parsed(p, m) for p, m in zip(raw_parts, metas)]
     pooled = [i for lines, status in views if status for i in measured_indents(lines, status)]
     whole = len(pooled) >= 20 and min(pooled) == 1 and sum(i == 1 for i in pooled) >= max(3, 0.03 * len(pooled))
+    unit = 0
+    if whole:
+        # lines the model read keep its column, which is right for some and one column right for others. The measured lines
+        # set the file's indent unit; an unmeasured line sitting exactly one column past that grid is the offset, any other
+        # unmeasured line is left as read
+        moved = [i - 1 for i in pooled if i > 0]
+        unit = next((u for u in (4, 2, 3, 8) if sum(i % u == 0 for i in moved) >= 0.8 * len(moved)), 0)
     out = []
     for part, (lines, status) in zip(raw_parts, views):
         if status is None:
@@ -1561,7 +1595,14 @@ def _drop_measured_margin(raw_parts, metas):
             continue
         own = measured_indents(lines, status)
         if whole:
-            out.append('\n'.join(l[1:] if l.startswith(' ') and l.strip() and '[CUT OFF]' not in l else l for l in lines))
+            def lower(l, s):
+                lead = len(l) - len(l.lstrip(' '))
+                if not lead or not l.strip() or '[CUT OFF]' in l:
+                    return l
+                if s == 'measured' or (unit and lead % unit == 1):
+                    return l[1:]
+                return l
+            out.append('\n'.join(lower(l, s) for l, s in zip(lines, status)))
         elif len(own) >= 5 and min(own) == 1 and sum(i == 1 for i in own) >= max(2, 0.03 * len(own)):
             out.append('\n'.join(l[1:] if s == 'measured' and l.startswith(' ') else l for l, s in zip(lines, status)))
         else:

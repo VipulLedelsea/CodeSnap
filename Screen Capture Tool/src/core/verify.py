@@ -38,9 +38,9 @@ REASONS = {
 
 
 def syntax_error(code: str, name: str = ""):
-    """(line, message) where Python or JSON source first fails to parse, or None. An independent check that needs no
-    screenshot: a misread indent, a dropped bracket or a line stitched in twice usually breaks the parse. Other languages
-    are not checked here."""
+    """(line, message) where Python, JSON, TOML, XML or YAML source first fails to parse, or None. An independent check
+    that needs no screenshot: a misread indent, a dropped bracket or a line stitched in twice usually breaks the parse.
+    Other languages are not checked here."""
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
     try:
         if ext in ("py", "pyw"):
@@ -49,10 +49,24 @@ def syntax_error(code: str, name: str = ""):
         elif ext == "json":
             import json
             json.loads(code)
+        elif ext == "toml":
+            import tomllib
+            tomllib.loads(code)
+        elif ext in ("xml", "xsl", "xslt", "xsd", "wsdl"):
+            from xml.etree import ElementTree
+            ElementTree.fromstring(code.encode("utf-8"))
+        elif ext in ("yml", "yaml"):
+            try:
+                import yaml
+            except ImportError:
+                return None
+            list(yaml.safe_load_all(code))
     except SyntaxError as exc:
         return exc.lineno or 1, exc.msg
-    except ValueError as exc:
-        return getattr(exc, "lineno", 1) or 1, getattr(exc, "msg", str(exc))
+    except Exception as exc:  # noqa: BLE001 - every parser raises its own error type
+        line = getattr(exc, "lineno", None) or (getattr(exc, "position", None) or (None,))[0] \
+            or getattr(getattr(exc, "problem_mark", None), "line", -1) + 1
+        return max(int(line or 1), 1), str(getattr(exc, "msg", None) or getattr(exc, "problem", None) or exc)[:80]
     return None
 
 

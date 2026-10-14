@@ -326,18 +326,28 @@ def respace(image_path, text: str, *, source_x=None) -> tuple:
         if new != plain[li] and same_words and len(new.split()) == len(plain[li].split()):
             lines[body[li][0]] = new
             changed += 1
-    # A divider whose dash count was misread has widths that match no row, so it is never paired. Between two matched rows
-    # with equal counts it still sits on a known row, and the pixels give its true length.
+    # Rows between two matched rows with equal counts sit on known screen rows even though no 3-row run anchored them. Such a
+    # row is placed by the pixels when it is a divider (its dash count may have been misread, so only its shape must match) or
+    # when every word has exactly the width the row shows, so only the leading spaces and gaps were uncertain.
     for (r1, l1), (r2, l2) in zip(m["pairs"], m["pairs"][1:]):
         if not r2 - r1 == l2 - l1 > 1:
             continue
         for k in range(1, r2 - r1):
             ri, li = r1 + k, l1 + k
             line = plain[li]
-            if m["deco"][ri] or not _rule_only(line) or len(measured[ri]) != len(line.split()):
+            if (m["deco"][ri] or body[li][0] in protected or "\t" in line or len(measured[ri]) != len(line.split())):
+                continue
+            rule = _rule_only(line)
+            exact = all(w == len(t) for (_, w), t in zip(measured[ri], line.split()))
+            if not (rule or (exact and _anchored(plain, pairset, ri, li) and m["absolute_columns"])):
                 continue
             cols = [c + base for c, _ in measured[ri]]
+            if min(cols) < 0:
+                continue
             new = _rebuild(line, cols, [w for _, w in measured[ri]])
+            from core.text import normalized_line
+            if normalized_line(new) != normalized_line(line) and not rule:
+                continue
             if new != line and len(new.split()) == len(line.split()):
                 lines[body[li][0]] = new
                 changed += 1
