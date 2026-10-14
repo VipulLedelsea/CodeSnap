@@ -140,3 +140,36 @@ def test_a_screenshot_calibrated_from_a_click_a_character_off_follows_the_anchor
     assert out[3] == parts[0] and out[:3] == parts[:3]
     clicked_far = {"spacing": {"calibrated": True, "calibration": {"source_x": 38.0, "pitch": 13.74}}}   # not a whole character
     assert analysis._align_origins(parts, metas[:3] + [clicked_far]) == parts
+
+
+def test_a_line_read_only_from_a_screenshots_edge_row_loses_to_the_same_line_read_whole():
+    """The bottom row of a screenshot is clipped by the edge: a Q loses its tail (REQ read as REO) and a hyphen is lost (END-IF
+    read as END IF). The pixel check cannot tell, so the screenshot that shows the row whole decides, even alone."""
+    from core import analysis
+    a = ["IF A", "MOVE 1 TO X", "COMPUTE X = REO-AMOUNT * 2"]                       # clipped: the last row of its screenshot
+    b = ["MOVE 1 TO X", "COMPUTE X = REQ-AMOUNT * 2", "IF B", "MOVE 2 TO Y", "STOP"]  # the same place, whole, inside the next
+    final = "\n".join(a + b[2:])
+    out, changed = analysis._vote_lines(final, ["\n".join(a), "\n".join(b)], [{}, {}])
+    assert "REQ-AMOUNT" in out and "REO-AMOUNT" not in out and changed
+    c = ["END IF"]
+    keep = "\n".join(["X", "END IF", "Y"])                                          # the only reading, nothing to compare
+    assert analysis._vote_lines(keep, [keep], [{}])[0] == keep
+
+
+def test_two_interior_readings_still_need_the_usual_two_to_one():
+    from core import analysis
+    a = ["ALPHA", "COMPUTE X = REO-AMOUNT * 2", "OMEGA"]                            # an interior row, not at the edge
+    b = ["ALPHA", "COMPUTE X = REQ-AMOUNT * 2", "OMEGA"]
+    final = "\n".join(a)
+    assert analysis._vote_lines(final, ["\n".join(a), "\n".join(b)], [{}, {}])[0] == final   # a 1 to 1 tie is not decided
+
+
+def test_an_indentation_only_disagreement_is_not_decided_by_the_edge_rule():
+    """Edge clipping loses part of a glyph, never the row's indentation: MUNREV.cbl had the right indent on the edge row and a
+    misread one on an interior row, and the edge rule must leave that to the pixel check and the usual vote."""
+    from core import analysis
+    a = ["IF A", '               WHEN "JUNIPER"']                                  # last row of its screenshot, indent 15
+    b = ['        WHEN "JUNIPER"', "MOVE 1 TO X", "STOP"]                            # the same row inside the next, indent 8
+    final = "\n".join(a + b[1:])
+    out, _ = analysis._vote_lines(final, ["\n".join(a), "\n".join(b)], [{}, {}])
+    assert '               WHEN "JUNIPER"' in out

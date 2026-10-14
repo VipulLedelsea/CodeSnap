@@ -1101,21 +1101,40 @@ def _vote_lines(final, parts, metas, min_ratio=0.85):
     lines = final.split("\n")
     votes = [collections.Counter() for _ in lines]
     frames = [collections.defaultdict(set) for _ in lines]
+    interior = [collections.Counter() for _ in lines]      # readings taken from a row that is not at a screenshot's edge
     for k, (part, meta) in enumerate(zip(parts, metas)):
         rows = part.split("\n")
         status = (meta or {}).get("status")
         status = status if isinstance(status, list) and len(status) == len(rows) else None
+        filled = [n for n, r in enumerate(rows) if r.strip()]
+        edge_rows = {filled[0], filled[-1]} if filled else set()
         for j, i in enumerate(verify._line_map(part, final, carry_replacements=True)):
             if i is None or not rows[i].strip() or "[CUT OFF]" in rows[i]:
                 continue
             votes[j][rows[i].rstrip()] += 2.0 if status and status[i] in ("verified", "reread") else 1.0
             frames[j][rows[i].rstrip()].add(k)
+            if i not in edge_rows:
+                interior[j][rows[i].rstrip()] += 1
     changed = []
     for j, line in enumerate(lines):
         tally = votes[j]
         if len(tally) < 2 or not line.strip() or "[CUT OFF]" in line:
             continue
         mine = tally.get(line.rstrip(), 0.0)
+        # The top and bottom row of a screenshot can be clipped by the edge (a Q loses its tail and reads as O, a hyphen is lost),
+        # and the pixel check cannot tell: the clipped glyph is as wide as the whole one. When every reading of this line that
+        # was kept came from an edge row, and the same line read from a row that is not at an edge is nearly the same text,
+        # the whole reading wins even with one screenshot behind it.
+        if mine and not interior[j].get(line.rstrip()):
+            # Only a difference in the text counts: edge clipping loses part of a glyph, not the row's indentation, and an
+            # indentation disagreement is settled by the pixel check and the usual vote.
+            whole = [(interior[j][t], tally[t], t) for t in interior[j] if interior[j][t] and t.strip() != line.strip()
+                     and _difflib.SequenceMatcher(None, line.strip(), t.strip(), autojunk=False).ratio() >= 0.75]
+            if whole:
+                _, _, best = max(whole)
+                changed.append((j + 1, line, best))
+                lines[j] = best
+                continue
         # Two identical long lines in a row are rarely real source: a screenshot read a line twice and skipped its neighbour.
         # The repeated text then has no claim over a different reading of the same place, even a single one that ties it.
         twin = len(line.strip()) >= 25 and ((j + 1 < len(lines) and lines[j] == lines[j + 1]) or (j and lines[j] == lines[j - 1]))
