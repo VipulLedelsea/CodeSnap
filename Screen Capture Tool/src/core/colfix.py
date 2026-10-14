@@ -16,11 +16,28 @@ MAX_SHIFT = 8          # a measured column this far from the transcribed one mea
 MIN_GRID_FIT = 0.6     # how well glyph edges must sit on one character grid before we trust it
 
 
-def _drop_guides(ink, min_h=60, max_w=3):
+def _line_pitch(ink):
+    """The distance from one text row to the next, from the rows' tops, or None when there are too few rows to tell."""
+    on = np.concatenate([[False], ink.any(1), [False]])
+    edges = np.flatnonzero(on[1:] != on[:-1])
+    bands = [(a, b) for a, b in zip(edges[::2], edges[1::2]) if 8 <= b - a <= 45]
+    if len(bands) < 4:
+        return None
+    return float(np.median(np.diff([a for a, _ in bands])))
+
+
+def _drop_guides(ink, min_h=None, max_w=3):
     """Remove the editor's indent guides: thin vertical lines (one to three pixels wide, the active guide is drawn heavier)
     that run through several rows of text. They are ink to the threshold below, so every guided row would start at the guide
     instead of at its first character, and rows fuse into one band and cannot be matched to their text. A glyph stroke is one
     row tall; the line a guide draws is many rows tall and has no ink beside it, which is how the two are told apart."""
+    if min_h is None:
+        # Long guides go first, so the rows can be told apart and the line pitch measured; a guide beside a short block (one
+        # row of body under an IF) is only as tall as one row of the screen, which is still taller than any glyph: a stroke
+        # such as '|' stops short of the next row, a guide runs through the gap.
+        first = _drop_guides(ink, min_h=60, max_w=max_w)
+        pitch = _line_pitch(first)
+        return _drop_guides(first, min_h=max(24, int(0.9 * pitch)), max_w=max_w) if pitch else first
     out = ink.copy()
     h, w = ink.shape
     long_runs = {}                                           # column -> [(top, bottom)] runs of at least min_h
