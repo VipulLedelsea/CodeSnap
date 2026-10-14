@@ -100,13 +100,31 @@ def review_columns(client, image_paths, code: str) -> list:
     content.append({"type": "text", "text": f"Transcription (column ruler first):\n{ruler}\n{code}\n\n"
                                             "Report column placement differences. Return only the JSON object."})
     try:
-        msg = client.messages.create(model=MODEL, max_tokens=1024, system=COLUMN_REVIEW_SYSTEM,
+        msg = client.messages.create(model=MODEL, max_tokens=4096, system=COLUMN_REVIEW_SYSTEM,
                                      messages=[{"role": "user", "content": content}])
-        data = _parse_json("".join(getattr(b, "text", "") for b in msg.content).strip()) or {}
+        text = "".join(getattr(b, "text", "") for b in msg.content).strip()
+        data = _parse_json(text) or {}
         issues = data.get("issues", []) if isinstance(data, dict) else []
+        if not issues and getattr(msg, "stop_reason", None) == "max_tokens":
+            issues = _complete_issues(text)    # a long file can still overrun: keep the issues that arrived whole
         return [i for i in issues if isinstance(i, dict) and str(i.get("line_text", "")).strip()]
     except Exception:
         return []
+
+
+def _complete_issues(text: str) -> list:
+    """The issue objects that are complete in a reply cut off mid-list; the unfinished last one is dropped."""
+    import json
+    import re
+    out = []
+    for m in re.finditer(r"\{[^{}]*\}", text):
+        try:
+            item = json.loads(m.group(0))
+        except ValueError:
+            continue
+        if isinstance(item, dict) and "line_text" in item:
+            out.append(item)
+    return out
 
 
 def merge_column_review(errors: str, lint: list, seen: list, code: str) -> str:

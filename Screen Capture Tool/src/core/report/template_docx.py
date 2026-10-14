@@ -20,6 +20,14 @@ from docx.shared import Inches, RGBColor
 
 from core.text import shorten_at_boundary
 
+
+def _report_stage(store):
+    from core import deepdive
+    try:
+        return deepdive.report_stage(store)
+    except Exception:  # noqa: BLE001 - never let the banner break a report
+        return store.get_meta("analysis_stage")
+
 from . import rationale as R
 from ..diagrams.xmlsafe import xml_safe
 from .settings import app_number, get as get_settings
@@ -1772,7 +1780,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     for field in ("title", "subject", "author", "last_modified_by"):
         setattr(cp, field, RD(getattr(cp, field)))
     from . import editorial
-    editorial.apply(doc, a, evidence_quality, s, metadata=metadata, analysis_stage=store.get_meta("analysis_stage"),
+    editorial.apply(doc, a, evidence_quality, s, metadata=metadata, analysis_stage=_report_stage(store),
                     security_counts={severity: sum(f["severity"] == severity for f in sec_f) for severity in SEV},
                     priority_reasons=[r_["title"] for r_ in BR[:2]], full_summary=bool(_es), evidence_rows=doc.evidence_rows)
     RRV.apply_to_docx(doc.d, store)

@@ -2320,11 +2320,14 @@ def review_indentation(client, image_paths, language: str = "") -> list:
                     f"Language: {language or 'unknown'}. Inspect the code for indentation mistakes. "
                     "Return only the JSON object."})
     try:
-        msg = client.messages.create(model=READ_MODEL, max_tokens=1024, system=INDENT_REVIEW_SYSTEM,
+        msg = client.messages.create(model=READ_MODEL, max_tokens=4096, system=INDENT_REVIEW_SYSTEM,
                                      messages=[{"role": "user", "content": content}])
         raw = "".join(getattr(b, "text", "") for b in msg.content).strip()
         data = _parse_json(raw) or {}
         issues = data.get("issues", []) if isinstance(data, dict) else []
+        if not issues and getattr(msg, "stop_reason", None) == "max_tokens":
+            from core.cobol.columns import _complete_issues
+            issues = _complete_issues(raw)       # a reply cut off mid-list still has its whole issues
         return [i for i in issues if isinstance(i, dict) and str(i.get("line_text", "")).strip()]
     except Exception:  # noqa: BLE001
         return []

@@ -901,6 +901,24 @@ def pending(store) -> list:
     return out
 
 
+def report_stage(store):
+    """"draft" or "final" for the report banner, from the reviews themselves. The staged pipeline records a stage, but a flag
+    only it can set stays "draft" after a file is reviewed on its own. The report is final when every file that can be reviewed
+    has a completed review of its current text; None when no staged run ever set a stage (the older flow shows no banner)."""
+    if store.get_meta("analysis_stage") is None:
+        return None
+    dd = store.get_meta("deepdive") or {}
+    for a in store.artifacts():
+        if not (a.get("transcription") or "").strip() or a.get("status") in ("captured", "failed") \
+                or a.get("artifact_type") in ("ui_screen", "document"):
+            continue
+        r = dd.get(str(a["id"]))
+        if (not r or r.get("stage") == "draft" or r.get("hash") != _hash(a.get("transcription"))
+                or r.get("prompt_version") != PROMPT_VERSION):
+            return "draft"
+    return "final"
+
+
 def _has_open_problem(store, a, dd) -> bool:
     """The deep review waits until the file's capture problems are fixed or confirmed: one review, after the changes."""
     try:

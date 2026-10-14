@@ -450,3 +450,18 @@ def test_a_cancelled_analysis_leaves_the_capture_waiting_but_a_real_failure_mark
     assert store.pending_captures()[waiting].get('error') in (None, '') and store.pending_captures()[waiting].get('claim') is None
     assert store.artifact(broken)['status'] == 'failed'
     assert 'api down' in store.pending_captures()[broken]['error']
+
+
+def test_report_stage_follows_the_reviews_not_a_flag_only_the_staged_pipeline_sets(store):
+    from core import deepdive
+    assert deepdive.report_stage(store) is None                      # no staged run ever set a stage: no banner
+    aid = store.add_artifact('a.py', transcription='print(1)\n')
+    store.set_meta('analysis_stage', 'draft')
+    assert deepdive.report_stage(store) == 'draft'                   # a file without a review
+    h = deepdive._hash('print(1)\n')
+    store.set_meta('deepdive', {str(aid): {'hash': h, 'prompt_version': deepdive.PROMPT_VERSION, 'stage': 'draft'}})
+    assert deepdive.report_stage(store) == 'draft'                   # a draft review is not final
+    store.set_meta('deepdive', {str(aid): {'hash': h, 'prompt_version': deepdive.PROMPT_VERSION}})
+    assert deepdive.report_stage(store) == 'final'                   # reviewed on its own (no stage): complete
+    store.set_meta('deepdive', {str(aid): {'hash': 'stale', 'prompt_version': deepdive.PROMPT_VERSION}})
+    assert deepdive.report_stage(store) == 'draft'                   # the text changed since the review

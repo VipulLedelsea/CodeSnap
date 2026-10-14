@@ -83,3 +83,17 @@ def test_a_short_row_of_real_text_is_still_a_row():
         ink[t:t + 18, 50:80] = True              # tall rows
     ink[160:166, 50:90] = True                   # a short row, but far from any row above it
     assert len(colfix._rows(ink)) == 4
+
+
+def test_a_column_review_cut_off_by_the_token_limit_keeps_the_issues_that_arrived_whole(tmp_path):
+    from types import SimpleNamespace
+    from PIL import Image
+    from core.cobol.columns import review_columns
+    img = tmp_path / "a.png"
+    Image.new("RGB", (10, 10)).save(img)
+    cut = ('{"issues": [{"line_text": "MOVE A TO B", "problem": "area B"}, {"line_text": "ADD 1 TO C", "problem": "area A"}, '
+           '{"line_text": "STOP RU')
+    client = SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: SimpleNamespace(
+        content=[SimpleNamespace(text=cut)], stop_reason="max_tokens")))
+    got = review_columns(client, [img], "MOVE A TO B\nADD 1 TO C\nSTOP RUN.")
+    assert [i["line_text"] for i in got] == ["MOVE A TO B", "ADD 1 TO C"]
