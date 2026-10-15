@@ -1088,8 +1088,14 @@ def _trim_unverified_edges(parts, metas, max_rows=3, min_verified=0.8):
             seen = {key(l) for l in out[neighbour]}
             if len(near) >= 2 and sum(1 for l in near if l in seen) >= 2:
                 dropped.append((k, edge, n))
+                total = len(lines)
                 lines[:] = kept
                 status[:] = status[:len(status) - n] if edge == "tail" else status[n:]
+                # the per-line spacing evidence of this screenshot loses the same rows, or it no longer lines up with the text
+                evidence = (metas[k] or {}).get("spacing") or {}
+                for name in ("lead_px", "line_status"):
+                    if isinstance(evidence.get(name), list) and len(evidence[name]) == total:
+                        evidence[name] = evidence[name][:total - n] if edge == "tail" else evidence[name][n:]
     return ["\n".join(lines) for lines in out], dropped
 
 
@@ -1326,6 +1332,36 @@ def _collapse_doubled_lines(final, parts, min_len=12):
         return final, []
     skip = set(drop)
     return "\n".join(l for i, l in enumerate(lines) if i not in skip), [d + 1 for d in drop]
+
+
+_DASH_CHARS = "-\u2013\u2014\u2500"
+_DASH_RUN = _re.compile(r"[-\u2013\u2014\u2500]{3,}")
+
+
+def _dash_signature(line):
+    """The dash characters a divider or banner line uses, or None when the line has no run of dashes."""
+    if not _DASH_RUN.search(line):
+        return None
+    return "".join(sorted({c for c in line if c in _DASH_CHARS}))
+
+
+def _glyph_conflicts(final, parts):
+    """Lines of dividers and banners (`# ── Title ────`) that the screenshots read with different dash characters. A hyphen, an
+    en or em dash and the box-drawing dash look alike in an editor, so which one the source uses cannot be settled from the
+    pixels; where the readings differ the line is the reviewer's to confirm. Returns the 1-based line numbers."""
+    from core import verify
+    lines = final.split("\n")
+    want = {i: _dash_signature(l) for i, l in enumerate(lines)}
+    want = {i: sig for i, sig in want.items() if sig is not None}
+    seen = {i: {sig} for i, sig in want.items()}
+    for part in parts:
+        rows = part.split("\n")
+        for i, j in enumerate(verify._line_map(part, final, carry_replacements=True)):
+            if i in want and j is not None and rows[j].strip():
+                sig = _dash_signature(rows[j])
+                if sig is not None and _sim(lines[i], rows[j]) >= 0.5:
+                    seen[i].add(sig)
+    return [i + 1 for i, sigs in seen.items() if len(sigs) > 1]
 
 
 def _drop_garbled_twins(final, statuses, min_alnum=12):
@@ -1575,6 +1611,9 @@ def merge_verified(raw_parts: list, metas: list | None = None):
             notes["indent_runs_moved"] = [(a, b) for _, a, b in moved]
     verify.align_line_evidence(final, raw_parts, cleaned, metas, notes)
     verify.spacing_agreement(final, cleaned, metas, notes)
+    glyphs = _glyph_conflicts(final, cleaned)
+    if glyphs:
+        notes["glyph_conflicts"] = glyphs
     # Conflicting reads are evidence of uncertainty even if either isolated row
     # happened to match a pixel grid. Preserve the selected text and flag its join.
     final_lines = final.splitlines()

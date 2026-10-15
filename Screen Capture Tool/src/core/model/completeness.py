@@ -135,6 +135,21 @@ def check(text: str, filename: str = "", language: str = "", errors: str = "") -
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if re.search(r"\bDFHM(?:DI|DF)\b", text or "") and not re.search(r"\bDFHMSD\b(?!\s+TYPE=FINAL)", text or "", re.I):
         reasons.append("BMS map has no DFHMSD header — start of the file probably not captured")
+    if ext in ("py", "pyw"):
+        # A docstring or string block whose opening quotes are missing: the text before the first triple quote is prose, not code
+        quotes = [i for i, l in enumerate(raw) if '"""' in l or "'''" in l]
+        if quotes and sum(l.count('"""') + l.count("'''") for l in raw) % 2 == 1:
+            above = [l for l in raw[:quotes[0]] if l.strip() and not l.lstrip().startswith("#")]
+            codey = re.compile(r"^\s*(import |from \S+ import |def |class |@|[\w.\[\]]+\s*[:=(]|if |for |while |try:|with |return\b)")
+            if above and not any(codey.match(l) for l in above):
+                reasons.append("a docstring closes here but its opening quotes are missing — start probably not captured")
+    if ext in ("js", "jsx", "ts", "tsx", "java", "cs", "css", "scss", "go", "kt", "swift", "php", "c", "cpp", "h"):
+        flat = "\n".join(raw)
+        close, opener = flat.find("*/"), flat.find("/*")
+        if close != -1 and (opener == -1 or close < opener):
+            reasons.append("a block comment closes before it opens — start probably not captured")
+        elif raw and re.match(r"^\s*\*(?!/)", next((l for l in raw if l.strip()), "")):
+            reasons.append("the file opens inside a block comment — start probably not captured")
     stripped = (text or "").lstrip()
     if ext in ("xml", "config", "wsdl", "xaml", "dtsx", "xsd", "fmb") or stripped.startswith("<?xml"):
         import xml.etree.ElementTree as ET

@@ -32,6 +32,8 @@ REASONS = {
              "over this part more slowly and use Add screenshots",
     "edited": "changed by the compile-fix step after reading; compare it with the screenshot",
     "spacing": "screenshots disagree about this line's spacing; confirm its source margin and compare the saved readings",
+    "glyph": "the dash characters of this divider were read differently on different screenshots (-, \u2013, \u2014, \u2500); "
+             "confirm which the source uses",
     "syntax": "the source stops parsing here: this line, or one just before it, may be misread, misplaced or missing; compare "
               "it with the screenshot",
 }
@@ -508,6 +510,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
     spacing_conflicts = set(notes.get('spacing_conflicts') or [])
     counts = {"verified": 0, "reread": 0, "confirmed": 0, "joined": 0, "flagged": 0, "unchecked": 0}
     flags, kinds = [], {}
+    glyph_lines = set(notes.get('glyph_conflicts') or [])
     for i, l in enumerate(final_lines, 1):
         if not l.strip():
             continue
@@ -516,6 +519,8 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
         s = aligned[read_i] if read_i is not None and read_i < len(aligned) else None
         if "[CUT OFF]" in l:
             s = "cut"
+        elif i in glyph_lines and s not in ("mismatch", "rows", "cut"):
+            s = "glyph"
         elif changed:
             s = "edited"
         elif (read_i + 1 if read_i is not None else (i if read_lines is None else None)) in spacing_conflicts:

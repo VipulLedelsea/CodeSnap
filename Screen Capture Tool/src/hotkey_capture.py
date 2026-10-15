@@ -325,6 +325,11 @@ class App:
         status.publish("Burst capture — scroll through the file steadily", "start")
         from core.notify import notify
         notify("CodeSnap", "Session started — start scrolling")
+        if not self.region:
+            # the whole screen includes the file explorer, tabs and terminal: no character grid, so no line can be checked
+            status.publish("No capture area is selected, so the whole screen is captured and spacing cannot be verified. "
+                           "Select only the source pane.", "info")
+            notify("CodeSnap", "No capture area selected: select only the source pane so every line can be verified.")
         ts = time.strftime("%Y%m%d_%H%M%S")
         CAPTURES_ROOT.mkdir(parents=True, exist_ok=True)
         self.session_dir = Path(tempfile.mkdtemp(prefix=f"session_{ts}_", dir=CAPTURES_ROOT))
@@ -417,6 +422,23 @@ class App:
             pass
         return False
 
+    def _reach_top(self, region_grab, full_grab, changed):
+        """Scroll the file to its first line before the first frame, so a capture never starts below the head of the file."""
+        from core import topcheck, status
+        if not topcheck.enabled() or self.paused:
+            return
+        try:
+            grab = (lambda: region_grab(self.region)) if self.region else full_grab
+            steps = topcheck.scroll_to_top(grab, topcheck.scroll_wheel_up, changed)
+        except Exception as exc:  # noqa: BLE001 - never block a capture on this
+            print(f"(scroll to top skipped: {type(exc).__name__}: {exc})", file=sys.stderr)
+            return
+        if steps:
+            status.publish("Scrolled to the top of the file so the first line is captured.", "info")
+            print(f"[burst] scrolled to the top ({steps} step(s)) before capturing")
+        elif steps is None:
+            print("[burst] could not confirm the file is at its first line (the picture kept changing)")
+
     def _burst_loop(self, session_dir):
         from core.capture import capture_full_png, capture_region_fixed, next_png_path, content_changed
         from core import status
@@ -432,6 +454,7 @@ class App:
         capture_gate.begin()
         parked = False
         from core import control
+        self._reach_top(capture_region_fixed, capture_full_png, content_changed)
         while self.running and kept < BURST_MAX_FRAMES:
             ctl = control.read(CAPTURES_ROOT, os.getpid())
             if ctl.get("park"):
