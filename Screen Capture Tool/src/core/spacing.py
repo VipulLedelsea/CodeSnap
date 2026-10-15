@@ -149,6 +149,18 @@ def positions(source,reading):
     return matches
 
 
+def _corroborated(pixel,model):
+    """A pixel-read leading column is trusted when two screenshots give it, or when the one that gives it sits within a column
+    of what the readers wrote. One row on one screenshot can be paired with the wrong line or carry a leftover mark at the
+    margin; against every reader's value that is not evidence."""
+    if len(pixel)>=2:
+        return True
+    if not model:
+        return True
+    common=max(set(model),key=model.count)
+    return abs(pixel[0]-common)<=1 or model.count(common)<2
+
+
 def reconcile(code,parts,metas):
     """Prefer positioned measured columns; retain unresolved disagreements."""
     from collections import defaultdict
@@ -181,7 +193,7 @@ def reconcile(code,parts,metas):
                 seen[i].add(rows[j]); votes[i].add(rows[j])
     # leading columns read from the pixels place a line even when its words were misread on some screenshots
     from core.verify import _line_map, _norm
-    leadvotes=defaultdict(set)
+    leadvotes=defaultdict(set); pixel_all=defaultdict(list); model_all=defaultdict(list)
     for part,meta in zip(parts,metas):
         evidence=(meta or {}).get('spacing') or {}
         placed=evidence.get('lead_px') or []
@@ -195,11 +207,14 @@ def reconcile(code,parts,metas):
             if _norm(lines[i])!=_norm(rows[j]) and difflib.SequenceMatcher(None,lines[i].strip(),rows[j].strip()).ratio()<0.7:
                 continue                              # a different line: the same row position does not make it the same line
             leadvotes[i].add(placed[j]); seen[i].add(rows[j])
+            pixel_all[i].append(placed[j]); model_all[i].append(len(rows[j])-len(rows[j].lstrip()))
     status=['' if not line.strip() else 'unmeasured' for line in lines]
     conflicts=[]
     for i,readings in seen.items():
         measured=votes[i]
-        if len(leadvotes.get(i,()))==1:
+        if len(leadvotes.get(i,()))==1 and not _corroborated(pixel_all[i],model_all[i]):
+            conflicts.append(i+1); status[i]='conflict'
+        elif len(leadvotes.get(i,()))==1:
             # the pixels gave one leading column on every screenshot that shows this line: its spacing is settled whatever
             # the words were read as. The line counts as measured only when the screenshots also agree on its words.
             same=len({_norm(r) for r in readings})==1

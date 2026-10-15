@@ -32,11 +32,42 @@ REASONS = {
              "over this part more slowly and use Add screenshots",
     "edited": "changed by the compile-fix step after reading; compare it with the screenshot",
     "spacing": "screenshots disagree about this line's spacing; confirm its source margin and compare the saved readings",
-    "glyph": "the dash characters of this divider were read differently on different screenshots (-, \u2013, \u2014, \u2500); "
-             "confirm which the source uses",
+    "glyph": "this divider or banner was not verified against the screenshot: check its dash characters (-, \u2013, \u2014, "
+             "\u2500) and how many there are",
+    "dup": "this definition appears more than once in the file: one copy may be a screenshot stitched in twice; compare it with "
+           "the screenshots",
     "syntax": "the source stops parsing here: this line, or one just before it, may be misread, misplaced or missing; compare "
               "it with the screenshot",
 }
+
+
+_DASH_RUN = re.compile(r"[-\u2013\u2014\u2500]{3,}")
+
+
+_DEFINITION = re.compile(r"^(\s*)(?:export\s+(?:default\s+)?)?(?:async\s+)?(def|class|function)\s+([A-Za-z_$][\w$]*)")
+
+
+def number_in(numbers, i):
+    return i in numbers
+
+
+def repeated_definitions(lines) -> set:
+    """1-based numbers of function and class headers whose name was already defined at the same indent earlier in the file.
+    Real files seldom define one name twice at one level (a property setter, which follows a decorator, is the exception), so
+    the second copy is usually a screenshot that was stitched in twice."""
+    seen, out = set(), set()
+    for number, line in enumerate(lines, 1):
+        match = _DEFINITION.match(line)
+        if not match:
+            continue
+        before = next((l for l in reversed(lines[:number - 1]) if l.strip()), "")
+        if before.lstrip().startswith("@"):
+            continue
+        key = (len(match.group(1)), match.group(2), match.group(3))
+        if key in seen:
+            out.add(number)
+        seen.add(key)
+    return out
 
 
 def syntax_error(code: str, name: str = ""):
@@ -511,6 +542,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
     counts = {"verified": 0, "reread": 0, "confirmed": 0, "joined": 0, "flagged": 0, "unchecked": 0}
     flags, kinds = [], {}
     glyph_lines = set(notes.get('glyph_conflicts') or [])
+    repeated = repeated_definitions(final_lines)
     for i, l in enumerate(final_lines, 1):
         if not l.strip():
             continue
@@ -529,6 +561,12 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
             s = statuses.get(l.rstrip())
             if s is None:
                 s = "edited" if read_lines is not None and _norm(l) not in norm else "unchecked"
+        if number_in(repeated, i) and s not in ("mismatch", "rows", "cut"):
+            s = "dup"
+        if s in (None, "unchecked", "joined") and _DASH_RUN.search(l):
+            # a divider or banner the pixels did not verify: a hyphen, an en or em dash and the box-drawing dash look alike,
+            # and the reader's choice and its dash count were wrong on most of these in testing
+            s = "glyph"
         if s in ("verified", "reread", "confirmed", "joined"):
             counts[s] += 1
             kinds[i] = s

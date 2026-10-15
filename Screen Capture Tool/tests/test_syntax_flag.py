@@ -31,3 +31,12 @@ def test_toml_xml_and_yaml_are_checked():
     assert verify.syntax_error("a = [1,\n", "x.toml") and verify.syntax_error("a = 1\n", "x.toml") is None
     assert verify.syntax_error("<a><b></a>", "x.xml") and verify.syntax_error("<a><b/></a>", "x.xml") is None
     assert verify.syntax_error("a: [1, 2\nb: 3\n", "x.yml") is not None or True
+
+
+def test_a_function_defined_twice_at_one_level_is_flagged_but_a_property_setter_is_not():
+    twice = "def f():\n    pass\n\n\ndef g():\n    pass\n\n\ndef f():\n    pass\n"
+    assert verify.repeated_definitions(twice.split("\n")) == {9}
+    setter = "class A:\n    @property\n    def x(self):\n        pass\n\n    @x.setter\n    def x(self, v):\n        pass\n"
+    assert verify.repeated_definitions(setter.split("\n")) == set()
+    out = verify.summarize(twice, {}, {}, name="a.py")
+    assert any(f["reason"] == verify.REASONS["dup"] for f in out["flags"])
