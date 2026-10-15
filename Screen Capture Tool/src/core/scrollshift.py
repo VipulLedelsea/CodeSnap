@@ -76,7 +76,7 @@ def _drop_static(la, lb):
     return ([x for i, x in enumerate(la) if i not in static_a], [y for j, y in enumerate(lb) if j not in static_b])
 
 
-def estimate(a, b, min_overlap_lines=12):
+def estimate(a, b, min_overlap_lines=12, min_share=MIN_MATCH_SHARE):
     la, height = _lines(a)
     lb, height_b = _lines(b)
     if height != height_b or len(la) < min_overlap_lines or len(lb) < min_overlap_lines:
@@ -117,6 +117,6 @@ def estimate(a, b, min_overlap_lines=12):
     spread = int(max(shifts) - min(shifts))
     count = len(pairs)
     unique = rival_cost >= max(cost * RIVAL_RATIO, cost + RIVAL_GAP)
-    ok = bool(count >= MIN_MATCHES and share >= MIN_MATCH_SHARE and unique and spread <= 3 and shift != 0)
+    ok = bool(count >= MIN_MATCHES and share >= min_share and unique and spread <= 3 and shift != 0)
     return {"ok": ok, "shift": shift, "matches": count, "overlap_lines": n, "share": round(share, 3),
             "rival": round(rival_cost, 3), "cost": round(cost, 4), "spread": spread, "overlap_px": height - abs(shift), "height": height}

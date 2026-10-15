@@ -558,6 +558,7 @@ def measured_frame(client,path,raw,*,calibration=None):
             'relative' if verified['status'][i] in ('verified','reread') else 'unmeasured')
             if line.strip() else '' for i,line in enumerate(result.split('\n'))]
         verified['spacing']=evidence
+        verified['image']=str(path)
         return result,verified,changed
 
 
@@ -1313,7 +1314,7 @@ def _collapse_doubled_lines(final, parts, min_len=12):
         if keys[j] != keys[j + 1] or not keys[j] or "[CUT OFF]" in keys[j]:
             continue
         before, after = keys[j - 1], keys[j + 2]
-        if not before or not after or before == keys[j] or after == keys[j]:
+        if not before or before == keys[j] or after == keys[j]:
             continue
         twice, once = count([before, keys[j], keys[j], after]), count([before, keys[j], after])
         # a short line (a lone closing bracket) can really repeat, so it goes only when no screenshot shows it twice
@@ -1475,6 +1476,7 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     cleaned, trimmed = _trim_unverified_edges(cleaned, metas)
     if trimmed:
         notes["edge_rows_dropped"] = trimmed
+    pixel_rows = _frame_rows(cleaned, metas, trimmed)
     if mode == "columns" and source_kind('\n'.join(raw_parts)) in ('cobol', 'copybook'):
         cleaned, moved = _align_frame_columns(cleaned)
         if moved:
@@ -1485,7 +1487,12 @@ def merge_verified(raw_parts: list, metas: list | None = None):
             notes["column_shifted_frames"] = moved
     parts = _dedup_best(cleaned) or [c for c in cleaned if c.strip()]
     prefer = {k for k, v in statuses.items() if v in ("verified", "reread")}
-    stitched = _stitch(parts, prefer, notes)
+    rows_of = {}
+    for text, info in zip(cleaned, pixel_rows):
+        if info and text not in rows_of:
+            rows_of[text] = info
+    placed = [rows_of.get(p) for p in parts]
+    stitched = _stitch(parts, prefer, notes, placed) if any(placed) else _stitch(parts, prefer, notes)
     candidates = [stitched] + parts
     clean = [c for c in candidates if c.strip() and not _has_dup_headers(c)]
     best = max(clean or candidates, key=lambda c: len(c.splitlines())) if candidates else stitched
@@ -2034,24 +2041,119 @@ def _drop_cut_duplicates(lines: list) -> list:
     return out
 
 
-def _stitch(parts: list, prefer, notes: dict) -> str:
+def _frame_rows(parts, metas, trimmed):
+    """Per screenshot: its image, height and the pixel bands of its text rows, so the scroll between two screenshots can say
+    which lines are repeats. `bands` pairs each non-blank text line with its band when the counts agree (rows the pipeline
+    dropped from the edges are accounted for); otherwise only the list of bands is kept and the text decides the exact line.
+    None when the image is missing or unreadable."""
+    from core import colfix
+    dropped = {}
+    for k, edge, n in trimmed or []:
+        dropped.setdefault(k, {})[edge] = n
+    out = []
+    for k, part in enumerate(parts):
+        path = (metas[k] or {}).get("image") if k < len(metas) else None
+        info = None
+        if path:
+            try:
+                ink, bands = colfix._ink(path), []
+                colfix._rows(ink, bands_out=bands)
+                cut = dropped.get(k, {})
+                bands = bands[cut.get("head", 0):len(bands) - cut.get("tail", 0)]
+                filled = [i for i, l in enumerate(part.split("\n")) if l.strip()]
+                info = {"image": path, "height": int(ink.shape[0]), "all": bands, "filled": filled,
+                        "bands": dict(zip(filled, bands)) if len(filled) == len(bands) else None}
+            except Exception:  # noqa: BLE001 - the pixel evidence is an extra
+                info = None
+        out.append(info)
+    return out
+
+
+def _seam(merged, head, m=4, slack=3):
+    """Where `head` (the lines a screenshot shares with the previous one) ends inside the text read so far: the index in
+    `merged` of the last of its final `m` non-blank lines, found among the last few lines of the text. The lines must agree in
+    order, numbers and names included, with at most one line in `m` read differently, so a look-alike block (paragraphs that
+    differ in a number) is never taken for the seam. None when they do not."""
+    wanted = [l for l in head if l.strip()][-m:]
+    if len(wanted) < 3:
+        return None
+    key = lambda l: " ".join(l.replace("[CUT OFF]", "").split())
+    filled = [i for i, l in enumerate(merged) if l.strip()]
+    for end in range(len(filled) - 1, max(len(filled) - 1 - slack, len(wanted) - 2), -1):
+        window = [merged[i] for i in filled[end - len(wanted) + 1:end + 1]]
+        if len(window) < len(wanted):
+            continue
+        same = sum(1 for x, y in zip(window, wanted) if key(x) == key(y) or _sim(x, y) >= 0.9)
+        if same >= len(wanted) - (1 if len(wanted) >= 4 else 0):
+            return filled[end]
+    return None
+
+
+def _pixel_guided(merged, lines, info, at, prev_image):
+    """Append `lines` (a screenshot) to `merged` using the scroll the pixels measured between it and the screenshot before it,
+    instead of guessing the overlap from text. Rows with any part on the previous screen are repeats, the rest are new, so
+    everything after the repeats is appended and nothing else. When the screenshot's rows pair one-to-one with its lines the
+    pixels set the boundary; otherwise they give it to within a few lines and the boundary is the one whose last repeated
+    lines match the end of `merged`. Returns (text, number of new lines, whether the shift is firmly established) or None when
+    the pixels cannot say (no unique shift, scrolled backwards or past the previous screen, or repeats that do not read like
+    the end of `merged`)."""
+    from core import scrollshift
+    try:
+        est = scrollshift.estimate(prev_image, info["image"], min_share=0.5)
+    except Exception:  # noqa: BLE001
+        return None
+    if not est.get("ok") or est["shift"] <= 0 or not info["all"]:
+        return None
+    heights = sorted(b - t for t, b in info["all"])
+    visible = est["height"] - est["shift"]
+    over = sum(1 for t, _ in info["all"] if t < visible - 0.1 * heights[len(heights) // 2])
+    if not over:
+        return None
+    filled = [i for i, l in enumerate(lines) if l.strip()]
+    if info["bands"] is not None:
+        seen = [j for j, i in enumerate(at) if info["bands"].get(i) and info["bands"][i][0] < visible - 0.1 * heights[len(heights) // 2]]
+        if not seen:
+            return None
+        guesses = [seen[-1] + 1]
+    else:
+        estimate = over - sum(1 for i in info["filled"] if i < at[0])
+        if estimate < 3 or estimate > len(filled):
+            return None
+        guesses = [filled[n - 1] + 1 for n in range(max(3, estimate - 3), min(len(filled), estimate + 3) + 1)]
+        guesses.sort(key=lambda c: abs(sum(1 for i in filled if i < c) - estimate))
+    for cut in guesses:
+        end = _seam(merged, lines[:cut])
+        if end is not None:
+            return merged[:end + 1] + lines[cut:], len(lines) - cut, est["share"] >= 0.8
+    return None
+
+
+def _stitch(parts: list, prefer, notes: dict, rows=None) -> str:
     from core.verify import sideways_merge_ex, sideways_views
-    frames = []
+    frames, pixel = [], {}
     for k, part in enumerate(parts):
         lines = part.split("\n")
+        at = list(range(len(lines)))        # each kept line's index in the screenshot's own text, for its pixel row
         while lines and not lines[0].strip():
             lines.pop(0)
+            at.pop(0)
         while lines and not lines[-1].strip():
             lines.pop()
+            at.pop()
         # a row clipped by the top or bottom of a screenshot is only a marker; the neighbouring screenshot shows it
         # whole, so it is dropped unless it is the very start or end of the capture
         if len(parts) > 1:
             while len(lines) > 1 and k < len(parts) - 1 and lines[-1].strip() == "[CUT OFF]":
                 lines.pop()
+                at.pop()
             while len(lines) > 1 and k > 0 and lines[0].strip() == "[CUT OFF]":
                 lines.pop(0)
+                at.pop(0)
         if lines:
             frames.append(lines)
+            info = rows[k] if rows and k < len(rows) else None
+            if info:
+                pixel[id(lines)] = (info, at)
     # screens taken after scrolling right show pieces of lines: stitch the whole-line screens first, then join the
     # pieces onto them, so a capture that starts (or wanders) sideways never becomes the base of the file
     sidx = sideways_views(frames)
@@ -2091,6 +2193,21 @@ def _stitch(parts: list, prefer, notes: dict) -> str:
             stitched = _prepend(merged, lines)   # a screenshot added later can show an earlier part of the file
         if stitched is None:
             stitched = _fuzzy_overlap(merged, lines, notes)
+        before = order[fi - 1] if fi else None
+        if id(lines) in pixel and before is not None and id(before) in pixel and id(before) not in side_ids:
+            guided = _pixel_guided(merged, lines, pixel[id(lines)][0], pixel[id(lines)][1],
+                                   pixel[id(before)][0]["image"])
+            text_new = None if stitched is None else len(stitched) - len(merged)
+            # The text found almost no overlap (a short look-alike tail inside the wrong block) while the pixels show a firm
+            # scroll of many lines and the repeated lines agree with the end of the text: the screen would be appended twice,
+            # so the pixels win. Where the text found a real overlap the text stands: repeated blocks can fool a scroll
+            # estimate by one block, and disagreements there are only recorded.
+            if guided is not None and text_new is not None and abs(text_new - guided[1]) > 2:
+                notes.setdefault("pixel_disagreements", []).append((fi, text_new, guided[1]))
+            tiny = text_new is not None and len(lines) - text_new <= 4 and guided is not None and guided[1] < len(lines) - 8
+            if guided is not None and (text_new is None or tiny):
+                notes.setdefault("pixel_stitched", []).append((fi, text_new, guided[1]))
+                stitched = guided[0]
         if stitched is None:
             bridged = _bridge(merged, lines)
             if bridged is not None:
