@@ -94,16 +94,22 @@ def _drop_squiggles(rgb, ink, min_w=16, min_h=3, max_h=9):
         x0, x1, y0, y1 = boxes[root]
         bw, bh = x1 - x0 + 1, y1 - y0 + 1
         if bw >= min_w and min_h <= bh <= max_h and bw >= 3 * bh:
-            out[y0:y1 + 1, x0:x1 + 1] &= ~red[y0:y1 + 1, x0:x1 + 1]
+            # a squiggle is one unbroken line that rises and falls; letters leave gaps between glyphs, and a divider is flat
+            sub = red[y0:y1 + 1, x0:x1 + 1]
+            covered = sub.any(0)
+            centres = [np.where(sub[:, c])[0].mean() for c in np.where(covered)[0]]
+            if covered.mean() >= 0.9 and np.std(centres) >= 0.8 and sub.sum(0).max() <= 7:
+                out[y0:y1 + 1, x0:x1 + 1] &= ~red[y0:y1 + 1, x0:x1 + 1]
     return out
 
 
-def _ink(path):
+def _ink(path, squiggles=True):
     pic = Image.open(path)
     im = np.asarray(pic.convert("L")).astype(int)
     ink = np.abs(im - np.median(im)) > 60
-    ink = _drop_squiggles(np.asarray(pic.convert("RGB")).astype(int), ink)
-    return _drop_guides(ink)
+    if not squiggles:
+        return _drop_guides(ink)
+    return _drop_guides(_drop_squiggles(np.asarray(pic.convert("RGB")).astype(int), ink))
 
 
 def _decorated(ink, a, b, runs) -> bool:
@@ -321,6 +327,23 @@ def _rebuild(line, cols, widths=None, joined=None):
 
 
 def _measure(image_path, text: str, *, source_x=None):
+    """Measure the screenshot with its red squiggles taken out and, when it has any, with them left in; keep the reading that
+    pairs more rows with their text. Taking a squiggle out can also cut an indent guide into pieces the guide filter then
+    misses, so neither choice is right for every theme and the text decides."""
+    try:
+        clean, plain = _ink(image_path), _ink(image_path, squiggles=False)
+    except Exception:  # noqa: BLE001
+        return _measure_with(image_path, text, source_x, None)
+    first = _measure_with(image_path, text, source_x, clean)
+    if np.array_equal(clean, plain):
+        return first
+    second = _measure_with(image_path, text, source_x, plain)
+    if first is None or second is None:
+        return first if second is None else second
+    return first if len(first["pairs"]) > len(second["pairs"]) else second      # a tie keeps the picture as it was drawn
+
+
+def _measure_with(image_path, text: str, source_x, ink):
     """Match the screenshot's text rows to the transcribed lines. Returns None when the screenshot has no usable
     fixed-width character grid (proportional font, a photo, too little text); every check then says "unchecked"."""
     lines = text.split("\n")
@@ -328,7 +351,7 @@ def _measure(image_path, text: str, *, source_x=None):
     if not body:
         return None
     try:
-        ink = _ink(image_path)
+        ink = _ink(image_path) if ink is None else ink
         bands, deco = [], []
         rows = _rows(ink, bands_out=bands, deco_out=deco)
         fit, pitch, offset = _grid(rows)
@@ -558,8 +581,10 @@ def leads(image_path, text: str, *, source_x=None):
                 mapping.setdefault(l1 + k, r1 + k)
     if len(measured) == len(plain):
         words = [(i, plain[i].split()) for i in range(len(plain)) if plain[i].split() and measured[i]]
-        agree = sum(1 for i, w in words if measured[i][0][1] == len(w[0]))
-        if words and agree >= 0.7 * len(words):
+        # whole rows, not first words: look-alike lines (a template repeated with other names) share first words, and a
+        # row-for-row pairing that is off by one must not pass for a pairing that holds
+        agree = sum(1 for i, w in words if [width for _, width in measured[i]] == [len(t) for t in w])
+        if words and agree >= 0.6 * len(words):
             for i in range(len(plain)):
                 mapping.setdefault(i, i)
     for li, ri in mapping.items():
@@ -568,6 +593,16 @@ def leads(image_path, text: str, *, source_x=None):
         lead = measured[ri][0][0] + base
         if lead >= 0:
             out[body[li][0]] = int(lead)
+    # A screenshot is read at one offset from the screen: the readers' indent and the pixels' differ by about the same amount on
+    # every row. A row far from that offset is a row whose first ink is a mark at the margin (an indent guide, a cursor line)
+    # or that was paired with the wrong line, so it is not used.
+    gaps = {i: x - (len(lines[i]) - len(lines[i].lstrip())) for i, x in enumerate(out) if x is not None and lines[i].strip()}
+    if len(gaps) >= 8:
+        common = max(set(gaps.values()), key=list(gaps.values()).count)
+        if sum(1 for g in gaps.values() if abs(g - common) <= 1) >= 0.6 * len(gaps):
+            for i, g in gaps.items():
+                if abs(g - common) > 1:
+                    out[i] = None
     return out
 
 

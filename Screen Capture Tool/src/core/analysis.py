@@ -1423,6 +1423,9 @@ def _align_origins(parts, metas, min_anchored=3, tol=0.25):
             else:
                 lines.append(" " * (lead + whole) + line.lstrip(" "))
         out[i] = "\n".join(lines)
+        placed = e.get("lead_px")
+        if isinstance(placed, list):                       # the columns the pixels gave moved with the text
+            e["lead_px"] = [None if x is None else max(0, x + whole) for x in placed]
     return out
 
 
