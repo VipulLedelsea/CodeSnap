@@ -340,7 +340,12 @@ def _measure(image_path, text: str, *, source_x=None):
     second = _measure_with(image_path, text, source_x, plain)
     if first is None or second is None:
         return first if second is None else second
-    return first if len(first["pairs"]) > len(second["pairs"]) else second      # a tie keeps the picture as it was drawn
+    if source_x is not None and first.get("absolute_columns") and second.get("absolute_columns"):
+        lines = text.split("\n")
+        a, b = _offset_consistency(first, lines), _offset_consistency(second, lines)
+        if a != b:
+            return first if a > b else second
+    return first if len(first["pairs"]) > len(second["pairs"]) else second
 
 
 def _measure_with(image_path, text: str, source_x, ink):
@@ -560,19 +565,9 @@ def check(image_path, text: str, *, source_x=None) -> dict:
             "absolute_columns": m["absolute_columns"]}
 
 
-def leads(image_path, text: str, *, source_x=None):
-    """Per line of `text`: its leading column read from the pixels (an int), or None when it cannot be placed. Only the
-    start of each row is used, so a misread word does not matter. A row is paired with a line by the exact word matches the
-    pixel check already trusts, by the rows between two such matches, and, when the screenshot has as many rows as the text
-    has lines and most first words have the width the text says, row for row. Needs the screenshot's column one (source_x):
-    without it only relative columns exist."""
-    lines = text.split("\n")
+def _lead_candidates(m, lines):
+    """Leading column of each text line from a measurement, before any row is thrown out as an outlier."""
     out = [None] * len(lines)
-    if source_x is None:
-        return out
-    m = _measure(image_path, text, source_x=source_x)
-    if m is None or not m["absolute_columns"]:
-        return out
     body, plain, measured, base, pairs = m["body"], m["plain"], m["measured"], m["base"], m["pairs"]
     mapping = {li: ri for ri, li in pairs}
     for (r1, l1), (r2, l2) in zip(pairs, pairs[1:]):
@@ -593,6 +588,34 @@ def leads(image_path, text: str, *, source_x=None):
         lead = measured[ri][0][0] + base
         if lead >= 0:
             out[body[li][0]] = int(lead)
+    return out
+
+
+def _offset_consistency(m, lines):
+    """Share of the placed rows whose pixel indent differs from the readers' by the screenshot's usual amount (within a
+    column). A measurement spoiled by marks at the margin or by fused rows scores low, one that is clean scores high."""
+    out = _lead_candidates(m, lines)
+    gaps = [x - (len(lines[i]) - len(lines[i].lstrip())) for i, x in enumerate(out) if x is not None and lines[i].strip()]
+    if len(gaps) < 8:
+        return 0.0
+    common = max(set(gaps), key=gaps.count)
+    return sum(1 for g in gaps if abs(g - common) <= 1) / len(gaps)
+
+
+def leads(image_path, text: str, *, source_x=None):
+    """Per line of `text`: its leading column read from the pixels (an int), or None when it cannot be placed. Only the
+    start of each row is used, so a misread word does not matter. A row is paired with a line by the exact word matches the
+    pixel check already trusts, by the rows between two such matches, and, when the screenshot has as many rows as the text
+    has lines and most first words have the width the text says, row for row. Needs the screenshot's column one (source_x):
+    without it only relative columns exist."""
+    lines = text.split("\n")
+    out = [None] * len(lines)
+    if source_x is None:
+        return out
+    m = _measure(image_path, text, source_x=source_x)
+    if m is None or not m["absolute_columns"]:
+        return out
+    out = _lead_candidates(m, lines)
     # A screenshot is read at one offset from the screen: the readers' indent and the pixels' differ by about the same amount on
     # every row. A row far from that offset is a row whose first ink is a mark at the margin (an indent guide, a cursor line)
     # or that was paired with the wrong line, so it is not used.

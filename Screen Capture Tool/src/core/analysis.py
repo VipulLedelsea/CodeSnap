@@ -1407,6 +1407,10 @@ def _align_origins(parts, metas, min_anchored=3, tol=0.25):
     if sum(abs(x - consensus) <= tol * pitch for x in xs) < 0.8 * len(xs):
         return parts                                       # the anchored screenshots do not agree: nothing to align to
     out = list(parts)
+    # the picture-found column one is only a reference in fixed-format source (the '*' of a COBOL comment sits in column 7);
+    # in free-form code it is a guess, and the pixel columns of each screenshot keep their own origin
+    spec_lines = sum(1 for p in parts for l in p.split("\n") if _re.match(r"^ {5,6}[A-Z] ", l))
+    fixed_format = source_mode(parts) == "columns" or spec_lines >= 0.2 * max(1, sum(p.count("\n") + 1 for p in parts))
     for i, e in enumerate(evidence):
         cal = e.get("calibration") or {}
         if e.get("calibrated") is not True or e.get("auto") or cal.get("source_x") is None or i >= len(parts):
@@ -1424,7 +1428,7 @@ def _align_origins(parts, metas, min_anchored=3, tol=0.25):
                 lines.append(" " * (lead + whole) + line.lstrip(" "))
         out[i] = "\n".join(lines)
         placed = e.get("lead_px")
-        if isinstance(placed, list):                       # the columns the pixels gave moved with the text
+        if isinstance(placed, list) and fixed_format:      # the columns the pixels gave move with the text
             e["lead_px"] = [None if x is None else max(0, x + whole) for x in placed]
     return out
 
@@ -2150,27 +2154,31 @@ def _frame_rows(parts, metas, trimmed):
     return out
 
 
-def _seam(merged, head, m=4, slack=3):
+def _seam(merged, head, m=4, slack=3, clipped=3):
     """Where `head` (the lines a screenshot shares with the previous one) ends inside the text read so far: the index in
     `merged` of the last of its final `m` non-blank lines, found among the last few lines of the text. The lines must agree in
     order, numbers and names included, with at most one line in `m` read differently, so a look-alike block (paragraphs that
-    differ in a number) is never taken for the seam. None when they do not."""
-    wanted = [l for l in head if l.strip()][-m:]
-    if len(wanted) < 3:
-        return None
+    differ in a number) is never taken for the seam. The last rows of `head` may be rows the previous screenshot showed clipped
+    at its bottom edge, which the text does not hold yet: up to `clipped` of them are set aside and count as new.
+    Returns (index in merged, number of trailing rows of head set aside), or None."""
     key = lambda l: " ".join(l.replace("[CUT OFF]", "").split())
     filled = [i for i, l in enumerate(merged) if l.strip()]
-    for end in range(len(filled) - 1, max(len(filled) - 1 - slack, len(wanted) - 2), -1):
-        window = [merged[i] for i in filled[end - len(wanted) + 1:end + 1]]
-        if len(window) < len(wanted):
-            continue
-        same = sum(1 for x, y in zip(window, wanted) if key(x) == key(y) or _sim(x, y) >= 0.9)
-        if same >= len(wanted) - (1 if len(wanted) >= 4 else 0):
-            return filled[end]
+    heads = [l for l in head if l.strip()]
+    for skip in range(clipped + 1):
+        wanted = heads[:len(heads) - skip][-m:]
+        if len(wanted) < 3:
+            return None
+        for end in range(len(filled) - 1, max(len(filled) - 1 - slack, len(wanted) - 2), -1):
+            window = [merged[i] for i in filled[end - len(wanted) + 1:end + 1]]
+            if len(window) < len(wanted):
+                continue
+            same = sum(1 for x, y in zip(window, wanted) if key(x) == key(y) or _sim(x, y) >= 0.9)
+            if same >= len(wanted) - (1 if len(wanted) >= 4 else 0):
+                return filled[end], skip
     return None
 
 
-def _pixel_guided(merged, lines, info, at, prev_image):
+def _pixel_guided(merged, lines, info, at, prev_image, clipped=0):
     """Append `lines` (a screenshot) to `merged` using the scroll the pixels measured between it and the screenshot before it,
     instead of guessing the overlap from text. Rows with any part on the previous screen are repeats, the rest are new, so
     everything after the repeats is appended and nothing else. When the screenshot's rows pair one-to-one with its lines the
@@ -2185,6 +2193,8 @@ def _pixel_guided(merged, lines, info, at, prev_image):
         return None
     if not est.get("ok") or est["shift"] <= 0 or not info["all"]:
         return None
+    if est.get("overlap_lines", 0) > len(info["all"]) + 2:
+        return None                     # more overlapping rows than the screenshot has: a look-alike alignment, not a scroll
     heights = sorted(b - t for t, b in info["all"])
     visible = est["height"] - est["shift"]
     over = sum(1 for t, _ in info["all"] if t < visible - 0.1 * heights[len(heights) // 2])
@@ -2203,15 +2213,45 @@ def _pixel_guided(merged, lines, info, at, prev_image):
         guesses = [filled[n - 1] + 1 for n in range(max(3, estimate - 3), min(len(filled), estimate + 3) + 1)]
         guesses.sort(key=lambda c: abs(sum(1 for i in filled if i < c) - estimate))
     for cut in guesses:
-        end = _seam(merged, lines[:cut])
-        if end is not None:
+        found = _seam(merged, lines[:cut], clipped=clipped)
+        if found is not None:
+            end, skip = found
+            cut -= _trailing_span(lines[:cut], skip)
             return merged[:end + 1] + lines[cut:], len(lines) - cut, est["share"] >= 0.8
     return None
+
+
+def _trailing_span(head, skip):
+    """How many lines at the end of `head` hold its last `skip` non-blank lines (blank lines between them included)."""
+    span, seen = 0, 0
+    for line in reversed(head):
+        span += 1
+        seen += bool(line.strip())
+        if seen == skip:
+            return span
+    return span if skip else 0
+
+
+def _appended_repeats(merged, stitched, appended, run=10):
+    """Does what a stitch appended repeat, line for line, a run of what was already read? Real code repeats short patterns, but
+    a run of ten or more identical lines (numbers and names included) that the text already holds is a screenshot that was
+    appended twice: the signature of an overlap the text could not find."""
+    if appended < run or stitched is None:
+        return False
+    key = lambda l: " ".join(l.replace("[CUT OFF]", "").split())
+    new = [key(l) for l in stitched[len(stitched) - appended:] if l.strip()]
+    old = [key(l) for l in merged if l.strip()]
+    if len(new) < run:
+        return False
+    match = _difflib.SequenceMatcher(None, old, new, autojunk=False).find_longest_match(0, len(old), 0, len(new))
+    return match.size >= max(run, 0.5 * len(new))
 
 
 def _stitch(parts: list, prefer, notes: dict, rows=None, from_left=None) -> str:
     from core.verify import sideways_merge_ex, sideways_views
     frames, pixel, whole = [], {}, set()
+    # fixed-format source (COBOL, RPG, JCL) is full of identical template lines, so a repeat there proves nothing
+    fixed_format = source_mode(parts) == "columns"
     for k, part in enumerate(parts):
         lines = part.split("\n")
         at = list(range(len(lines)))        # each kept line's index in the screenshot's own text, for its pixel row
@@ -2289,6 +2329,14 @@ def _stitch(parts: list, prefer, notes: dict, rows=None, from_left=None) -> str:
             if guided is not None and text_new is not None and abs(text_new - guided[1]) > 2:
                 notes.setdefault("pixel_disagreements", []).append((fi, text_new, guided[1]))
             tiny = text_new is not None and len(lines) - text_new <= 4 and guided is not None and guided[1] < len(lines) - 8
+            if (not fixed_format and not tiny and text_new is not None and text_new >= 10
+                    and _appended_repeats(merged, stitched, text_new)):
+                # the text appended a run it already holds; the screenshot's own rows may include ones the previous screen showed
+                # clipped, so the seam may be looser here than where the text found nothing at all
+                again = _pixel_guided(merged, lines, pixel[id(lines)][0], pixel[id(lines)][1],
+                                      pixel[id(before)][0]["image"], clipped=3)
+                if again is not None and text_new > again[1] + 2:
+                    guided, tiny = again, True
             if guided is not None and (text_new is None or tiny):
                 notes.setdefault("pixel_stitched", []).append((fi, text_new, guided[1]))
                 stitched = guided[0]

@@ -39,6 +39,6 @@ def test_repeated_handlers_are_stitched_by_the_scroll_the_pixels_measured(tmp_pa
 
 def test_the_seam_is_found_only_where_the_repeated_lines_agree_exactly():
     merged = ["x = 1", "SUBTRACT 12 FROM A", "IF Y < 2003", "MOVE 1 TO Z", "END-IF", "2190-NEXT."]
-    assert analysis._seam(merged, ["SUBTRACT 12 FROM A", "IF Y < 2003", "MOVE 1 TO Z", "END-IF", "2190-NEXT."]) == 5
+    assert analysis._seam(merged, ["SUBTRACT 12 FROM A", "IF Y < 2003", "MOVE 1 TO Z", "END-IF", "2190-NEXT."]) == (5, 0)
     look_alike = ["SUBTRACT 11 FROM A", "IF Y < 2002", "MOVE 1 TO Z", "END-IF", "2180-NEXT."]
     assert analysis._seam(merged, look_alike) is None
