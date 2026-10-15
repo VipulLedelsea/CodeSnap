@@ -1518,7 +1518,16 @@ def merge_verified(raw_parts: list, metas: list | None = None):
         if info and text not in rows_of:
             rows_of[text] = info
     placed = [rows_of.get(p) for p in parts]
-    stitched = _stitch(parts, prefer, notes, placed) if any(placed) else _stitch(parts, prefer, notes)
+    left_text = {}
+    for text, meta in zip(cleaned, metas):
+        spacing_ = (meta or {}).get("spacing") or {}
+        if spacing_.get("calibrated") is True and text not in left_text:
+            left_text[text] = True
+    from_left = [left_text.get(p, False) for p in parts]
+    if any(placed) or any(from_left):
+        stitched = _stitch(parts, prefer, notes, placed, from_left)
+    else:
+        stitched = _stitch(parts, prefer, notes)
     candidates = [stitched] + parts
     clean = [c for c in candidates if c.strip() and not _has_dup_headers(c)]
     best = max(clean or candidates, key=lambda c: len(c.splitlines())) if candidates else stitched
@@ -2158,9 +2167,9 @@ def _pixel_guided(merged, lines, info, at, prev_image):
     return None
 
 
-def _stitch(parts: list, prefer, notes: dict, rows=None) -> str:
+def _stitch(parts: list, prefer, notes: dict, rows=None, from_left=None) -> str:
     from core.verify import sideways_merge_ex, sideways_views
-    frames, pixel = [], {}
+    frames, pixel, whole = [], {}, set()
     for k, part in enumerate(parts):
         lines = part.split("\n")
         at = list(range(len(lines)))        # each kept line's index in the screenshot's own text, for its pixel row
@@ -2181,12 +2190,15 @@ def _stitch(parts: list, prefer, notes: dict, rows=None) -> str:
                 at.pop(0)
         if lines:
             frames.append(lines)
+            if from_left and k < len(from_left) and from_left[k]:
+                whole.add(id(lines))
             info = rows[k] if rows and k < len(rows) else None
             if info:
                 pixel[id(lines)] = (info, at)
     # screens taken after scrolling right show pieces of lines: stitch the whole-line screens first, then join the
     # pieces onto them, so a capture that starts (or wanders) sideways never becomes the base of the file
-    sidx = sideways_views(frames)
+    # a screenshot whose column one the pixels placed shows every line from its start, so it cannot be a sideways piece
+    sidx = {i for i in sideways_views(frames) if id(frames[i]) not in whole}
     if len(sidx) == len(frames):
         sidx = set()
     order = [f for i, f in enumerate(frames) if i not in sidx] + [f for i, f in enumerate(frames) if i in sidx]

@@ -194,6 +194,23 @@ def _word_columns(runs, pitch, offset):
     return [(a, b - a + 1) for a, b in words]
 
 
+def _word_joined(runs, pitch, offset):
+    """For each word of `_word_columns`, whether its ink is one unbroken run. Box-drawing dashes ('──────') touch their
+    neighbours, so a banner rule is a single run; hyphens and em dashes leave a gap between characters."""
+    first = lambda x: int(np.floor((x - offset * pitch) / pitch + 0.25))
+    last = lambda x: int(np.floor((x - offset * pitch) / pitch + 0.05))
+    counts, end = [1], last(runs[0][1])
+    for s, e in runs[1:]:
+        a, b = first(s), last(e)
+        if a > end + 1:
+            counts.append(1)
+            end = b
+        else:
+            counts[-1] += 1
+            end = max(end, b)
+    return [n == 1 for n in counts]
+
+
 def _starts(line):
     out, pos = [], 0
     for w in line.split():
@@ -274,18 +291,30 @@ def _anchored(plain, pairset, ri, li) -> bool:
     return all(p in pairset for p in nb) and any(0 <= l < len(plain) and any(ch.isalnum() for ch in plain[l]) for _, l in nb)
 
 
-def _measured_word(word, width):
-    """Separator rules (------, ======, ******) are where the model miscounts characters; there the pixels decide."""
+def _joined_of(m, ri):
+    rows = m.get("joined")
+    return rows[ri] if rows and ri < len(rows) else [False] * 400
+
+
+_DASHES = re.compile(r"^[-\u2013\u2014\u2500]{2,}$")
+
+
+def _measured_word(word, width, joined=False):
+    """Separator rules (------, ======, ******) are where the model miscounts characters; there the pixels decide. A run of
+    dashes whose ink is one unbroken line is the box-drawing dash, which a reader tends to take for a hyphen or an em dash;
+    its length is the number of cells it covers."""
+    if joined and width >= 2 and _DASHES.match(word):
+        return "\u2500" * width
     m = _RULE.match(word)
     if m and 0 < abs(width - len(word)) <= RULE_SLACK:
         return m.group(1) + m.group(2) * (width - len(m.group(1)))
     return word
 
 
-def _rebuild(line, cols, widths=None):
+def _rebuild(line, cols, widths=None, joined=None):
     out = ""
     for i, (w, c) in enumerate(zip(line.split(), cols)):
-        w = _measured_word(w, widths[i]) if widths else w
+        w = _measured_word(w, widths[i], bool(joined and joined[i])) if widths else w
         c = max(c, len(out) + (1 if out else 0))
         out += " " * (c - len(out)) + w
     return out
@@ -308,9 +337,11 @@ def _measure(image_path, text: str, *, source_x=None):
     if pitch is None or fit < MIN_GRID_FIT:
         return None
     measured = [_word_columns(r, pitch, offset) for r in rows]
+    joined = [_word_joined(r, pitch, offset) for r in rows]
     plain = [l for _, l in body]
     left = min(m[0][0] for m in measured)
     right = left + max(len(l) for l in plain) + 4          # anything further right is a scrollbar or minimap
+    joined = [j[:len([w for w in m if w[0] <= right]) or 1] for j, m in zip(joined, measured)]
     measured = [[w for w in m if w[0] <= right] or m[:1] for m in measured]
     variants = [(measured, list(range(len(measured))))]
     # editor line numbers are one extra word per row; a row holding only a line number (a blank source line) is dropped
@@ -325,6 +356,8 @@ def _measure(image_path, text: str, *, source_x=None):
             variants.append(([measured[i][1:] if len(measured[i]) > 1 else measured[i] for i in keep], keep))
     best = max(((_align(m, plain), m, idx) for m, idx in variants), key=lambda v: len(v[0]))
     pairs, measured, idx = best
+    gutter_used = len(variants) > 1 and measured is variants[1][0]
+    joined = [joined[i][1:] if gutter_used and len(joined[i]) > 1 else joined[i] for i in idx]
     if len(pairs) < max(3, min(len(plain), len(measured)) // 3):
         return None
     votes = {}
@@ -340,7 +373,7 @@ def _measure(image_path, text: str, *, source_x=None):
         if not isinstance(source_x, (int, float)) or not np.isfinite(source_x) or not 0 <= source_x < ink.shape[1]:
             raise ValueError("source_x must be the visible source column-one position inside the image")
         base = -int(round(source_x / pitch - offset))
-    return {"lines": lines, "body": body, "plain": plain, "measured": measured, "pairs": pairs, "base": base,
+    return {"lines": lines, "body": body, "plain": plain, "measured": measured, "pairs": pairs, "base": base, "joined": joined,
             "absolute_columns": source_x is not None,
             "bands": [bands[i] for i in idx], "deco": [deco[i] for i in idx], "pitch": pitch, "offset": offset,
             "x0": int(max(0, (min(m[0][0] for m in measured) + offset - 1) * pitch))}
@@ -370,11 +403,12 @@ def respace(image_path, text: str, *, source_x=None) -> tuple:
         uniform = m["absolute_columns"] and len(shifts) == 1 and min(cols) >= 0
         if not uniform and any(abs(s) > MAX_SHIFT for s in shifts):
             continue
-        new = _rebuild(plain[li], cols, [w for _, w in measured[ri]])
+        new = _rebuild(plain[li], cols, [w for _, w in measured[ri]], _joined_of(m, ri))
         from core.text import normalized_line
         if any(quote in plain[li] for quote in ("'", '"', '`')) and normalized_line(new) != normalized_line(plain[li]):
             continue  # Word geometry cannot justify silently changing a literal value.
-        same_words = all(a == b or _RULE.match(a) for a, b in zip(new.split(), plain[li].split()))
+        same_words = all(a == b or _RULE.match(a) or (_DASHES.match(a) and _DASHES.match(b))
+                         for a, b in zip(new.split(), plain[li].split()))
         if new != plain[li] and same_words and len(new.split()) == len(plain[li].split()):
             lines[body[li][0]] = new
             changed += 1
@@ -390,15 +424,16 @@ def respace(image_path, text: str, *, source_x=None) -> tuple:
             if (m["deco"][ri] or body[li][0] in protected or "\t" in line or len(measured[ri]) != len(line.split())):
                 continue
             rule = _rule_only(line)
-            exact = all(w == len(t) for (_, w), t in zip(measured[ri], line.split()))
+            exact = all(w == len(t) or (_DASHES.match(t) and _joined_of(m, ri)[i]) for i, ((_, w), t) in enumerate(zip(measured[ri], line.split())))
             if not (rule or (exact and _anchored(plain, pairset, ri, li) and m["absolute_columns"])):
                 continue
             cols = [c + base for c, _ in measured[ri]]
             if min(cols) < 0:
                 continue
-            new = _rebuild(line, cols, [w for _, w in measured[ri]])
+            new = _rebuild(line, cols, [w for _, w in measured[ri]], _joined_of(m, ri))
             from core.text import normalized_line
-            if normalized_line(new) != normalized_line(line) and not rule:
+            if normalized_line(new) != normalized_line(line) and not rule and not all(
+                    a == b or (_DASHES.match(a) and _DASHES.match(b)) for a, b in zip(new.split(), line.split())):
                 continue
             if new != line and len(new.split()) == len(line.split()):
                 lines[body[li][0]] = new
