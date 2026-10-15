@@ -49,9 +49,61 @@ def _drop_guides(ink, min_h=60, max_w=3):
     return out
 
 
+def _drop_squiggles(rgb, ink, min_w=16, min_h=3, max_h=9):
+    """Remove the editor's wavy diagnostic underlines: red ink in a long, flat but not straight band (a few pixels tall, many
+    times wider). Drawn under a flagged row they fuse that row with the one below and start at column one of the row, so the
+    first word seems to begin at the margin and the screenshot has no usable character grid. A letter is far narrower; a
+    divider drawn in red is straight (one or two pixels tall), which is how the two are told apart."""
+    r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
+    red = (r > 110) & (r - g > 45) & (r - b > 45) & ink
+    if not red.any():
+        return ink
+    h, w = red.shape
+    parent, boxes = {}, {}
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+    prev = []
+    for y in np.where(red.any(1))[0]:
+        xs = np.where(red[y])[0]
+        runs = [(int(r[0]), int(r[-1])) for r in np.split(xs, np.where(np.diff(xs) > 1)[0] + 1)]
+        cur = []
+        for a, b in runs:
+            key = (int(y), a)
+            parent[key] = key
+            boxes[key] = [a, b, int(y), int(y)]
+            for pa, pb, pk, py in prev:
+                if py == y - 1 and pa <= b + 1 and a <= pb + 1:
+                    ra, rb = find(key), find(pk)
+                    if ra != rb:
+                        parent[rb] = ra
+                        x0, x1, y0, y1 = boxes[rb]
+                        bx = boxes[ra]
+                        boxes[ra] = [min(bx[0], x0), max(bx[1], x1), min(bx[2], y0), max(bx[3], y1)]
+            cur.append((a, b, key, int(y)))
+        prev = cur
+    out = ink.copy()
+    seen = set()
+    for key in parent:
+        root = find(key)
+        if root in seen:
+            continue
+        seen.add(root)
+        x0, x1, y0, y1 = boxes[root]
+        bw, bh = x1 - x0 + 1, y1 - y0 + 1
+        if bw >= min_w and min_h <= bh <= max_h and bw >= 3 * bh:
+            out[y0:y1 + 1, x0:x1 + 1] &= ~red[y0:y1 + 1, x0:x1 + 1]
+    return out
+
+
 def _ink(path):
-    im = np.asarray(Image.open(path).convert("L")).astype(int)
-    return _drop_guides(np.abs(im - np.median(im)) > 60)
+    pic = Image.open(path)
+    im = np.asarray(pic.convert("L")).astype(int)
+    ink = np.abs(im - np.median(im)) > 60
+    ink = _drop_squiggles(np.asarray(pic.convert("RGB")).astype(int), ink)
+    return _drop_guides(ink)
 
 
 def _decorated(ink, a, b, runs) -> bool:
@@ -448,6 +500,40 @@ def check(image_path, text: str, *, source_x=None) -> dict:
                 status[body[l2][0]] = ROWS
     return {"grid": True, "status": status, "rows": rows, "x0": m["x0"], "pitch": m["pitch"],
             "absolute_columns": m["absolute_columns"]}
+
+
+def leads(image_path, text: str, *, source_x=None):
+    """Per line of `text`: its leading column read from the pixels (an int), or None when it cannot be placed. Only the
+    start of each row is used, so a misread word does not matter. A row is paired with a line by the exact word matches the
+    pixel check already trusts, by the rows between two such matches, and, when the screenshot has as many rows as the text
+    has lines and most first words have the width the text says, row for row. Needs the screenshot's column one (source_x):
+    without it only relative columns exist."""
+    lines = text.split("\n")
+    out = [None] * len(lines)
+    if source_x is None:
+        return out
+    m = _measure(image_path, text, source_x=source_x)
+    if m is None or not m["absolute_columns"]:
+        return out
+    body, plain, measured, base, pairs = m["body"], m["plain"], m["measured"], m["base"], m["pairs"]
+    mapping = {li: ri for ri, li in pairs}
+    for (r1, l1), (r2, l2) in zip(pairs, pairs[1:]):
+        if r2 - r1 == l2 - l1 > 1:
+            for k in range(1, r2 - r1):
+                mapping.setdefault(l1 + k, r1 + k)
+    if len(measured) == len(plain):
+        words = [(i, plain[i].split()) for i in range(len(plain)) if plain[i].split() and measured[i]]
+        agree = sum(1 for i, w in words if measured[i][0][1] == len(w[0]))
+        if words and agree >= 0.7 * len(words):
+            for i in range(len(plain)):
+                mapping.setdefault(i, i)
+    for li, ri in mapping.items():
+        if m["deco"][ri] or not measured[ri] or "\t" in plain[li]:
+            continue
+        lead = measured[ri][0][0] + base
+        if lead >= 0:
+            out[body[li][0]] = int(lead)
+    return out
 
 
 def accept_reread(line: str, row: dict):

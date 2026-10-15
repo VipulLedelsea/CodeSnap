@@ -557,6 +557,8 @@ def measured_frame(client,path,raw,*,calibration=None):
             'measured' if evidence['calibrated'] and verified['status'][i] in ('verified','reread') else
             'relative' if verified['status'][i] in ('verified','reread') else 'unmeasured')
             if line.strip() else '' for i,line in enumerate(result.split('\n'))]
+        if evidence.get('calibrated') and origin is not None:
+            evidence['lead_px']=colfix.leads(image,result,source_x=origin)
         verified['spacing']=evidence
         verified['image']=str(path)
         return result,verified,changed
@@ -1388,6 +1390,29 @@ def _align_origins(parts, metas, min_anchored=3, tol=0.25):
     return out
 
 
+def _pixel_margin(metas):
+    """The click that set column one is a person's click, so every screenshot of a capture shares its error. The leading
+    columns the pixels gave (spacing.lead_px) must reach zero somewhere in a file; when the smallest of them over the whole
+    capture is a few columns and enough lines sit there, that is the click's error, and it is taken off every one of them."""
+    pool = [x for m in metas if m for x in (((m.get("spacing") or {}).get("lead_px")) or []) if x is not None]
+    if len(pool) < 20:
+        return 0
+    # the first column that holds a real share of the lines; a few stray rows at the margin (a breadcrumb, a clipped row)
+    # are not column one
+    need = max(3, 0.015 * len(pool))
+    counts = {}
+    for x in pool:
+        counts[x] = counts.get(x, 0) + 1
+    low = min(x for x, n in counts.items() if n >= need)
+    if not 1 <= low <= 3:
+        return 0
+    for m in metas:
+        lead = ((m or {}).get("spacing") or {}).get("lead_px")
+        if lead:
+            m["spacing"]["lead_px"] = [None if x is None else max(0, x - low) for x in lead]
+    return low
+
+
 def _equalize_frame_offsets(parts, min_block=5, min_pairs=8, support=0.8, max_shift=12, pinned=()):
     """Bring screenshots that sit some columns left or right of their neighbours to one common offset. The editor can
     scroll sideways by a column between screenshots, so a whole screen is then read that many columns away from the rest.
@@ -1445,6 +1470,7 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     metas = list(metas or [])
     metas += [{}] * (len(raw_parts) - len(metas))
     raw_parts = _align_origins(raw_parts, metas)
+    _pixel_margin(metas)
     pinned = {k for k, m in enumerate(metas) if ((m or {}).get("spacing") or {}).get("calibrated")}
     raw_parts = _equalize_frame_offsets(raw_parts, pinned=pinned)
     raw_parts = _drop_margin_offset(raw_parts, metas)
@@ -1532,7 +1558,11 @@ def merge_verified(raw_parts: list, metas: list | None = None):
         # is one column off its file's grid shows up here, on the finished text, not on the individual screens.
         aligned, moved = _align_indent_grid([final])
         if moved:
-            final = aligned[0]
+            # a line whose column the pixels gave is never moved to make the text fit a grid
+            was, now, placed = final.split("\n"), aligned[0].split("\n"), notes.get("spacing_statuses") or []
+            if len(was) == len(now):
+                now = [was[i] if i < len(placed) and placed[i] == "measured" else l for i, l in enumerate(now)]
+            final = "\n".join(now)
             notes["indent_runs_moved"] = [(a, b) for _, a, b in moved]
     verify.align_line_evidence(final, raw_parts, cleaned, metas, notes)
     verify.spacing_agreement(final, cleaned, metas, notes)

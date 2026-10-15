@@ -585,6 +585,10 @@ def spacing_agreement(code, parts, metas, notes):
     agree, differ, shifts = {}, {}, []
     for k, part in enumerate(parts):
         rows = part.split('\n')
+        placed = (((metas[k] if k < len(metas) else None) or {}).get('spacing') or {}).get('lead_px') or []
+        if len(placed) == len(rows):
+            # a screenshot's own reading of a line's indent is replaced by the column the pixels gave it
+            rows = [' ' * x + r.lstrip() if x is not None and r.strip() else r for r, x in zip(rows, placed)]
         mapping = _line_map(part, code)
         deltas = {}
         for i, j in enumerate(mapping):
