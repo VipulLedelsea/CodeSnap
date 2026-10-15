@@ -309,3 +309,13 @@ applies separate uncached-input, cache-write and cache-read prices and retains
 cache counters in in-memory usage summaries. Previously saved cost records are
 not repriced. This feature is separate from the local screenshot text cache.
 See [Anthropic's prompt caching documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+
+## Second-pass capture comparison
+
+Capture a file twice, with **Add screenshots**, scrolling the whole file again, and the two passes are read as two independent
+captures when each holds at least six screenshots and at least 40% as many as the larger one. A handful of added screenshots
+that fills a gap is not a second pass. Each pass is stitched on its own and the two are combined (`core/passes.py`): a line both
+passes read alike counts as confirmed, a stretch only one pass has is filled in (unless it repeats text that pass already holds),
+and a line the two read differently is flagged for review. On the two real captures of the legacy test files, every line the
+passes agreed on (11,598) was right, and every wrong line left in the combined text sat among the flagged lines.
+Only two passes are compared; a third counts with the larger one.

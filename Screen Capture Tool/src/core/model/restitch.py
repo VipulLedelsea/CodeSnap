@@ -115,7 +115,8 @@ def rebuild_saved_capture(store, artifact_id, progress=None):
         checked.update({key:metas[i][key] for key in ('numbers','numbers_seen','numbers_rejected') if key in metas[i]})
         parts[i],metas[i]=text,checked
     update('Stitching saved text', len(frames), len(frames))
-    code, _, notes, statuses = merge_verified(parts, metas)
+    from core import passes
+    code, _, notes, statuses = passes.stitch(parts, metas, [f.get('session_id') for f in frames])
     if not code.strip():
         raise ValueError('The saved screenshots contain no readable source. No changes were made.')
     correction_positions = _correction_positions(store, art, code)

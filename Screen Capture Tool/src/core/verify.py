@@ -34,6 +34,7 @@ REASONS = {
     "spacing": "screenshots disagree about this line's spacing; confirm its source margin and compare the saved readings",
     "glyph": "this divider or banner was not verified against the screenshot: check its dash characters (-, \u2013, \u2014, "
              "\u2500) and how many there are",
+    "pass": "the two captures of this file read this line differently: compare it with the screenshots",
     "dup": "this definition appears more than once in the file: one copy may be a screenshot stitched in twice; compare it with "
            "the screenshots",
     "syntax": "the source stops parsing here: this line, or one just before it, may be misread, misplaced or missing; compare "
@@ -542,6 +543,8 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
     counts = {"verified": 0, "reread": 0, "confirmed": 0, "joined": 0, "flagged": 0, "unchecked": 0}
     flags, kinds = [], {}
     glyph_lines = set(notes.get('glyph_conflicts') or [])
+    pass_conflicts = set(notes.get('pass_conflicts') or [])
+    pass_confirmed = set(notes.get('pass_confirmed') or [])
     repeated = repeated_definitions(final_lines)
     for i, l in enumerate(final_lines, 1):
         if not l.strip():
@@ -561,7 +564,11 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
             s = statuses.get(l.rstrip())
             if s is None:
                 s = "edited" if read_lines is not None and _norm(l) not in norm else "unchecked"
-        if number_in(repeated, i) and s not in ("mismatch", "rows", "cut"):
+        if i in pass_conflicts and s not in ("cut",):
+            s = "pass"
+        elif i in pass_confirmed and s in (None, "unchecked", "joined", "edited") and not _DASH_RUN.search(l):
+            s = "confirmed"                  # two independent captures read this line alike (dividers excepted: a wrong glyph repeats)
+        if number_in(repeated, i) and s not in ("mismatch", "rows", "cut", "pass"):
             s = "dup"
         if s in (None, "unchecked", "joined") and _DASH_RUN.search(l):
             # a divider or banner the pixels did not verify: a hyphen, an en or em dash and the box-drawing dash look alike,
