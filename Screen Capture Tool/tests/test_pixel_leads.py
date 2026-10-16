@@ -93,3 +93,10 @@ def test_an_underline_that_touches_red_text_above_it_is_removed_and_the_text_sta
     out = colfix._drop_squiggles(rgb, ink)
     assert not out[23:32, 10:200].any()                           # the underline is gone
     assert out[10:19, 12].all() and out[10:19, 52].all()          # the letters are not
+
+
+def test_a_star_line_of_a_block_comment_is_put_back_one_column_right_of_the_opener():
+    text = "/**\n * one\n * two\n * three\n* four\n * five\n */\nx = 1"
+    fixed, n = analysis._align_block_comment_stars(text)
+    assert fixed.split("\n")[4] == " * four" and n == 1
+    assert analysis._align_block_comment_stars("/*\n* a\n* b\n*/")[1] == 0            # too few lines to say what the layout is

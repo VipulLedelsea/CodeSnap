@@ -611,8 +611,9 @@ def check(image_path, text: str, *, source_x=None) -> dict:
             "absolute_columns": m["absolute_columns"]}
 
 
-def _lead_candidates(m, lines):
-    """Leading column of each text line from a measurement, before any row is thrown out as an outlier."""
+def _lead_candidates(m, lines, anchored=False):
+    """Leading column of each text line from a measurement, before any row is thrown out as an outlier. With `anchored`, also the
+    set of lines tied to their rows by exact matches or sitting between two such matches."""
     out = [None] * len(lines)
     body, plain, measured, base, pairs = m["body"], m["plain"], m["measured"], m["base"], m["pairs"]
     mapping = {li: ri for ri, li in pairs}
@@ -620,6 +621,17 @@ def _lead_candidates(m, lines):
         if r2 - r1 == l2 - l1 > 1:
             for k in range(1, r2 - r1):
                 mapping.setdefault(l1 + k, r1 + k)
+    # between two matched rows that hold a different number of rows and lines (a stray row, a skipped row), the few rows and
+    # lines still line up by the widths of their first words; the matched rows on both sides keep the alignment honest
+    for (r1, l1), (r2, l2) in zip(pairs, pairs[1:]):
+        if r2 - r1 == l2 - l1 or r2 - r1 > 7 or l2 - l1 > 7 or r2 - r1 < 2 or l2 - l1 < 2:
+            continue
+        rows_shape = [tuple(w for _, w in measured[r][:2]) for r in range(r1 + 1, r2)]
+        lines_shape = [tuple(len(t) for t in plain[l].split()[:2]) for l in range(l1 + 1, l2)]
+        for block in _difflib.SequenceMatcher(None, rows_shape, lines_shape, autojunk=False).get_matching_blocks():
+            for k in range(block.size):
+                mapping.setdefault(l1 + 1 + block.b + k, r1 + 1 + block.a + k)
+    tied = set(mapping)                               # lines matched exactly, or sitting between two exact matches
     if len(measured) == len(plain):
         words = [(i, plain[i].split()) for i in range(len(plain)) if plain[i].split() and measured[i]]
         # whole rows, not first words: look-alike lines (a template repeated with other names) share first words, and a
@@ -648,7 +660,7 @@ def _lead_candidates(m, lines):
         lead = measured[ri][word][0] + base
         if lead >= 0:
             out[body[li][0]] = int(lead)
-    return out
+    return (out, tied) if anchored else out
 
 
 def _offset_consistency(m, lines):
@@ -675,8 +687,8 @@ def leads(image_path, text: str, *, source_x=None):
     m = _measure(image_path, text, source_x=source_x)
     if m is None or not m["absolute_columns"]:
         return out
-    out = _lead_candidates(m, lines)
-    exact = {m["body"][li][0] for _, li in m["pairs"]}        # rows whose words match the text exactly are not second-guessed
+    out, tied = _lead_candidates(m, lines, anchored=True)
+    exact = {m["body"][li][0] for li in tied}         # rows tied to the text by exact matches are not second-guessed
     # A screenshot is read at one offset from the screen: the readers' indent and the pixels' differ by about the same amount on
     # every row. A row far from that offset is a row whose first ink is a mark at the margin (an indent guide, a cursor line)
     # or that was paired with the wrong line, so it is not used.

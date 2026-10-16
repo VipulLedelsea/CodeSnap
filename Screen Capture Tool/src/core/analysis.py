@@ -1364,6 +1364,32 @@ def _glyph_conflicts(final, parts):
     return [i + 1 for i, sigs in seen.items() if len(sigs) > 1]
 
 
+def _align_block_comment_stars(final, majority=0.6):
+    """Lines of a /* ... */ comment that begin with '*' sit one column right of the opening '/*' (the JSDoc and Javadoc
+    convention). Where most of the star lines of one comment already do, a star line a screenshot read at another column is
+    put back, so a single misread continuation line does not stand out of its own comment."""
+    lines = final.split("\n")
+    changed, i = 0, 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if not (stripped.startswith("/*") and "*/" not in stripped):
+            i += 1
+            continue
+        want = len(lines[i]) - len(lines[i].lstrip(" ")) + 1
+        end = next((k for k in range(i + 1, min(len(lines), i + 400)) if "*/" in lines[k]), None)
+        if end is None:
+            break
+        stars = [k for k in range(i + 1, end + 1) if lines[k].strip().startswith("*")]
+        right = sum(1 for k in stars if len(lines[k]) - len(lines[k].lstrip(" ")) == want)
+        if len(stars) >= 4 and right >= majority * len(stars):
+            for k in stars:
+                if len(lines[k]) - len(lines[k].lstrip(" ")) != want and "\t" not in lines[k]:
+                    lines[k] = " " * want + lines[k].lstrip(" ")
+                    changed += 1
+        i = end + 1
+    return "\n".join(lines), changed
+
+
 def _drop_garbled_twins(final, statuses, min_alnum=12):
     """A row clipped by the edge of a screenshot is sometimes read with its punctuation lost (`self decision` for
     `self.decision`) and then sits right beside the whole line from the next screenshot. Two neighbouring lines that differ
@@ -1526,13 +1552,17 @@ def _pixel_margin(metas):
     for x in pool:
         counts[x] = counts.get(x, 0) + 1
     low = min(x for x, n in counts.items() if n >= need)
-    if not 1 <= low <= 3:
+    if low < 1:
         return 0
+    # no line of the file begins left of its first real column (a stub of an indent guide, a mark at the margin): a pixel column
+    # below it is not a reading of that line. Free-form code also loses the click's error; fixed-format source (COBOL starts at
+    # column 7) keeps its columns as they are.
+    take = low if low <= 3 else 0
     for m in metas:
         lead = ((m or {}).get("spacing") or {}).get("lead_px")
         if lead:
-            m["spacing"]["lead_px"] = [None if x is None else max(0, x - low) for x in lead]
-    return low
+            m["spacing"]["lead_px"] = [None if x is None or x < low else x - take for x in lead]
+    return take
 
 
 def _equalize_frame_offsets(parts, min_block=5, min_pairs=8, support=0.8, max_shift=12, pinned=()):
@@ -1684,6 +1714,9 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     from core.spacing import reconcile
     final,spacing_notes=reconcile(final,cleaned,metas)
     notes.update(spacing_notes)
+    final, starred = _align_block_comment_stars(final)
+    if starred:
+        notes["comment_stars_aligned"] = starred
     final, continued = _fix_macro_continuations(final)
     if continued:
         notes["continuation_columns_set"] = continued
