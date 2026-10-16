@@ -149,6 +149,19 @@ def positions(source,reading):
     return matches
 
 
+def _pick_lead(pixel):
+    """The leading column the pixel readings of one line settle on: the only value when they all agree; with disagreement, the
+    value most screenshots give when at least two do and it has twice the votes of any other (a row paired with the wrong line
+    or an edge row is then the odd one out). None when there is no such value."""
+    if not pixel:
+        return None
+    votes=sorted(((pixel.count(v),v) for v in set(pixel)),reverse=True)
+    if len(votes)==1:
+        return votes[0][1]
+    top,second=votes[0][0],votes[1][0]
+    return votes[0][1] if top>=2 and top>=2*second else None
+
+
 def _corroborated(pixel,model):
     """A pixel-read leading column is trusted when two screenshots give it, or when the one that gives it sits within a column
     of what the readers wrote. One row on one screenshot can be paired with the wrong line or carry a leftover mark at the
@@ -212,14 +225,15 @@ def reconcile(code,parts,metas):
     conflicts=[]
     for i,readings in seen.items():
         measured=votes[i]
-        if len(leadvotes.get(i,()))==1 and not _corroborated(pixel_all[i],model_all[i]):
+        pick=_pick_lead(pixel_all.get(i,[]))
+        if pick is not None and not _corroborated(pixel_all[i],model_all[i]):
             conflicts.append(i+1); status[i]='conflict'
-        elif len(leadvotes.get(i,()))==1:
+        elif pick is not None:
             # the pixels gave one leading column on every screenshot that shows this line: its spacing is settled whatever
             # the words were read as. The line counts as measured only when the screenshots also agree on its words.
             same=len({_norm(r) for r in readings})==1
             words=next(iter(measured)) if len(measured)==1 and same else lines[i]
-            lines[i]=' '*next(iter(leadvotes[i]))+words.lstrip(); status[i]='measured' if same else 'unmeasured'
+            lines[i]=' '*pick+words.lstrip(); status[i]='measured' if same and len(leadvotes[i])==1 else 'unmeasured'
         elif len(measured)==1:
             lines[i]=next(iter(measured)); status[i]='measured'
         elif len(measured)>1 or len(readings)>1:

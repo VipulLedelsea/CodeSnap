@@ -48,3 +48,31 @@ def test_the_click_error_is_taken_off_when_no_line_sits_at_the_margin():
     assert analysis._pixel_margin(metas) == 1
     assert min(metas[0]["spacing"]["lead_px"]) == 0
     assert analysis._pixel_margin([{"spacing": {"lead_px": [0] * 20 + [4] * 20}}]) == 0
+
+
+def test_a_screenshot_whose_pixel_columns_sit_at_another_origin_is_moved_onto_the_rest():
+    same = ["alpha_line_one(1)", "beta_line_two(2)", "gamma_line_three(3)", "delta_line_four(4)", "epsilon_line_five(5)", "zeta_line_six(6)"]
+    metas = [{"spacing": {"lead_px": [4, 8, 4, 8, 4, 8]}}, {"spacing": {"lead_px": [4, 8, 4, 8, 4, 8]}},
+             {"spacing": {"lead_px": [1, 5, 1, 5, 1, 5]}}]
+    parts = ["\n".join(" " * x + l for l, x in zip(same, [4, 8, 4, 8, 4, 8])), "\n".join(" " * x + l for l, x in zip(same, [4, 8, 4, 8, 4, 8])),
+             "\n".join(" " * x + l for l, x in zip(same, [1, 5, 1, 5, 1, 5]))]
+    out = analysis._align_pixel_frames(parts, metas)
+    assert out[2] == parts[0] and metas[2]["spacing"]["lead_px"] == [4, 8, 4, 8, 4, 8]
+
+
+def test_the_pixel_readings_of_a_line_settle_on_the_clear_majority():
+    from core import spacing
+    assert spacing._pick_lead([4, 4, 4, 1, 1]) is None          # three against two is not clear
+    assert spacing._pick_lead([4, 4, 4, 4, 1]) == 4
+    assert spacing._pick_lead([5]) == 5
+    assert spacing._pick_lead([5, 2]) is None
+
+
+def test_a_picture_found_origin_is_moved_onto_the_click_origin_in_free_form_code():
+    lines = ["def alpha_function(value):", "    return value + 1", "def beta_function(value):", "    return value + 2"]
+    click = {"spacing": {"calibrated": True, "calibration": {"source_x": 30.0, "pitch": 10.0}, "lead_px": [0, 4, 0, 4]}}
+    metas = [dict(click), dict(click), dict(click),
+             {"spacing": {"calibrated": True, "auto": True, "calibration": {"source_x": 60.0, "pitch": 10.0}, "lead_px": [0, 1, 0, 1]}}]
+    parts = ["\n".join(lines)] * 3 + ["\n".join(l if i % 2 == 0 else l for i, l in enumerate(lines))]
+    out = analysis._align_auto_frames(parts, metas)
+    assert metas[3]["spacing"]["lead_px"] == [3, 4, 3, 4] and out[3].split("\n")[0].startswith("   def")

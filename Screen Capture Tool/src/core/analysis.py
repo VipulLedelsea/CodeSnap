@@ -1433,6 +1433,85 @@ def _align_origins(parts, metas, min_anchored=3, tol=0.25):
     return out
 
 
+def _align_auto_frames(parts, metas, tol=0.25, max_whole=12):
+    """In free-form code a screenshot whose column one was found from the picture (a line beginning with '*', which only means
+    column 7 in fixed-format source: Python's star-unpacking, a JSDoc continuation) sits at the wrong origin, and every line of
+    it reads a whole number of columns too few or too many. The screenshots calibrated from the person's click agree with each
+    other, so the picture-found ones are moved onto them: text and pixel columns by the same whole number of columns."""
+    evidence = [((m or {}).get("spacing") or {}) for m in metas]
+    clicked = sorted(e["calibration"]["source_x"] for e in evidence
+                     if e.get("calibrated") is True and not e.get("auto") and (e.get("calibration") or {}).get("source_x") is not None)
+    pitches = sorted((e.get("calibration") or {}).get("pitch") for e in evidence if (e.get("calibration") or {}).get("pitch"))
+    if len(clicked) < 3 or not pitches:
+        return parts
+    pitch, consensus = pitches[len(pitches) // 2], clicked[len(clicked) // 2]
+    if sum(abs(x - consensus) <= tol * pitch for x in clicked) < 0.8 * len(clicked):
+        return parts
+    out = list(parts)
+    for i, e in enumerate(evidence):
+        cal = e.get("calibration") or {}
+        if e.get("calibrated") is not True or not e.get("auto") or cal.get("source_x") is None or i >= len(parts):
+            continue
+        d = (cal["source_x"] - consensus) / (cal.get("pitch") or pitch)
+        whole = round(d)
+        if whole == 0 or abs(d - whole) > tol or abs(whole) > max_whole:
+            continue
+        rows = []
+        for line in parts[i].split("\n"):
+            width = len(line) - len(line.lstrip(" "))
+            rows.append(line if not line.strip() or "[CUT OFF]" in line or "\t" in line or width + whole < 0
+                        else " " * (width + whole) + line.lstrip(" "))
+        out[i] = "\n".join(rows)
+        if isinstance(e.get("lead_px"), list):
+            e["lead_px"] = [None if x is None else max(0, x + whole) for x in e["lead_px"]]
+        cal["source_x"] = consensus
+        e["auto"] = False
+    return out
+
+
+def _align_pixel_frames(parts, metas, min_shared=5, agree=0.7, max_shift=12):
+    """Bring screenshots whose pixel columns sit at another origin back to the one the rest agree on. A capture can be scrolled a
+    few columns sideways, or have its column one found at another place, for a few screenshots: every line of such a screenshot
+    then reads the same number of columns off from the same line on the others. The lines they share give that amount (the
+    median over the lines, taken only when most agree), and the screenshot's pixel columns and its text move by it. Returns
+    the parts, changed; the pixel columns in the metas are corrected in place."""
+    import collections
+    placed = []
+    for k, meta in enumerate(metas):
+        lead = (((meta or {}).get("spacing") or {}).get("lead_px")) or []
+        rows = parts[k].split("\n") if k < len(parts) else []
+        placed.append({" ".join(r.split()): x for r, x in zip(rows, lead) if x is not None and len(r.strip()) >= 6}
+                      if len(lead) == len(rows) else {})
+    count = collections.Counter(key for d in placed for key in d)
+    out = list(parts)
+    shifts = {}
+    for k, d in enumerate(placed):
+        deltas = []
+        for key, x in d.items():
+            if count[key] < 2:
+                continue
+            others = sorted(o[key] for j, o in enumerate(placed) if j != k and key in o)
+            deltas.append(x - others[len(others) // 2])
+        if len(deltas) < min_shared:
+            continue
+        common = max(set(deltas), key=deltas.count)
+        near = sum(1 for g in deltas if abs(g - common) <= 1)
+        if common and abs(common) <= max_shift and near >= agree * len(deltas):
+            shifts[k] = sorted(g for g in deltas if abs(g - common) <= 1)[near // 2]
+    for k, shift in shifts.items():
+        evidence = (metas[k] or {}).get("spacing") or {}
+        lead = evidence.get("lead_px")
+        if isinstance(lead, list):
+            evidence["lead_px"] = [None if x is None else max(0, x - shift) for x in lead]
+        rows = []
+        for line in parts[k].split("\n"):
+            width = len(line) - len(line.lstrip(" "))
+            rows.append(line if not line.strip() or "[CUT OFF]" in line or "\t" in line or width - shift < 0
+                        else " " * (width - shift) + line.lstrip(" "))
+        out[k] = "\n".join(rows)
+    return out
+
+
 def _pixel_margin(metas):
     """The click that set column one is a person's click, so every screenshot of a capture shares its error. The leading
     columns the pixels gave (spacing.lead_px) must reach zero somewhere in a file; when the smallest of them over the whole
@@ -1513,6 +1592,9 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     metas = list(metas or [])
     metas += [{}] * (len(raw_parts) - len(metas))
     raw_parts = _align_origins(raw_parts, metas)
+    if source_mode(raw_parts) != "columns":
+        raw_parts = _align_auto_frames(raw_parts, metas)
+    raw_parts = _align_pixel_frames(raw_parts, metas)
     _pixel_margin(metas)
     pinned = {k for k, m in enumerate(metas) if ((m or {}).get("spacing") or {}).get("calibrated")}
     raw_parts = _equalize_frame_offsets(raw_parts, pinned=pinned)

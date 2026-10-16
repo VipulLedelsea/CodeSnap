@@ -7,6 +7,7 @@ spaces between them with the measured ones. The only characters it ever changes 
 (------, ======), whose length it also measures. A line is left alone whenever the measurement and the text don't
 clearly agree.
 """
+import difflib as _difflib
 import re
 
 import numpy as np
@@ -217,6 +218,23 @@ def _word_joined(runs, pitch, offset):
     return [n == 1 for n in counts]
 
 
+def _word_thin(runs, pitch, offset):
+    """For each word of `_word_columns`, whether it is a hairline: one ink run no wider than a third of a character. That is the
+    stub of an indent guide the guide filter left behind, not a glyph."""
+    first = lambda x: int(np.floor((x - offset * pitch) / pitch + 0.25))
+    last = lambda x: int(np.floor((x - offset * pitch) / pitch + 0.05))
+    groups, end = [[runs[0]]], last(runs[0][1])
+    for s_, e_ in runs[1:]:
+        a, b = first(s_), last(e_)
+        if a > end + 1:
+            groups.append([(s_, e_)])
+            end = b
+        else:
+            groups[-1].append((s_, e_))
+            end = max(end, b)
+    return [len(g) == 1 and g[0][1] - g[0][0] + 1 <= 0.34 * pitch for g in groups]
+
+
 def _starts(line):
     out, pos = [], 0
     for w in line.split():
@@ -366,26 +384,40 @@ def _measure_with(image_path, text: str, source_x, ink):
         return None
     measured = [_word_columns(r, pitch, offset) for r in rows]
     joined = [_word_joined(r, pitch, offset) for r in rows]
+    thin = [_word_thin(r, pitch, offset) for r in rows]
     plain = [l for _, l in body]
     left = min(m[0][0] for m in measured)
     right = left + max(len(l) for l in plain) + 4          # anything further right is a scrollbar or minimap
-    joined = [j[:len([w for w in m if w[0] <= right]) or 1] for j, m in zip(joined, measured)]
+    cut_to = [len([w for w in m if w[0] <= right]) or 1 for m in measured]
+    joined = [j[:n] for j, n in zip(joined, cut_to)]
+    thin = [t[:n] for t, n in zip(thin, cut_to)]
     measured = [[w for w in m if w[0] <= right] or m[:1] for m in measured]
-    variants = [(measured, list(range(len(measured))))]
-    # editor line numbers are one extra word per row; a row holding only a line number (a blank source line) is dropped
-    multi = [m for m in measured if len(m) > 1]
-    if multi:
-        ends = [m[0][0] + m[0][1] for m in multi]
-        g_end = max(set(ends), key=ends.count)
-        gutter = (ends.count(g_end) >= 0.7 * len(ends) and
-                  all(m[0][1] <= 6 and m[1][0] > g_end for m in multi))
-        if gutter:
-            keep = [i for i, m in enumerate(measured) if not (len(m) == 1 and m[0][0] + m[0][1] == g_end)]
-            variants.append(([measured[i][1:] if len(measured[i]) > 1 else measured[i] for i in keep], keep))
-    best = max(((_align(m, plain), m, idx) for m, idx in variants), key=lambda v: len(v[0]))
-    pairs, measured, idx = best
-    gutter_used = len(variants) > 1 and measured is variants[1][0]
-    joined = [joined[i][1:] if gutter_used and len(joined[i]) > 1 else joined[i] for i in idx]
+    # An indent guide the filter cut into pieces leaves a hairline stub before the first word of a row. It is not text, and it
+    # makes the row's word count disagree with its line's. A real hairline glyph (the '|' of an F# match) is text, so both
+    # readings are tried and the one that pairs more rows with their lines is kept; a tie keeps the rows as drawn.
+    stripped, joined_s, thin_s = [list(m) for m in measured], [list(j) for j in joined], [list(t) for t in thin]
+    for r in range(len(stripped)):
+        while len(stripped[r]) > 1 and thin_s[r][0] and stripped[r][1][0] - stripped[r][0][0] >= 3:
+            del stripped[r][0], joined_s[r][0], thin_s[r][0]
+    variants = []
+    for rows_m, rows_j, rows_t in ((measured, joined, thin), (stripped, joined_s, thin_s)):
+        if variants and rows_m == measured:
+            continue
+        variants.append((rows_m, list(range(len(rows_m))), rows_j, rows_t, False))
+        # editor line numbers are one extra word per row; a row holding only a line number (a blank source line) is dropped
+        multi = [m for m in rows_m if len(m) > 1]
+        if multi:
+            ends = [m[0][0] + m[0][1] for m in multi]
+            g_end = max(set(ends), key=ends.count)
+            gutter = (ends.count(g_end) >= 0.7 * len(ends) and
+                      all(m[0][1] <= 6 and m[1][0] > g_end for m in multi))
+            if gutter:
+                keep = [i for i, m in enumerate(rows_m) if not (len(m) == 1 and m[0][0] + m[0][1] == g_end)]
+                variants.append(([rows_m[i][1:] if len(rows_m[i]) > 1 else rows_m[i] for i in keep], keep, rows_j, rows_t, True))
+    best = max(((_align(v[0], plain), v) for v in variants), key=lambda x: len(x[0]))
+    pairs, (measured, idx, rows_j, rows_t, gutter_used) = best
+    joined = [rows_j[i][1:] if gutter_used and len(rows_j[i]) > 1 else rows_j[i] for i in idx]
+    thin = [rows_t[i][1:] if gutter_used and len(rows_t[i]) > 1 else rows_t[i] for i in idx]
     if len(pairs) < max(3, min(len(plain), len(measured)) // 3):
         return None
     votes = {}
@@ -401,7 +433,7 @@ def _measure_with(image_path, text: str, source_x, ink):
         if not isinstance(source_x, (int, float)) or not np.isfinite(source_x) or not 0 <= source_x < ink.shape[1]:
             raise ValueError("source_x must be the visible source column-one position inside the image")
         base = -int(round(source_x / pitch - offset))
-    return {"lines": lines, "body": body, "plain": plain, "measured": measured, "pairs": pairs, "base": base, "joined": joined,
+    return {"lines": lines, "body": body, "plain": plain, "measured": measured, "pairs": pairs, "base": base, "joined": joined, "thin": thin,
             "absolute_columns": source_x is not None,
             "bands": [bands[i] for i in idx], "deco": [deco[i] for i in idx], "pitch": pitch, "offset": offset,
             "x0": int(max(0, (min(m[0][0] for m in measured) + offset - 1) * pitch))}
@@ -582,10 +614,24 @@ def _lead_candidates(m, lines):
         if words and agree >= 0.6 * len(words):
             for i in range(len(plain)):
                 mapping.setdefault(i, i)
+    # rows and lines that do not pair one for one (a squiggle left a stray row, a row was skipped) still line up in runs: four or
+    # more consecutive rows whose first two words have the widths of four consecutive lines are those lines
+    if len(mapping) < len(plain):
+        shape_rows = [tuple(w for _, w in row[:2]) for row in measured]
+        shape_lines = [tuple(len(t) for t in line.split()[:2]) for line in plain]
+        for block in _difflib.SequenceMatcher(None, shape_rows, shape_lines, autojunk=False).get_matching_blocks():
+            if block.size >= 4:
+                for k in range(block.size):
+                    mapping.setdefault(block.b + k, block.a + k)
     for li, ri in mapping.items():
         if m["deco"][ri] or not measured[ri] or "\t" in plain[li]:
             continue
-        lead = measured[ri][0][0] + base
+        word = 0
+        stubs = (m.get("thin") or [[]] * (ri + 1))[ri]
+        while word + 1 < len(measured[ri]) and word < len(stubs) and stubs[word] and \
+                measured[ri][word + 1][0] - measured[ri][word][0] >= 3:
+            word += 1                      # a guide stub left of the first word is not where the line starts
+        lead = measured[ri][word][0] + base
         if lead >= 0:
             out[body[li][0]] = int(lead)
     return out
@@ -616,6 +662,7 @@ def leads(image_path, text: str, *, source_x=None):
     if m is None or not m["absolute_columns"]:
         return out
     out = _lead_candidates(m, lines)
+    exact = {m["body"][li][0] for _, li in m["pairs"]}        # rows whose words match the text exactly are not second-guessed
     # A screenshot is read at one offset from the screen: the readers' indent and the pixels' differ by about the same amount on
     # every row. A row far from that offset is a row whose first ink is a mark at the margin (an indent guide, a cursor line)
     # or that was paired with the wrong line, so it is not used.
@@ -624,7 +671,7 @@ def leads(image_path, text: str, *, source_x=None):
         common = max(set(gaps.values()), key=list(gaps.values()).count)
         if sum(1 for g in gaps.values() if abs(g - common) <= 1) >= 0.6 * len(gaps):
             for i, g in gaps.items():
-                if abs(g - common) > 1:
+                if abs(g - common) > 1 and i not in exact:
                     out[i] = None
     return out
 
