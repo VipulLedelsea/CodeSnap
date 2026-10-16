@@ -45,6 +45,8 @@ REASONS = {
 
 
 _DASH_RUN = re.compile(r"[-\u2013\u2014\u2500]{3,}")
+# a comment that opens with one dash and a title is a banner whose box-drawing dashes were read as something shorter
+_LONE_DASH_BANNER = re.compile(r"^\s*(?:#|//|--|;)\s*[\u2013\u2014\u2500]{1,2}\s+\S")
 
 
 _DEFINITION = re.compile(r"^(\s*)(?:export\s+(?:default\s+)?)?(?:async\s+)?(def|class|function)\s+([A-Za-z_$][\w$]*)")
@@ -584,7 +586,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
             s = "confirmed"                  # two independent captures read this line alike (dividers excepted: a wrong glyph repeats)
         if number_in(repeated, i) and s not in ("mismatch", "rows", "cut", "pass"):
             s = "dup"
-        if s in (None, "unchecked", "joined") and _DASH_RUN.search(l):
+        if s in (None, "unchecked", "joined") and (_DASH_RUN.search(l) or _LONE_DASH_BANNER.match(l)):
             # a divider or banner the pixels did not verify: a hyphen, an en or em dash and the box-drawing dash look alike,
             # and the reader's choice and its dash count were wrong on most of these in testing
             s = "glyph"

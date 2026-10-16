@@ -17,3 +17,10 @@ def test_a_banner_read_with_different_dash_characters_is_flagged_for_review():
 def test_a_divider_every_screenshot_reads_the_same_way_is_not_flagged():
     final = "# " + "-" * 40 + "\nvalue = 1"
     assert analysis._glyph_conflicts(final, [final, final]) == []
+
+
+def test_a_comment_that_opens_with_a_single_dash_and_a_title_is_flagged_when_unverified():
+    code = "x = 1\n# — Audit timestamps\ny = 2"
+    out = verify.summarize(code, {}, {})
+    assert any(f["line"] == 2 and f["reason"] == verify.REASONS["glyph"] for f in out["flags"])
+    assert not verify.summarize("x = 1\n# plain comment\ny = 2", {}, {})["flags"]

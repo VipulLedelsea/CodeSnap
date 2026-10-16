@@ -1383,8 +1383,12 @@ def _align_block_comment_stars(final, majority=0.6):
         right = sum(1 for k in stars if len(lines[k]) - len(lines[k].lstrip(" ")) == want)
         if len(stars) >= 4 and right >= majority * len(stars):
             for k in stars:
-                if len(lines[k]) - len(lines[k].lstrip(" ")) != want and "\t" not in lines[k]:
-                    lines[k] = " " * want + lines[k].lstrip(" ")
+                have = len(lines[k]) - len(lines[k].lstrip(" "))
+                if have != want and "\t" not in lines[k]:
+                    # the text after the star stays where it was drawn: the star moves, the gap behind it takes up the difference
+                    rest = lines[k].lstrip(" ")[1:]
+                    gap = len(rest) - len(rest.lstrip(" "))
+                    lines[k] = " " * want + "*" + " " * max(1 if rest.strip() else 0, gap - (want - have)) + rest.lstrip(" ")
                     changed += 1
         i = end + 1
     return "\n".join(lines), changed

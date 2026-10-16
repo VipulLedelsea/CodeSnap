@@ -99,4 +99,6 @@ def test_a_star_line_of_a_block_comment_is_put_back_one_column_right_of_the_open
     text = "/**\n * one\n * two\n * three\n* four\n * five\n */\nx = 1"
     fixed, n = analysis._align_block_comment_stars(text)
     assert fixed.split("\n")[4] == " * four" and n == 1
+    moved, _ = analysis._align_block_comment_stars("/**\n * a\n * b\n * c\n*      d (text drawn in column 7)\n */")
+    assert moved.split("\n")[4] == " *     d (text drawn in column 7)"          # the star moves right, the gap behind it shrinks
     assert analysis._align_block_comment_stars("/*\n* a\n* b\n*/")[1] == 0            # too few lines to say what the layout is
