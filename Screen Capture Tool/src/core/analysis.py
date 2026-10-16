@@ -16,6 +16,7 @@ import hashlib
 import itertools
 import json
 import sys
+import collections
 import re as _re
 import threading
 import os as _os
@@ -2366,6 +2367,20 @@ def _appended_repeats(merged, stitched, appended, run=10):
     return match.size >= max(run, 0.5 * len(new))
 
 
+def _appended_duplicates(merged, stitched, appended, need=8, share=0.6):
+    """Is most of what a stitch appended made of distinctive lines the text already holds exactly once? Two functions with the
+    same body make the stitcher look for its overlap in the wrong one, and the screen it appends then repeats lines that were
+    unique before. Lines that recur all over a file (the same column in every table, a closing bracket) do not count, which
+    keeps a run of new but look-alike lines from being mistaken for a copy."""
+    if appended < 12 or stitched is None:
+        return False
+    key = lambda l: " ".join(l.replace("[CUT OFF]", "").split())
+    once = collections.Counter(key(l) for l in merged if l.strip())
+    new = [key(l) for l in stitched[len(stitched) - appended:] if len(key(l)) >= 12]
+    held = sum(1 for k in new if once.get(k) == 1)
+    return held >= need and held >= share * len(new)
+
+
 def _stitch(parts: list, prefer, notes: dict, rows=None, from_left=None) -> str:
     from core.verify import sideways_merge_ex, sideways_views
     frames, pixel, whole = [], {}, set()
@@ -2448,7 +2463,18 @@ def _stitch(parts: list, prefer, notes: dict, rows=None, from_left=None) -> str:
             if guided is not None and text_new is not None and abs(text_new - guided[1]) > 2:
                 notes.setdefault("pixel_disagreements", []).append((fi, text_new, guided[1]))
             tiny = text_new is not None and len(lines) - text_new <= 4 and guided is not None and guided[1] < len(lines) - 8
-            if (not fixed_format and not tiny and text_new is not None and text_new >= 10
+            # the text appended more than twice what the pixels say is new, and the pixels' seam is verified: two functions with
+            # the same body make the text look for its overlap in the wrong one, and the whole screen goes in a second time
+            heavy = None
+            if not fixed_format and not tiny and text_new is not None and text_new >= 20:
+                heavy = guided or _pixel_guided(merged, lines, pixel[id(lines)][0], pixel[id(lines)][1],
+                                                pixel[id(before)][0]["image"], clipped=3)
+                if heavy is not None and (text_new < 2 * heavy[1] + 4 or not _appended_duplicates(merged, stitched, text_new)):
+                    heavy = None
+            if heavy:
+                notes.setdefault("pixel_stitched", []).append((fi, text_new, heavy[1]))
+                stitched = heavy[0]
+            elif (not fixed_format and not tiny and text_new is not None and text_new >= 10
                     and _appended_repeats(merged, stitched, text_new)):
                 # the text appended a run it already holds; the screenshot's own rows may include ones the previous screen showed
                 # clipped, so the seam may be looser here than where the text found nothing at all

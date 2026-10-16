@@ -42,3 +42,14 @@ def test_the_seam_is_found_only_where_the_repeated_lines_agree_exactly():
     assert analysis._seam(merged, ["SUBTRACT 12 FROM A", "IF Y < 2003", "MOVE 1 TO Z", "END-IF", "2190-NEXT."]) == (5, 0)
     look_alike = ["SUBTRACT 11 FROM A", "IF Y < 2002", "MOVE 1 TO Z", "END-IF", "2180-NEXT."]
     assert analysis._seam(merged, look_alike) is None
+
+
+def test_an_appended_screen_made_of_lines_the_text_held_once_is_a_copy_but_look_alike_new_lines_are_not():
+    body = [f"    value_number_{i} = compute_something(argument_{i})" for i in range(14)]
+    merged = ["def first():"] + body + ["", "def second():"]
+    copy = merged + body                                              # the same body read in again under the second function
+    assert analysis._appended_duplicates(merged, copy, len(body))
+    shared = ["    created_at TIMESTAMP NOT NULL DEFAULT now(),"] * 6        # a column every table has: it recurs, so it proves nothing
+    merged2 = shared + ["CREATE TABLE a ("] + shared
+    new = [f"    column_{i} TEXT NOT NULL," for i in range(14)]
+    assert not analysis._appended_duplicates(merged2, merged2 + new, len(new))
