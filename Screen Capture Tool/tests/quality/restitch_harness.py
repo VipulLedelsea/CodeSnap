@@ -34,7 +34,7 @@ def frames_of(store, artifact):
     return out
 
 
-def restitch(frames):
+def restitch(frames, sessions=None):
     from core.analysis import clean_source, measured_frame, merge_verified, source_mode
     parts = [t for t, _, _ in frames]
     mode = source_mode(parts)
@@ -44,7 +44,8 @@ def restitch(frames):
         checked.update({k: meta[k] for k in ("numbers", "numbers_seen", "numbers_rejected") if k in meta})
         parts[i] = cleaned
         metas.append(checked)
-    code, _, notes, statuses = merge_verified(parts, metas)
+    from core import passes
+    code, _, notes, statuses = passes.stitch(parts, metas, sessions)
     from core.verify import summarize
     flagged = {f["line"] for f in summarize(code, statuses, notes, read_code=code).get("flags") or []}
     notes["flagged_lines"] = flagged
@@ -89,7 +90,7 @@ def main(argv=None):
             if not frames:
                 print(f"{name}: no saved reads")
                 continue
-            code, notes = restitch(frames)
+            code, notes = restitch(frames, [f['session_id'] for f in store.artifact_evidence(arts[stored]['id'])])
             if args.dump:
                 Path(args.dump).mkdir(parents=True, exist_ok=True)
                 (Path(args.dump) / name).write_text(code)
