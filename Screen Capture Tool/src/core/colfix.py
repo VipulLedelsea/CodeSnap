@@ -56,7 +56,11 @@ def _drop_squiggles(rgb, ink, min_w=16, min_h=3, max_h=9):
     first word seems to begin at the margin and the screenshot has no usable character grid. A letter is far narrower; a
     divider drawn in red is straight (one or two pixels tall), which is how the two are told apart."""
     r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
-    red = (r > 110) & (r - g > 45) & (r - b > 45) & ink
+    # the anti-aliased edge of a squiggle is fainter than the ink threshold, so the line looks broken when only ink is
+    # counted; red-dominant pixels a little above the background are counted for finding it, only ink is removed
+    gray = (299 * r + 587 * g + 114 * b) // 1000
+    faint = np.abs(gray - np.median(gray)) > 25
+    red = (r > 90) & (r - g > 35) & (r - b > 35) & (ink | faint)
     if not red.any():
         return ink
     h, w = red.shape
@@ -101,6 +105,16 @@ def _drop_squiggles(rgb, ink, min_w=16, min_h=3, max_h=9):
             centres = [np.where(sub[:, c])[0].mean() for c in np.where(covered)[0]]
             if covered.mean() >= 0.9 and np.std(centres) >= 0.8 and sub.sum(0).max() <= 7:
                 out[y0:y1 + 1, x0:x1 + 1] &= ~red[y0:y1 + 1, x0:x1 + 1]
+        elif bw >= 40 and max_h < bh <= 3 * max_h and bw >= 6 * bh:
+            # an underline that touches red text above it is one component with the text; the squiggle is its bottom few rows,
+            # an unbroken wavy band, while the text above leaves gaps
+            sub = red[y0:y1 + 1, x0:x1 + 1]
+            band = sub[-(max_h - 2):]
+            covered = band.any(0)
+            centres = [np.where(band[:, c])[0].mean() for c in np.where(covered)[0]]
+            if covered.mean() >= 0.9 and np.std(centres) >= 0.7 and band.sum(0).max() <= max_h - 2:
+                lo = y1 - (max_h - 2) + 1
+                out[lo:y1 + 1, x0:x1 + 1] &= ~red[lo:y1 + 1, x0:x1 + 1]
     return out
 
 

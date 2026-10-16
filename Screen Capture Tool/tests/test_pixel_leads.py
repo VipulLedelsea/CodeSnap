@@ -76,3 +76,20 @@ def test_a_picture_found_origin_is_moved_onto_the_click_origin_in_free_form_code
     parts = ["\n".join(lines)] * 3 + ["\n".join(l if i % 2 == 0 else l for i, l in enumerate(lines))]
     out = analysis._align_auto_frames(parts, metas)
     assert metas[3]["spacing"]["lead_px"] == [3, 4, 3, 4] and out[3].split("\n")[0].startswith("   def")
+
+
+def test_an_underline_that_touches_red_text_above_it_is_removed_and_the_text_stays():
+    rgb = np.zeros((60, 240, 3), dtype=int)
+    ink = np.zeros((60, 240), dtype=bool)
+    for x0 in range(10, 200, 10):                                # red letters, six pixels wide with gaps, eleven tall
+        rgb[10:21, x0:x0 + 6] = (230, 90, 90)
+        ink[10:21, x0:x0 + 6] = True
+    for x in range(10, 200):                                      # a wavy underline right under them, touching the letters
+        y = 25 + int(3 * np.sin(x / 2))
+        rgb[y - 1:y + 2, x] = (230, 80, 80)
+        ink[y - 1:y + 2, x] = True
+    rgb[20:22, 10:200] = (230, 80, 80)                            # and the bridge that joins the two into one component
+    ink[20:22, 10:200] = True
+    out = colfix._drop_squiggles(rgb, ink)
+    assert not out[23:32, 10:200].any()                           # the underline is gone
+    assert out[10:19, 12].all() and out[10:19, 52].all()          # the letters are not
