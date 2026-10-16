@@ -67,3 +67,16 @@ The last two lines of the output are what matter:
 If confirmed lines are reliable and the flagged conflicts hold nearly every remaining wrong line, a second pass of risky files is
 worth building into the workflow (a prompt after the first capture, or a rule for files above a size). If the unflagged wrong
 lines are many, the errors are the kind both passes share and a second pass will not find them.
+
+## Starter result (2026-10-15, four files, 1,221 lines)
+
+| | First capture (`batch-test-10-09`) | Second capture (`pass2-modern`) | Combined |
+|---|---|---|---|
+| Wrong lines | 98 (91.97% right) | 29 (97.62%) | 34 (97.22%) |
+| Wrong lines review would not be pointed at | 50 | 7 | 3 |
+
+Of 912 lines both captures read alike, 2 were wrong. The 52 flagged conflicts held 24 of the combined text's wrong lines. The second
+capture was also read by the newer pipeline (scroll-to-top, squiggle removal, pixel indents), so part of its gain over the first is
+not the second pass as such; the combination's gain over the second capture alone is what the comparison adds, and it is small in
+total wrong lines (34 against 29) but real in unflagged ones (3 against 7). Two systematic errors were found: both passes drop the
+title line between two dividers (now flagged by `adjacent_dividers`) and a closing bracket at the end of a file.

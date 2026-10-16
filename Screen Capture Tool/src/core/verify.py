@@ -34,6 +34,8 @@ REASONS = {
     "spacing": "screenshots disagree about this line's spacing; confirm its source margin and compare the saved readings",
     "glyph": "this divider or banner was not verified against the screenshot: check its dash characters (-, \u2013, \u2014, "
              "\u2500) and how many there are",
+    "banner": "two dividers sit one directly after the other: the title line of this banner may be missing; compare it with the "
+              "screenshots",
     "pass": "the two captures of this file read this line differently: compare it with the screenshots",
     "dup": "this definition appears more than once in the file: one copy may be a screenshot stitched in twice; compare it with "
            "the screenshots",
@@ -69,6 +71,15 @@ def repeated_definitions(lines) -> set:
             out.add(number)
         seen.add(key)
     return out
+
+
+_DIVIDER_LINE = re.compile(r"^\s*(?:#|//|--|;|\*|/\*)?\s*[-=\u2013\u2014\u2500]{6,}\s*(?:\*/)?\s*$")
+
+
+def adjacent_dividers(lines) -> set:
+    """1-based numbers of divider lines that directly follow another divider. A banner is divider, title, divider; two dividers
+    in a row mean the title between them was lost (every pass of a capture can drop it, so a second pass does not find it)."""
+    return {i + 1 for i in range(1, len(lines)) if _DIVIDER_LINE.match(lines[i]) and _DIVIDER_LINE.match(lines[i - 1])}
 
 
 def syntax_error(code: str, name: str = ""):
@@ -546,6 +557,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
     pass_conflicts = set(notes.get('pass_conflicts') or [])
     pass_confirmed = set(notes.get('pass_confirmed') or [])
     repeated = repeated_definitions(final_lines)
+    banners = adjacent_dividers(final_lines)
     for i, l in enumerate(final_lines, 1):
         if not l.strip():
             continue
@@ -564,7 +576,9 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
             s = statuses.get(l.rstrip())
             if s is None:
                 s = "edited" if read_lines is not None and _norm(l) not in norm else "unchecked"
-        if i in pass_conflicts and s not in ("cut",):
+        if i in banners and s not in ("cut", "mismatch", "rows"):
+            s = "banner"
+        elif i in pass_conflicts and s not in ("cut",):
             s = "pass"
         elif i in pass_confirmed and s in (None, "unchecked", "joined", "edited") and not _DASH_RUN.search(l):
             s = "confirmed"                  # two independent captures read this line alike (dividers excepted: a wrong glyph repeats)

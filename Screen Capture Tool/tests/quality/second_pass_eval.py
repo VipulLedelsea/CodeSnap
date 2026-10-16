@@ -31,14 +31,16 @@ def wrong_lines(original, text):
     original lines that are missing."""
     o, t = [l.rstrip() for l in original.split("\n")], [l.rstrip() for l in text.split("\n")]
     sm = difflib.SequenceMatcher(None, [l.strip() for l in o], [l.strip() for l in t], autojunk=False)
-    bad, missing = set(), 0
+    bad, missing, wrong_lines.gaps = set(), 0, []
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal":
             bad.update(b for a, b in zip(range(i1, i2), range(j1, j2)) if o[a].strip() and ind(o[a]) != ind(t[b]))
         else:
             bad.update(b for b in range(j1, j2) if t[b].strip())
             have, want = sum(1 for l in t[j1:j2] if l.strip()), sum(1 for l in o[i1:i2] if l.strip())
-            missing += max(0, want - have)
+            if want > have:
+                missing += want - have
+                wrong_lines.gaps.append((j1, want - have))       # where in the text lines are missing, and how many
     return len(bad) + missing, bad
 
 
@@ -59,7 +61,18 @@ def stitched(store, artifact):
         metas.append(checked)
     sessions = [f["session_id"] for f in store.artifact_evidence(artifact["id"])]
     code, _, notes, statuses = passes.stitch(parts, metas, sessions)
-    return code, statuses, len(frames)
+    return code, statuses, len(frames), notes
+
+
+def silent(truth, text, statuses, notes, name):
+    """Wrong lines that review would not be pointed at: (count wrong, count wrong and not flagged). Missing lines cannot be
+    flagged, so they count as silent."""
+    from core import verify
+    flagged = {f["line"] for f in verify.summarize(text, statuses, notes, read_code=text, name=name)["flags"]}
+    count, bad = wrong_lines(truth, text)
+    gaps = wrong_lines.gaps
+    covered = sum(n for at, n in gaps if any(abs(f - 1 - at) <= 3 for f in flagged))     # a flag within three lines points at the gap
+    return count, count - sum(1 for b in bad if b + 1 in flagged) - covered
 
 
 def main(argv=None):
@@ -71,7 +84,10 @@ def main(argv=None):
     ap.add_argument("--save")
     args = ap.parse_args(argv)
     from core import analysis  # noqa: F401  (import order: core.analysis before core.model)
-    from core import passes
+    import inspect
+    from core import passes, verify
+    # summarize returns at most 50 flags; the scorer needs every one
+    exec(inspect.getsource(verify.summarize).replace("flags[:50]", "flags"), verify.__dict__)
     from core.model import ProgramStore
     originals = {key(p.name): p for p in Path(args.originals).iterdir() if p.is_file()}
     wanted = [w.strip().lower() for w in args.only.split(",")] if args.only else []
@@ -87,25 +103,35 @@ def main(argv=None):
                 print(f"{k}: a program has no saved reads for this file")
                 continue
             truth = originals[k].read_text()
-            text, info = passes.combine(first[0], second[0], first[1], second[1])
+            better, worse = sorted((first, second), key=lambda r: passes._verified_share(r[0], r[1]), reverse=True)
+            text, info = passes.combine(better[0], worse[0], better[1], worse[1])    # the same ordering core.passes.stitch uses
             ea, _ = wrong_lines(truth, first[0])
             eb, _ = wrong_lines(truth, second[0])
             ec, bad = wrong_lines(truth, text)
+            merged_status = dict(worse[1]); merged_status.update(better[1])
+            notes = dict(better[3]); notes["pass_confirmed"] = info["confirmed"]; notes["pass_conflicts"] = info["conflicts"]
+            name = a[k]["name"]
+            _, sa = silent(truth, first[0], first[1], first[3], name)
+            _, sb = silent(truth, second[0], second[1], second[3], name)
+            _, sc = silent(truth, text, merged_status, notes, name)
             conf_wrong = sum(1 for n in info["confirmed"] if n - 1 in bad)
             flagged_wrong = sum(1 for n in info["conflicts"] if n - 1 in bad)
             results[k] = {"first": ea, "second": eb, "combined": ec, "confirmed": len(info["confirmed"]),
                           "confirmed_wrong": conf_wrong, "conflicts": len(info["conflicts"]),
                           "wrong_in_conflicts": flagged_wrong, "wrong_unflagged": len(bad) - flagged_wrong,
-                          "frames": [first[2], second[2]], "lines": len(truth.split("\n"))}
+                          "frames": [first[2], second[2]], "lines": len(truth.split("\n")),
+                          "silent_first": sa, "silent_second": sb, "silent_combined": sc}
             r = results[k]
             print(f"{k:24} lines {r['lines']:5}  wrong: first {ea:4} second {eb:4} combined {ec:4}   confirmed {r['confirmed']:5} "
-                  f"(wrong {conf_wrong})  conflicts {r['conflicts']:4} (hold {flagged_wrong} wrong)  unflagged wrong {r['wrong_unflagged']}",
+                  f"(wrong {conf_wrong})  conflicts {r['conflicts']:4} (hold {flagged_wrong} wrong)  silent wrong: first {sa} second {sb} combined {sc}",
                   flush=True)
     if results:
         s = lambda f: sum(r[f] for r in results.values())
         lines = s("lines")
         print(f"\nTOTAL of {lines} lines: wrong first {s('first')} ({1 - s('first') / lines:.2%} right), second {s('second')} "
               f"({1 - s('second') / lines:.2%}), combined {s('combined')} ({1 - s('combined') / lines:.2%})")
+        print(f"SILENT wrong lines (review would not be pointed at them): first {s('silent_first')}, second {s('silent_second')}, "
+              f"combined {s('silent_combined')}")
         print(f"confirmed lines {s('confirmed')}, wrong among them {s('confirmed_wrong')}; flagged conflicts {s('conflicts')}, "
               f"holding {s('wrong_in_conflicts')} of the combined text's wrong lines; wrong and unflagged {s('wrong_unflagged')}")
     if args.save:

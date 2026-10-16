@@ -37,6 +37,17 @@ def _repeats_inside(block, lines, at, min_len=3):
     return False
 
 
+def _displaced(block, other, near):
+    """Are the lines of `block` (a stretch only one pass has) found elsewhere in the other pass, so that the stretch is a copy
+    stitched in at the wrong place rather than text the other pass skipped? `near` is the stretch of the other pass the block
+    would sit beside, which does not count: the lines have to be somewhere else."""
+    keys = [_key(l) for l in block if len(_key(l)) >= 6]
+    if len(keys) < 3:
+        return False
+    elsewhere = {_key(l) for i, l in enumerate(other) if not (near[0] <= i < near[1])}
+    return sum(1 for k in keys if k in elsewhere) >= 0.8 * len(keys)
+
+
 def combine(first, second, first_status=None, second_status=None):
     """Merge two readings (text) of one file. Returns (text, info) with info = {"confirmed": [1-based line numbers of the
     result both passes read the same], "conflicts": [1-based line numbers where they differ], "added": number of lines
@@ -76,14 +87,14 @@ def combine(first, second, first_status=None, second_status=None):
                     put(line, "conflict" if line.strip() else None)
         elif tag == "delete":                                  # only the first pass has these lines
             block = a[i1:i2]
-            if _repeats_inside(block, a, i1):
+            if _repeats_inside(block, a, i1) or _displaced(block, b, (max(0, j1 - 1), j1 + 1)):
                 dropped += len(block)
                 continue
             for line in block:
                 put(line, "conflict" if line.strip() and i1 and i2 < len(a) else None)
         else:                                                   # only the second pass has these lines
             block = b[j1:j2]
-            if _repeats_inside(block, b, j1):
+            if _repeats_inside(block, b, j1) or _displaced(block, a, (max(0, i1 - 1), i1 + 1)):
                 dropped += len(block)
                 continue
             added += len(block)

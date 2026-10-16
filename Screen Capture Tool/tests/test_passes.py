@@ -59,3 +59,10 @@ def test_stitch_with_two_sessions_combines_and_reports(monkeypatch):
     out = passes.stitch(parts, [{} for _ in parts], [1] * len(first) + [2] * len(second))
     code, notes = out[0], out[2]
     assert set(full[-10:]) <= set(code.split("\n")) and "pass_conflicts" in notes and "pass_confirmed" in notes
+
+
+def test_a_divider_directly_after_a_divider_means_a_banner_title_is_missing():
+    lines = ["x = 1", "# " + "-" * 40, "# " + "-" * 40, "y = 2", "# " + "-" * 40, "# Title", "# " + "-" * 40]
+    assert verify.adjacent_dividers(lines) == {3}
+    out = verify.summarize("\n".join(lines), {}, {})
+    assert any(f["reason"] == verify.REASONS["banner"] and f["line"] == 3 for f in out["flags"])
