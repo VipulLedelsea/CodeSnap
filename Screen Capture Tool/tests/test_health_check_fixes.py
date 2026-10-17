@@ -36,3 +36,10 @@ def test_a_different_routine_above_the_overlap_still_disagrees():
     merged = [f"alpha_{i}()" for i in range(8)] + ["", "tail_a()", "tail_b()", "tail_c()"]
     b = [f"beta_{i}()" for i in range(8)] + ["tail_a()", "tail_b()", "tail_c()"]
     assert not _agrees_above(merged, 9, b, 8)
+
+
+def test_banners_with_different_dashes_overlap_as_one_line():
+    from core.analysis import _sim
+    assert _sim("# — Time limits ———————————————————", "# --- Time limits ------------------------") >= 0.9
+    assert _sim("# — Time limits ———————————", "# — Result backend ———————————") < 0.7
+    assert _sim("x = a --- b", "y = c --- d") < 0.9

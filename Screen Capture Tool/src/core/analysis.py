@@ -740,6 +740,10 @@ _SEQNO = _re.compile(r"^\s*(\d{6})")
 _SOURCE_LABEL = _re.compile(r"(?:\d{2,}-[\w-]+\.|[A-Za-z_][\w]*:)")
 
 
+_DASH_RUN_ANY = _re.compile(r"[-\u2013\u2014\u2500-\u257f=]+")
+_DASH_RUN = _re.compile(r"[-\u2013\u2014\u2500]{3,}")
+
+
 def _sim(x: str, y: str) -> float:
     # two COBOL lines with different sequence numbers are different lines, however alike the code
     mx, my = _SEQNO.match(x), _SEQNO.match(y)
@@ -761,6 +765,10 @@ def _sim(x: str, y: str) -> float:
     sx, sy = _re.search(r'\bFROM\s+([\w."\[\]]+)', x, _re.I), _re.search(r'\bFROM\s+([\w."\[\]]+)', y, _re.I)
     if sx and sy and sx.group(1).upper() != sy.group(1).upper():
         return 0.0
+    # a divider or banner is read with a different number or kind of dashes on each screenshot ('# -- Core ----' for
+    # '# ── Core ──────'): the run of dashes is one mark, not as many characters as it is long
+    if _DASH_RUN.search(x) or _DASH_RUN.search(y):
+        x, y = _DASH_RUN_ANY.sub("-", x), _DASH_RUN_ANY.sub("-", y)
     return _difflib.SequenceMatcher(None, x, y).ratio()
 
 
@@ -1337,7 +1345,6 @@ def _collapse_doubled_lines(final, parts, min_len=12):
 
 
 _DASH_CHARS = "-\u2013\u2014\u2500"
-_DASH_RUN = _re.compile(r"[-\u2013\u2014\u2500]{3,}")
 
 
 def _dash_signature(line):
