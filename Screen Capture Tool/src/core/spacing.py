@@ -174,6 +174,17 @@ def _corroborated(pixel,model):
     return abs(pixel[0]-common)<=1 or model.count(common)<2
 
 
+def _squeeze_dashes(text):
+    import re
+    return re.sub(r'[-\u2500-\u257f\u2013\u2014=]+','-',text)
+
+
+def _same_line_shape(a,b):
+    """Do two reads of one row look like the same line? Separator comments are read with a different number or kind of dashes
+    on each screenshot ('# -- Core ----' against '# ── Core ──────'), so dash runs count as one mark before comparing."""
+    return difflib.SequenceMatcher(None,_squeeze_dashes(a.strip()),_squeeze_dashes(b.strip())).ratio()>=0.7
+
+
 def reconcile(code,parts,metas):
     """Prefer positioned measured columns; retain unresolved disagreements."""
     from collections import defaultdict
@@ -207,17 +218,18 @@ def reconcile(code,parts,metas):
     # leading columns read from the pixels place a line even when its words were misread on some screenshots
     from core.verify import _line_map, _norm
     leadvotes=defaultdict(set); pixel_all=defaultdict(list); model_all=defaultdict(list)
+    squeezed_code=_squeeze_dashes(code)
     for part,meta in zip(parts,metas):
         evidence=(meta or {}).get('spacing') or {}
         placed=evidence.get('lead_px') or []
         rows=part.split('\n')
         if evidence.get('calibrated') is not True or len(placed)!=len(rows):
             continue
-        for i,j in enumerate(_line_map(part,code,carry_replacements=True)):
+        for i,j in enumerate(_line_map(_squeeze_dashes(part),squeezed_code,carry_replacements=True)):
             if (j is None or placed[j] is None or '[CUT OFF]' in lines[i] or '\t' in lines[i]
                     or not lines[i].strip() or not rows[j].strip()):
                 continue
-            if _norm(lines[i])!=_norm(rows[j]) and difflib.SequenceMatcher(None,lines[i].strip(),rows[j].strip()).ratio()<0.7:
+            if (_norm(lines[i])!=_norm(rows[j]) and _same_line_shape(lines[i],rows[j]) is False):
                 continue                              # a different line: the same row position does not make it the same line
             leadvotes[i].add(placed[j]); seen[i].add(rows[j])
             pixel_all[i].append(placed[j]); model_all[i].append(len(rows[j])-len(rows[j].lstrip()))
