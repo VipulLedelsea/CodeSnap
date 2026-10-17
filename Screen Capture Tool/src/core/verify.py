@@ -49,6 +49,19 @@ _DASH_RUN = re.compile(r"[-\u2013\u2014\u2500]{3,}")
 _LONE_DASH_BANNER = re.compile(r"^\s*(?:#|//|--|;)\s*[\u2013\u2014\u2500]{1,2}\s+\S")
 
 
+_PROSE_DASH = re.compile(r"[\u2013\u2014]|(?<![\w.-])\d[\d,.]*-\d[\d,.]*(?![\w-])")
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _dash_glyph_doubt(line: str) -> bool:
+    """Does the line hold a dash whose kind or count the pixels cannot settle? A divider run, an en or em dash, or a numeric
+    range written with a hyphen that may be an en dash in the file ("2000-2099")."""
+    if _DASH_RUN.search(line):
+        return True
+    text = _ISO_DATE.sub("", line)
+    return bool(_PROSE_DASH.search(text)) and bool(re.search(r"#|//|[\"'`*]", text))
+
+
 _DEFINITION = re.compile(r"^(\s*)(?:export\s+(?:default\s+)?)?(?:async\s+)?(def|class|function)\s+([A-Za-z_$][\w$]*)")
 
 
@@ -589,6 +602,10 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
         if s in (None, "unchecked", "joined") and (_DASH_RUN.search(l) or _LONE_DASH_BANNER.match(l)):
             # a divider or banner the pixels did not verify: a hyphen, an en or em dash and the box-drawing dash look alike,
             # and the reader's choice and its dash count were wrong on most of these in testing
+            s = "glyph"
+        if s in ("verified", "reread", "confirmed") and _dash_glyph_doubt(l):
+            # the pixels fix where a dash sits, not which dash it is: every screenshot can agree on a hyphen where the file has
+            # an en dash, and a divider's dash count is as often wrong
             s = "glyph"
         if s in ("verified", "reread", "confirmed", "joined"):
             counts[s] += 1

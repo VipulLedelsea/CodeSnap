@@ -58,3 +58,15 @@ def test_a_line_the_file_really_repeats_is_not_replaced():
     shown = ["<td>", "print(total_amount)", "print(total_amount)", "</td>"]
     final = "\n".join(shown)
     assert _repair_doubled_lines(final, ["\n".join(shown), "\n".join(shown)]) == (final, [])
+
+
+def test_dash_lines_the_pixels_cannot_settle_are_flagged_even_when_verified():
+    from core.verify import _dash_glyph_doubt, summarize
+    assert _dash_glyph_doubt("# ----------------------------------------------")
+    assert _dash_glyph_doubt('errors.fiscal_year = "Enter a valid fiscal year (2000-2099).";')
+    assert _dash_glyph_doubt(" * 1. Program Selection – aid program")
+    assert not _dash_glyph_doubt('created = "2026-10-01"')
+    assert not _dash_glyph_doubt("total = a - b")
+    code = 'x = 1\ny = "pages 5-9"'
+    out = summarize(code, {"x = 1": "verified", 'y = "pages 5-9"': "verified"})
+    assert [f["line"] for f in out["flags"]] == [2]
