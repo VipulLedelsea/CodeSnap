@@ -19,7 +19,7 @@ def test_header_that_repeats_a_real_code_line_is_still_dropped():
 
 
 def test_separator_comments_with_different_dashes_are_the_same_line():
-    assert _squeeze_dashes("# ── Core ────") == "#-Core-"
+    assert _squeeze_dashes("# ── Core ────") == "# - Core -"
     assert _same_line_shape("# — Rate limiting ——————", "# ── Rate limiting ───────────────────")
     assert not _same_line_shape("# Rate limiting", "def other_function():")
 
