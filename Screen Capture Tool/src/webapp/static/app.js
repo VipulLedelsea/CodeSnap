@@ -702,6 +702,25 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
   });
 });
 
+// The executive summary is its own file; say why when it is not ready instead of opening a bare error page.
+["progSummaryDocx", "progSummaryPdf"].forEach(id => {
+  const el = $(id); if (!el) return;
+  el.addEventListener("click", async (ev) => {
+    const href = el.getAttribute("href") || "";
+    if (!href || href === "#") return;
+    ev.preventDefault();
+    try {
+      const r = await fetch(href);
+      if (!r.ok) {
+        let msg = "The executive summary is not ready yet.";
+        try { msg = (await r.json()).error || msg; } catch (e) {}
+        toast(msg); return;
+      }
+      window.location.assign(href);
+    } catch (e) { toast("Couldn't get the executive summary."); }
+  });
+});
+
 // ── First-run API key onboarding ─────────────────────────────────────────────
 async function checkApiKey() {
   const banner = $("keyBanner"); if (!banner) return;
@@ -1129,6 +1148,9 @@ async function loadProgram(poll) {
   $("progReportDocx").href = `${rb}.docx`;
   $("progReportPdf").href = `${rb}.pdf`;
   $("progReportZip").href = `${rb}.zip`;
+  const sb = `/api/programs/${encodeURIComponent(_program)}/executive-summary`;
+  $("progSummaryDocx").href = `${sb}.docx`;
+  $("progSummaryPdf").href = `${sb}.pdf`;
 }
 let _progPoll = null;
 function scheduleProgramPoll(d) {

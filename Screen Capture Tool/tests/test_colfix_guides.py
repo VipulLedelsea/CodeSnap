@@ -173,3 +173,19 @@ def test_an_indentation_only_disagreement_is_not_decided_by_the_edge_rule():
     final = "\n".join(a + b[1:])
     out, _ = analysis._vote_lines(final, ["\n".join(a), "\n".join(b)], [{}, {}])
     assert '               WHEN "JUNIPER"' in out
+
+
+def test_a_guide_one_row_tall_beside_a_short_block_is_removed_but_a_lone_bar_glyph_is_not():
+    """A guide beside a three-line block is only one row tall. It runs through the gap to the next row; a '|' glyph stops short."""
+    ink = np.zeros((420, 400), dtype=bool)
+    tops = [10 + i * 30 for i in range(12)]                      # twelve text rows, 30 px apart
+    for t in tops:
+        ink[t:t + 18, 150:170] = True
+    ink[tops[4]:tops[4] + 30, 100] = True                        # the guide: one row plus the gap under it
+    ink[tops[8]:tops[8] + 20, 120] = True                        # a bar glyph: as tall as a row's text, no taller
+    out = colfix._drop_guides(ink)
+    assert not out[:, 100].any()
+    assert out[tops[8]:tops[8] + 20, 120].all()
+    rows = colfix._rows(out)
+    assert len(rows) == 12 and all(r[-1][1] == 169 or r[0][0] == 120 for r in rows)
+    assert all(r[0][0] == 150 for i, r in enumerate(rows) if i != 8) and rows[8][0] == (120, 120)   # the guide is gone, the bar stays on its row

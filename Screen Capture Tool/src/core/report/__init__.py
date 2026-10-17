@@ -91,10 +91,22 @@ def package(store, **kw) -> dict:
     pdf = pdf_from_docx(docx) if kw.get("pdf", True) else None
     if pdf:
         files[f"{slug}_assessment_report.pdf"] = pdf
+    from . import summary_doc
+    summary = summary_doc.docx_bytes(store)          # the executive summary is its own file, not part of the report body
+    summary_pdf = None
+    if summary:
+        files[f"{slug}_executive_summary.docx"] = summary
+        summary_pdf = pdf_from_docx(summary) if kw.get("pdf", True) else None
+        if summary_pdf:
+            files[f"{slug}_executive_summary.pdf"] = summary_pdf
     out = store.exports_dir / "report"
     out.mkdir(parents=True, exist_ok=True)
     if not pdf:
         (out / f"{slug}_assessment_report.pdf").unlink(missing_ok=True)
+    if not summary:
+        (out / f"{slug}_executive_summary.docx").unlink(missing_ok=True)
+    if not summary_pdf:
+        (out / f"{slug}_executive_summary.pdf").unlink(missing_ok=True)
     for name, data in files.items():
         robust.write_bytes(out / name, data)
     buf = io.BytesIO()

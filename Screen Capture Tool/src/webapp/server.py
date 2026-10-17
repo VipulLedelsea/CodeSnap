@@ -1188,6 +1188,27 @@ def api_program_report(slug: str, fmt: str, rescan: bool = True, client: str | N
     return Response(body, media_type=mt, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@app.get("/api/programs/{slug}/executive-summary.{fmt}")
+def api_program_executive_summary(slug: str, fmt: str):
+    """The executive summary as its own Word or PDF file, built from the saved summary while it still matches the findings."""
+    from core import report as rep
+    from core.report import summary_doc
+    if fmt not in ("docx", "pdf"):
+        raise HTTPException(status_code=404, detail="Use docx or pdf.")
+    with _open_program(slug) as store:
+        body = summary_doc.docx_bytes(store)
+        if body is None:
+            return JSONResponse({"error": "The executive summary is not ready. It is written in the final stage of the analysis, "
+                                          "and is rewritten whenever the findings change."}, status_code=409)
+    if fmt == "pdf":
+        body = rep.pdf_from_docx(body)
+        if body is None:
+            return JSONResponse({"error": rep.PDF_MISSING}, status_code=501)
+    media = "application/pdf" if fmt == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    return Response(body, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{slug}_executive_summary.{fmt}"'})
+
+
 @app.get("/api/programs/{slug}/report-settings")
 def api_report_settings(slug: str):
     from core.report.settings import BUSINESS_KEYS, FIELDS, get
