@@ -65,6 +65,8 @@ def test_dash_lines_the_pixels_cannot_settle_are_flagged_even_when_verified():
     assert _dash_glyph_doubt("# ----------------------------------------------")
     assert _dash_glyph_doubt('errors.fiscal_year = "Enter a valid fiscal year (2000-2099).";')
     assert _dash_glyph_doubt(" * 1. Program Selection – aid program")
+    assert _dash_glyph_doubt('msg = "range $5,000-$20,000"')
+    assert _dash_glyph_doubt("# Stale ID - clean it up")
     assert not _dash_glyph_doubt('created = "2026-10-01"')
     assert not _dash_glyph_doubt("total = a - b")
     code = 'x = 1\ny = "pages 5-9"'

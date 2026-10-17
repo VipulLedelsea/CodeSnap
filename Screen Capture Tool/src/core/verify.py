@@ -49,7 +49,7 @@ _DASH_RUN = re.compile(r"[-\u2013\u2014\u2500]{3,}")
 _LONE_DASH_BANNER = re.compile(r"^\s*(?:#|//|--|;)\s*[\u2013\u2014\u2500]{1,2}\s+\S")
 
 
-_PROSE_DASH = re.compile(r"[\u2013\u2014]|(?<![\w.-])\d[\d,.]*-\d[\d,.]*(?![\w-])")
+_PROSE_DASH = re.compile(r"[\u2013\u2014]|(?<![\w.-])\$?\d[\d,.]*-\$?\d[\d,.]*(?![\w-])|(?<=\w) - (?=\w)")
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
