@@ -876,7 +876,8 @@ def _strip_md_headers(text: str) -> str:
             h = m.group(1).strip()
             is_file = bool(_re.match(r"^[\w./-]+\.[A-Za-z0-9]{1,5}$", h))
             is_kw = bool(_CODE_KW.match(h))
-            in_code = len(h) > 4 and any(h in c or c in h for c in codeset)
+            # a header that repeats a real code line; a short code line (")", "else:") sitting inside an ordinary comment is not it
+            in_code = len(h) > 4 and any(h in c or (len(c) > 4 and len(c) >= 0.6 * len(h) and c in h) for c in codeset)
             if is_file or is_kw or in_code:
                 continue
         out.append(l)
@@ -1874,7 +1875,19 @@ def _agrees_above(merged, at, b, o, rows=40, need=0.88):
              if merged[at - j].strip() and b[o - j].strip() and "[CUT OFF]" not in merged[at - j] + b[o - j]]
     if len(pairs) < 3:
         return True
-    return sum(_sim(x, y) >= 0.7 for x, y in pairs) >= need * len(pairs)
+    if sum(_sim(x, y) >= 0.7 for x, y in pairs) >= need * len(pairs):
+        return True
+    # A reader sometimes adds or drops a single blank row, which shifts every row above it by one. Compared without the blank
+    # rows the two sides must then agree on the rows nearest the overlap and on nearly all of them, and the blank rows may
+    # differ by one at most: a longer difference is a different routine, not a misread blank.
+    window_old, window_new = merged[max(0, at - n):at], b[max(0, o - n):o]
+    if abs(sum(1 for r in window_old if not r.strip()) - sum(1 for r in window_new if not r.strip())) != 1:
+        return False
+    above_old = [r for r in window_old if r.strip()][::-1]
+    above_new = [r for r in window_new if r.strip()][::-1]
+    aligned = [(x, y) for x, y in zip(above_old, above_new) if "[CUT OFF]" not in x + y]
+    return (len(aligned) >= 5 and all(_sim(x, y) >= 0.7 for x, y in aligned[:3])
+            and sum(_sim(x, y) >= 0.7 for x, y in aligned) >= need * len(aligned))
 
 
 def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8, prefer=frozenset(), notes=None) -> "list | None":
