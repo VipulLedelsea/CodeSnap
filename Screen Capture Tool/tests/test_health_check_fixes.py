@@ -43,3 +43,18 @@ def test_banners_with_different_dashes_overlap_as_one_line():
     assert _sim("# — Time limits ———————————————————", "# --- Time limits ------------------------") >= 0.9
     assert _sim("# — Time limits ———————————", "# — Result backend ———————————") < 0.7
     assert _sim("x = a --- b", "y = c --- d") < 0.9
+
+
+def test_a_row_read_as_a_copy_of_its_neighbour_is_replaced_by_the_line_the_other_screens_show():
+    from core.analysis import _repair_doubled_lines
+    shown = ["<td>", "{app.submitted_at", "? new Date(app.submitted_at)", 'month: "short",', "</td>"]
+    final = "\n".join(["<td>", "{app.submitted_at", "{app.submitted_at", 'month: "short",', "</td>"])
+    fixed, at = _repair_doubled_lines(final, ["\n".join(shown), "\n".join(shown)])
+    assert fixed.split("\n")[2] == "? new Date(app.submitted_at)" and at == [3]
+
+
+def test_a_line_the_file_really_repeats_is_not_replaced():
+    from core.analysis import _repair_doubled_lines
+    shown = ["<td>", "print(total_amount)", "print(total_amount)", "</td>"]
+    final = "\n".join(shown)
+    assert _repair_doubled_lines(final, ["\n".join(shown), "\n".join(shown)]) == (final, [])

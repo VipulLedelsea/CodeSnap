@@ -1344,6 +1344,45 @@ def _collapse_doubled_lines(final, parts, min_len=12):
     return "\n".join(l for i, l in enumerate(lines) if i not in skip), [d + 1 for d in drop]
 
 
+def _repair_doubled_lines(final, parts, min_len=8, min_votes=2):
+    """A screenshot sometimes reads one row as a copy of the row beside it, so the stitched text holds a line twice in a row
+    where the file has two different lines. When at least `min_votes` screenshots show the same single different line in the
+    place of one of the copies, and more of them than show the pair, that copy is replaced by the line they show. The line keeps
+    the column it has relative to the line it sits beside. Returns (text, [1-based line numbers replaced])."""
+    from collections import Counter
+    lines = final.split("\n")
+    keys = [l.strip() for l in lines]
+    rows = [p.split("\n") for p in parts]
+    keyed = [[l.strip() for l in r] for r in rows]
+    indent = lambda l: len(l) - len(l.lstrip(" "))
+    fixed = []
+    for j in range(1, len(lines) - 2):
+        x = keys[j]
+        if x != keys[j + 1] or len(x) < min_len or "[CUT OFF]" in x:
+            continue
+        before, after = keys[j - 1], keys[j + 2]
+        if not before or not after or before == x or after == x:
+            continue
+        twice = sum(1 for r in keyed for i in range(len(r) - 3) if r[i:i + 4] == [before, x, x, after])
+        # (slot, votes): the copy at j + 1 in place of a line between x and after, or the copy at j in place of one before x
+        votes = {1: Counter(), 0: Counter()}
+        for r, kr in zip(rows, keyed):
+            for i in range(len(kr) - 3):
+                if kr[i] == before and kr[i + 1] == x and kr[i + 3] == after and kr[i + 2] not in ("", x):
+                    votes[1][(kr[i + 2], indent(r[i + 2]) - indent(r[i + 1]))] += 1
+                if kr[i] == before and kr[i + 2] == x and kr[i + 3] == after and kr[i + 1] not in ("", x):
+                    votes[0][(kr[i + 1], indent(r[i + 1]) - indent(r[i + 2]))] += 1
+        best = max(((c.most_common(1)[0][1], slot, c.most_common(1)[0][0]) for slot, c in votes.items() if c), default=None)
+        if best is None or best[0] < min_votes or best[0] <= twice:
+            continue
+        _, slot, (text, delta) = best
+        at, beside = (j + 1, j) if slot == 1 else (j, j + 1)
+        lines[at] = " " * max(0, indent(lines[beside]) + delta) + text
+        keys[at] = text
+        fixed.append(at + 1)
+    return "\n".join(lines), fixed
+
+
 _DASH_CHARS = "-\u2013\u2014\u2500"
 
 
@@ -1721,6 +1760,9 @@ def merge_verified(raw_parts: list, metas: list | None = None):
         final, doubled = _collapse_doubled_lines(final, cleaned)
         if doubled:
             notes["doubled_lines_dropped"] = doubled
+        final, repaired = _repair_doubled_lines(final, cleaned)
+        if repaired:
+            notes["doubled_lines_repaired"] = repaired
         final, twins = _drop_garbled_twins(final, statuses)
         if twins:
             notes["garbled_twins_dropped"] = twins
