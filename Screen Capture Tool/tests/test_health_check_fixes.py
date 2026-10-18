@@ -137,3 +137,22 @@ def test_a_closing_pair_stitched_in_twice_is_collapsed_only_on_a_clear_majority(
     # one screen showing it once against one showing it twice is not enough
     kept, none = _collapse_doubled_lines("\n".join(doubled), ["\n".join(shown), "\n".join(doubled)])
     assert none == [] and kept.split("\n") == doubled
+
+
+def test_a_run_of_identical_closers_is_shortened_by_the_majority_reading():
+    from core.analysis import _collapse_doubled_lines
+    shown = ["User.is_active == True,", ")", ")", "target = x"]
+    three = ["User.is_active == True,", ")", ")", ")", "target = x"]
+    fixed, dropped = _collapse_doubled_lines("\n".join(three), ["\n".join(shown)] * 3)
+    assert fixed.split("\n") == shown and dropped == [4]
+    kept, none = _collapse_doubled_lines("\n".join(three), ["\n".join(three)] * 3)
+    assert none == [] and kept.split("\n") == three
+
+
+def test_a_bare_comment_marker_beside_a_divider_is_flagged():
+    from core.verify import banner_debris, summarize
+    lines = ["x = 1", "# -------------------------------", "# Title", "#", "# -------------------------------", "y = 2"]
+    assert banner_debris(lines) == {4}
+    out = summarize("\n".join(lines), {l: "verified" for l in lines})
+    assert any(f["line"] == 4 and "bare comment marker" in f["reason"] for f in out["flags"])
+    assert banner_debris(["x = 1", "#", "y = 2"]) == set()

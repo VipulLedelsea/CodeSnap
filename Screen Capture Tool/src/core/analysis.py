@@ -1341,21 +1341,32 @@ def _collapse_doubled_lines(final, parts, min_len=12, metas=None):
                     total += 2 if mid and all(mid) else 1
         return total
     drop = set()
-    for size in (1, 2):
-        for j in range(1, len(lines) - 2 * size):
-            blk = keys[j:j + size]
-            if blk != keys[j + size:j + 2 * size] or not all(blk) or any("[CUT OFF]" in k for k in blk) or j in drop:
-                continue
-            if size == 2 and blk[0] == blk[1]:
-                continue
-            before, after = keys[j - 1], keys[j + 2 * size]
-            if not before or before == blk[-1] or after == blk[0]:
-                continue
-            twice = count([before, *blk, *blk, after], size, 2)
-            once = count([before, *blk, after], size, 1)
-            solid = once >= 2 * twice + 2
-            if once > twice and (size == 1 and (len(blk[0]) >= min_len or twice == 0 or solid) or size == 2 and solid):
-                drop.update(range(j + size, j + 2 * size))
+    j = 1
+    while j < len(lines) - 1:                 # a run of the same line (two or more): one copy too many?
+        key = keys[j]
+        k = 1
+        while j + k < len(lines) and keys[j + k] == key:
+            k += 1
+        if k >= 2 and key and "[CUT OFF]" not in key and j + k < len(lines):
+            before, after = keys[j - 1], keys[j + k]
+            if before and before != key:
+                twice = count([before, *([key] * k), after], 1, k)
+                once = count([before, *([key] * (k - 1)), after], 1, k - 1)
+                solid = once >= 2 * twice + 2
+                if once > twice and (len(key) >= min_len or twice == 0 or solid):
+                    drop.add(j + k - 1)
+        j += k
+    for j in range(1, len(lines) - 4):         # a pair of lines stitched in twice
+        blk = keys[j:j + 2]
+        if blk != keys[j + 2:j + 4] or not all(blk) or blk[0] == blk[1] or any("[CUT OFF]" in k for k in blk):
+            continue
+        before, after = keys[j - 1], keys[j + 4]
+        if not before or before == blk[-1] or after == blk[0]:
+            continue
+        twice = count([before, *blk, *blk, after], 2, 2)
+        once = count([before, *blk, after], 2, 1)
+        if once >= 2 * twice + 2:
+            drop.update((j + 2, j + 3))
     if not drop:
         return final, []
     return "\n".join(l for i, l in enumerate(lines) if i not in drop), sorted(d + 1 for d in drop)

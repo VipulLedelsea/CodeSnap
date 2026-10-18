@@ -38,6 +38,8 @@ REASONS = {
              "\u2500) and how many there are",
     "banner": "two dividers sit one directly after the other: the title line of this banner may be missing; compare it with the "
               "screenshots",
+    "debris": "a bare comment marker sits next to a divider: part of this banner may be misread or stitched in twice; compare it "
+              "with the screenshots",
     "pass": "the two captures of this file read this line differently: compare it with the screenshots",
     "dup": "this definition appears more than once in the file: one copy may be a screenshot stitched in twice; compare it with "
            "the screenshots",
@@ -97,6 +99,16 @@ def adjacent_dividers(lines) -> set:
     """1-based numbers of divider lines that directly follow another divider. A banner is divider, title, divider; two dividers
     in a row mean the title between them was lost (every pass of a capture can drop it, so a second pass does not find it)."""
     return {i + 1 for i in range(1, len(lines)) if _DIVIDER_LINE.match(lines[i]) and _DIVIDER_LINE.match(lines[i - 1])}
+
+
+_BARE_MARKER = re.compile(r"^\s*(?:#|//|--|;)\s*$")
+
+
+def banner_debris(lines) -> set:
+    """1-based numbers of lines that hold only a comment marker and sit directly beside a divider: the leftover of a banner whose
+    dash row or title was misread, which the pixels cannot judge."""
+    return {i + 1 for i, l in enumerate(lines) if _BARE_MARKER.match(l)
+            and ((i and _DIVIDER_LINE.match(lines[i - 1])) or (i + 1 < len(lines) and _DIVIDER_LINE.match(lines[i + 1])))}
 
 
 def syntax_error(code: str, name: str = ""):
@@ -597,6 +609,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
     pass_confirmed = set(notes.get('pass_confirmed') or [])
     repeated = repeated_definitions(final_lines)
     banners = adjacent_dividers(final_lines)
+    debris = banner_debris(final_lines)
     for i, l in enumerate(final_lines, 1):
         if not l.strip():
             continue
@@ -617,6 +630,8 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
                 s = "edited" if read_lines is not None and _norm(l) not in norm else "unchecked"
         if i in banners and s not in ("cut", "mismatch", "rows"):
             s = "banner"
+        elif i in debris and s not in ("cut", "mismatch", "rows"):
+            s = "debris"
         elif i in pass_conflicts and s not in ("cut",):
             s = "pass"
         elif i in pass_confirmed and s in (None, "unchecked", "joined", "edited") and not _DASH_RUN.search(l):
@@ -662,7 +677,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
     if len(flags) > MAX_FLAGS:
         # the list is capped, so what is dropped must be the least serious: a dash glyph the pixels cannot settle, then a repeat
         # of a definition, before a line whose characters or row count did not match the screenshot
-        weak = {REASONS["glyph"]: 2, REASONS["banner"]: 1}
+        weak = {REASONS["glyph"]: 2, REASONS["banner"]: 1, REASONS["debris"]: 1}
         flags = sorted(sorted(flags, key=lambda f: (weak.get(f["reason"], 0), f["line"]))[:MAX_FLAGS], key=lambda f: f["line"])
     total = sum(counts.values())
     gaps = notes.get("gaps") or []
