@@ -54,3 +54,13 @@ def test_the_spec_bundles_python_docx_as_real_folders():
     spec = (ROOT / "packaging" / "CodeSnap.spec").read_text()
     assert "collect_data_files('docx', include_py_files=True)" in spec and "_docx_datas" in spec.split("datas=[")[1]
     assert (ROOT / "packaging" / "smoke_test.command").exists()
+
+
+def test_a_fresh_install_creates_its_data_folder_on_first_use(monkeypatch, tmp_path):
+    """~/CodeSnap does not exist on a clean Mac; the first thing that needs captures/ must create the whole path."""
+    from fastapi.testclient import TestClient
+    from webapp import server
+    monkeypatch.setenv("CODESNAP_HOME", str(tmp_path / "new" / "CodeSnap"))
+    reply = TestClient(server.app).post("/api/session/kind?kind=code")
+    assert reply.status_code == 200
+    assert (tmp_path / "new" / "CodeSnap" / "captures" / ".capture_kind").read_text() == "code"

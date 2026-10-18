@@ -1599,7 +1599,7 @@ def api_session_kind(kind: str = "code"):
     if kind not in ("code", "screen", "auto"):
         return JSONResponse({"error": "kind must be auto, code or screen"}, status_code=400)
     d = captures_dir()
-    d.mkdir(exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True)
     (d / ".capture_kind").write_text(kind)
     return {"ok": True, "kind": kind, "running": _session.running()}
 

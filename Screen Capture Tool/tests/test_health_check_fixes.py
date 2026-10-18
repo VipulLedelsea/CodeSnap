@@ -156,3 +156,26 @@ def test_a_bare_comment_marker_beside_a_divider_is_flagged():
     out = summarize("\n".join(lines), {l: "verified" for l in lines})
     assert any(f["line"] == 4 and "bare comment marker" in f["reason"] for f in out["flags"])
     assert banner_debris(["x = 1", "#", "y = 2"]) == set()
+
+
+def test_rows_the_calibration_misplaces_by_a_column_are_not_character_mismatches(monkeypatch):
+    """When the editor shifts sideways the calibrated column one is a column off for the whole screenshot; the rows that only the
+    rows' own geometry verifies are returned (and are not called measured), but a row running to the right edge never is."""
+    from core import analysis, colfix
+    shown = [f"line_{i} = {i}" for i in range(10)] + ["x" * 130]
+    calls = []
+
+    def fake_check(path, text, source_x=None):
+        calls.append(source_x)
+        if source_x is None:
+            return {"grid": True, "status": ["verified"] * len(shown), "pitch": 10.0, "x0": 0}
+        return {"grid": True, "status": ["mismatch"] * len(shown), "rows": {}, "pitch": 10.0, "x0": 0}
+    monkeypatch.setattr(colfix, "check", fake_check)
+    from PIL import Image
+    import tempfile, os
+    path = os.path.join(tempfile.mkdtemp(), "f.png")
+    Image.new("RGB", (1300, 400)).save(path)
+    chk = fake_check(path, "\n".join(shown), source_x=29.0)
+    rows = analysis._shifted_origin_rows(path, "\n".join(shown), chk, 29.0)
+    assert rows == set(range(10))               # the 130-character row reaches the edge of the 1300 px picture
+    assert analysis._shifted_origin_rows(path, "\n".join(shown), chk, None) == set()

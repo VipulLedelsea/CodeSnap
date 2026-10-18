@@ -554,8 +554,9 @@ def measured_frame(client,path,raw,*,calibration=None):
         verified=verify_screenshot(client,image,fixed,source_x=origin)
         result=verified.pop('text')
         protected=literal_continuations(result)
+        shifted=set(verified.pop('relative_only',[]))
         evidence['line_status']=[('literal' if i in protected or '\t' in line else
-            'measured' if evidence['calibrated'] and verified['status'][i] in ('verified','reread') else
+            'measured' if evidence['calibrated'] and i not in shifted and verified['status'][i] in ('verified','reread') else
             'relative' if verified['status'][i] in ('verified','reread') else 'unmeasured')
             if line.strip() else '' for i,line in enumerate(result.split('\n'))]
         if evidence.get('calibrated') and origin is not None:
@@ -607,6 +608,38 @@ def detect_kind(client, path: Path) -> str:
         return "code"
 
 
+def _shifted_origin_rows(path, raw, chk, source_x, min_gain=5) -> set:
+    """Rows to count as verified when the calibrated column one does not fit this screenshot. The editor can shift sideways between
+    screenshots (a gutter that grows a digit, a horizontal scroll); every row then sits a column from where the calibration puts
+    it, and each correct line reads as a character mismatch (and would be sent for a paid re-read). When the rows' own geometry
+    explains far more lines than the calibration does, the lines that only the geometry verifies are returned. They are verified
+    against the screenshot but not against column one: the caller must not call their spacing measured."""
+    from core import colfix
+    if source_x is None or not chk.get("grid") or _os.environ.get("CODESNAP_ORIGIN_CHECK", "1") == "0":
+        return set()
+    try:
+        relative = colfix.check(path, raw)
+    except Exception:  # noqa: BLE001 - an extra check; the calibrated verdict stands
+        return set()
+    if not relative.get("grid"):
+        return set()
+    good = lambda r: sum(1 for st in r["status"] if st == "verified")
+    if good(relative) - good(chk) < min_gain or good(chk) > 0.5 * good(relative):
+        return set()
+    # a line that runs to the right edge of the picture may be clipped there and read as far as it goes; only the calibrated check
+    # (which saw its length disagree with the rows) can be trusted about it
+    lines = raw.split("\n")
+    try:
+        from PIL import Image
+        edge = Image.open(path).size[0] - 3 * float(relative.get("pitch") or 10.0) - float(relative.get("x0") or 0)
+    except Exception:  # noqa: BLE001
+        edge = None
+    pitch = float(relative.get("pitch") or 10.0)
+    reaches = lambda i: edge is not None and len(lines[i].rstrip()) * pitch >= edge
+    return {i for i, (a, b) in enumerate(zip(chk["status"], relative["status"]))
+            if a == "mismatch" and b == "verified" and not reaches(i)}
+
+
 def verify_screenshot(client, path: Path, raw: str, *, source_x=None) -> dict:
     """Check every transcribed line against the pixels (core.colfix.check). Lines whose pixels show a different
     character count are fixed for free when only the spacing was wrong; otherwise only those lines are cropped, zoomed
@@ -621,6 +654,10 @@ def verify_screenshot(client, path: Path, raw: str, *, source_x=None) -> dict:
         return {"text": raw, "grid": False, "status": ["" if not l.strip() else "unchecked" for l in lines],
                 "reread": 0, "absolute_columns": False}
     status, rows = chk["status"], chk["rows"]
+    relative_only = _shifted_origin_rows(path, raw, chk, source_x)
+    for i in relative_only:
+        status[i] = "verified"
+        rows.pop(i, None)
     from core.text import literal_continuations
     protected = literal_continuations(raw)
     todo = {}
@@ -660,7 +697,7 @@ def verify_screenshot(client, path: Path, raw: str, *, source_x=None) -> dict:
                 elif isinstance(g, dict) and g.get("overlay") and text.split() == lines[i].split():
                     status[i] = "confirmed"      # a pointer over the text explains the pixels; both reads agree
     return {"text": "\n".join(lines), "grid": chk["grid"], "status": status, "reread": n_re,
-            "absolute_columns": chk.get("absolute_columns", False)}
+            "absolute_columns": chk.get("absolute_columns", False), "relative_only": sorted(relative_only)}
 
 
 def extract_legacy(client, path: Path) -> str:
