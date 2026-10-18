@@ -126,3 +126,14 @@ def test_the_capped_flag_list_drops_dash_doubts_before_real_mismatches():
     assert len(out["flags"]) == MAX_FLAGS
     assert any(f["text"] == "broken = 1" for f in out["flags"])
     assert out["flagged"] == MAX_FLAGS + 11
+
+
+def test_a_closing_pair_stitched_in_twice_is_collapsed_only_on_a_clear_majority():
+    from core.analysis import _collapse_doubled_lines
+    shown = ["<dd>x</dd>", "</div>", ");", "return (", "<div>"]
+    doubled = ["<dd>x</dd>", "</div>", ");", "</div>", ");", "return (", "<div>"]
+    fixed, dropped = _collapse_doubled_lines("\n".join(doubled), ["\n".join(shown)] * 3)
+    assert fixed.split("\n") == shown and dropped == [4, 5]
+    # one screen showing it once against one showing it twice is not enough
+    kept, none = _collapse_doubled_lines("\n".join(doubled), ["\n".join(shown), "\n".join(doubled)])
+    assert none == [] and kept.split("\n") == doubled

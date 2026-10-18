@@ -1317,10 +1317,11 @@ def _fix_macro_continuations(final):
 
 
 def _collapse_doubled_lines(final, parts, min_len=12, metas=None):
-    """Drop a line that appears twice in a row in the stitched text when the screenshots that show that place disagree about
-    it: one read the line twice and the others show it once. A source file can really repeat a line, so a pair is only
-    collapsed when more screenshots show it once than twice. Screenshots whose rows the pixel check verified count double
-    (a copy it could not match is the likelier artefact). Returns (text, [line numbers dropped])."""
+    """Drop a line (or a pair of lines) that appears twice in a row in the stitched text when the screenshots that show that place
+    disagree about it: one read it twice and the others show it once. A source file can really repeat a line, so it is only
+    collapsed when more screenshots show it once than twice. Screenshots whose rows the pixel check verified count double (a copy
+    it could not match is the likelier artefact). A short line or a pair (closing brackets and tags) needs a clear majority:
+    at least two more than twice the count of the doubled form. Returns (text, [line numbers dropped])."""
     lines = final.split("\n")
     keys = [l.strip() for l in lines]
     rows = [[l.strip() for l in p.split("\n")] for p in parts]
@@ -1330,30 +1331,34 @@ def _collapse_doubled_lines(final, parts, min_len=12, metas=None):
         good.append([s in ("verified", "reread") for s in status] if isinstance(status, list) and len(status) == len(r)
                     else [False] * len(r))
 
-    def count(seq, doubled):
+    def count(seq, body, copies):
         n = len(seq)
         total = 0
         for r, g in zip(rows, good):
             for i in range(len(r) - n + 1):
                 if r[i:i + n] == seq:
-                    mid = g[i + 1:i + 1 + (2 if doubled else 1)]
+                    mid = g[i + 1:i + 1 + body * copies]
                     total += 2 if mid and all(mid) else 1
         return total
-    drop = []
-    for j in range(1, len(lines) - 2):
-        if keys[j] != keys[j + 1] or not keys[j] or "[CUT OFF]" in keys[j]:
-            continue
-        before, after = keys[j - 1], keys[j + 2]
-        if not before or before == keys[j] or after == keys[j]:
-            continue
-        twice, once = count([before, keys[j], keys[j], after], True), count([before, keys[j], after], False)
-        # a short line (a lone closing bracket) can really repeat, so it goes only when no screenshot shows it twice
-        if once > twice and (len(keys[j]) >= min_len or twice == 0 or (len(keys[j]) >= 4 and once >= 2 * twice + 2)):
-            drop.append(j + 1)
+    drop = set()
+    for size in (1, 2):
+        for j in range(1, len(lines) - 2 * size):
+            blk = keys[j:j + size]
+            if blk != keys[j + size:j + 2 * size] or not all(blk) or any("[CUT OFF]" in k for k in blk) or j in drop:
+                continue
+            if size == 2 and blk[0] == blk[1]:
+                continue
+            before, after = keys[j - 1], keys[j + 2 * size]
+            if not before or before == blk[-1] or after == blk[0]:
+                continue
+            twice = count([before, *blk, *blk, after], size, 2)
+            once = count([before, *blk, after], size, 1)
+            solid = once >= 2 * twice + 2
+            if once > twice and (size == 1 and (len(blk[0]) >= min_len or twice == 0 or solid) or size == 2 and solid):
+                drop.update(range(j + size, j + 2 * size))
     if not drop:
         return final, []
-    skip = set(drop)
-    return "\n".join(l for i, l in enumerate(lines) if i not in skip), [d + 1 for d in drop]
+    return "\n".join(l for i, l in enumerate(lines) if i not in drop), sorted(d + 1 for d in drop)
 
 
 def _repair_doubled_lines(final, parts, min_len=5, min_votes=2):
