@@ -72,3 +72,27 @@ def test_dash_lines_the_pixels_cannot_settle_are_flagged_even_when_verified():
     code = 'x = 1\ny = "pages 5-9"'
     out = summarize(code, {"x = 1": "verified", 'y = "pages 5-9"': "verified"})
     assert [f["line"] for f in out["flags"]] == [2]
+
+
+def test_a_skipped_row_is_put_back_when_two_screens_show_it_with_the_same_context():
+    from core.analysis import _restore_skipped_lines
+    shown = ["<StatCard", "  icon={x}", '  label="Total"', "  value={n}", "  sub={s}"]
+    skipped = [r for r in shown if "label" not in r]
+    fixed, at = _restore_skipped_lines("\n".join(["<StatCard"] + skipped[1:]), ["\n".join(shown), "\n".join(shown)])
+    assert fixed.split("\n")[2].strip() == 'label="Total"' and at == [3]
+
+
+def test_a_skipped_row_is_not_put_back_on_one_reading_or_for_a_bare_bracket():
+    from core.analysis import _restore_skipped_lines
+    shown = ["a = 1", "b = 2", "c = 3", "d = 4", "e = 5"]
+    short = ["a = 1", "b = 2", "d = 4", "e = 5"]
+    assert _restore_skipped_lines("\n".join(short), ["\n".join(shown)])[1] == []
+    brackets = ["x = 1", "y = 2", "))}", "z = 3", "w = 4"]
+    assert _restore_skipped_lines("\n".join(["x = 1", "y = 2", "z = 3", "w = 4"]), ["\n".join(brackets)] * 2)[1] == []
+
+
+def test_a_real_nested_closing_tag_is_not_collapsed_or_replaced():
+    from core.analysis import _repair_doubled_lines
+    shown = ["<p>text</p>", "</div>", "</div>", "<p>more</p>"]
+    final = "\n".join(shown)
+    assert _repair_doubled_lines(final, ["\n".join(shown)] * 3) == (final, [])

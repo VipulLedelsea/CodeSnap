@@ -1316,17 +1316,29 @@ def _fix_macro_continuations(final):
     return "\n".join(lines), fixed
 
 
-def _collapse_doubled_lines(final, parts, min_len=12):
+def _collapse_doubled_lines(final, parts, min_len=12, metas=None):
     """Drop a line that appears twice in a row in the stitched text when the screenshots that show that place disagree about
     it: one read the line twice and the others show it once. A source file can really repeat a line, so a pair is only
-    collapsed when more screenshots show it once than twice. Returns (text, [line numbers dropped])."""
+    collapsed when more screenshots show it once than twice. Screenshots whose rows the pixel check verified count double
+    (a copy it could not match is the likelier artefact). Returns (text, [line numbers dropped])."""
     lines = final.split("\n")
     keys = [l.strip() for l in lines]
     rows = [[l.strip() for l in p.split("\n")] for p in parts]
+    good = []
+    for r, meta in zip(rows, metas or [None] * len(rows)):
+        status = (meta or {}).get("status")
+        good.append([s in ("verified", "reread") for s in status] if isinstance(status, list) and len(status) == len(r)
+                    else [False] * len(r))
 
-    def count(seq):
+    def count(seq, doubled):
         n = len(seq)
-        return sum(1 for r in rows for i in range(len(r) - n + 1) if r[i:i + n] == seq)
+        total = 0
+        for r, g in zip(rows, good):
+            for i in range(len(r) - n + 1):
+                if r[i:i + n] == seq:
+                    mid = g[i + 1:i + 1 + (2 if doubled else 1)]
+                    total += 2 if mid and all(mid) else 1
+        return total
     drop = []
     for j in range(1, len(lines) - 2):
         if keys[j] != keys[j + 1] or not keys[j] or "[CUT OFF]" in keys[j]:
@@ -1334,9 +1346,9 @@ def _collapse_doubled_lines(final, parts, min_len=12):
         before, after = keys[j - 1], keys[j + 2]
         if not before or before == keys[j] or after == keys[j]:
             continue
-        twice, once = count([before, keys[j], keys[j], after]), count([before, keys[j], after])
+        twice, once = count([before, keys[j], keys[j], after], True), count([before, keys[j], after], False)
         # a short line (a lone closing bracket) can really repeat, so it goes only when no screenshot shows it twice
-        if once > twice and (len(keys[j]) >= min_len or twice == 0):
+        if once > twice and (len(keys[j]) >= min_len or twice == 0 or (len(keys[j]) >= 4 and once >= 2 * twice + 2)):
             drop.append(j + 1)
     if not drop:
         return final, []
@@ -1344,7 +1356,7 @@ def _collapse_doubled_lines(final, parts, min_len=12):
     return "\n".join(l for i, l in enumerate(lines) if i not in skip), [d + 1 for d in drop]
 
 
-def _repair_doubled_lines(final, parts, min_len=8, min_votes=2):
+def _repair_doubled_lines(final, parts, min_len=5, min_votes=2):
     """A screenshot sometimes reads one row as a copy of the row beside it, so the stitched text holds a line twice in a row
     where the file has two different lines. When at least `min_votes` screenshots show the same single different line in the
     place of one of the copies, and more of them than show the pair, that copy is replaced by the line they show. The line keeps
@@ -1360,6 +1372,8 @@ def _repair_doubled_lines(final, parts, min_len=8, min_votes=2):
         x = keys[j]
         if x != keys[j + 1] or len(x) < min_len or "[CUT OFF]" in x:
             continue
+        if len(_re.sub(r"[\s)}\]>/;,<]", "", x)) < 4:     # a closing tag or bracket repeats for real (nested </div></div>)
+            continue
         before, after = keys[j - 1], keys[j + 2]
         if not before or not after or before == x or after == x:
             continue
@@ -1372,6 +1386,16 @@ def _repair_doubled_lines(final, parts, min_len=8, min_votes=2):
                     votes[1][(kr[i + 2], indent(r[i + 2]) - indent(r[i + 1]))] += 1
                 if kr[i] == before and kr[i + 2] == x and kr[i + 3] == after and kr[i + 1] not in ("", x):
                     votes[0][(kr[i + 1], indent(r[i + 1]) - indent(r[i + 2]))] += 1
+        # the same row read with slightly different clipping at the line's end is one reading, not two; the column it sits at
+        # is the one most readings gave (the pixel spacing pass places it afterwards)
+        merged_votes = {}
+        for slot, c in votes.items():
+            texts = {}
+            for (text, delta), n in c.items():
+                key = next((t for t in texts if _difflib.SequenceMatcher(None, t, text, autojunk=False).ratio() >= 0.9), text)
+                texts.setdefault(key, Counter())[delta] += n
+            merged_votes[slot] = Counter({(t, d.most_common(1)[0][0]): sum(d.values()) for t, d in texts.items()})
+        votes = merged_votes
         best = max(((c.most_common(1)[0][1], slot, c.most_common(1)[0][0]) for slot, c in votes.items() if c), default=None)
         if best is None or best[0] < min_votes or best[0] <= twice:
             continue
@@ -1381,6 +1405,53 @@ def _repair_doubled_lines(final, parts, min_len=8, min_votes=2):
         keys[at] = text
         fixed.append(at + 1)
     return "\n".join(lines), fixed
+
+
+def _restore_skipped_lines(final, parts, min_votes=2):
+    """A screenshot sometimes skips a row, and when that screenshot's copy of the place is the one the stitch kept, the line is
+    gone from the text. Where at least `min_votes` screenshots show the same one line between the same two lines above and the
+    same two lines below as the text has there, and more of them show it than show those lines closed up, the line is put back.
+    Two lines of context on each side keep a repeated structure (closing tags, brackets) from matching the wrong place. The line
+    takes the column it has relative to the line above it. Returns (text, [1-based line numbers inserted])."""
+    from collections import Counter
+    lines = final.split("\n")
+    keys = [l.strip() for l in lines]
+    rows = [p.split("\n") for p in parts]
+    keyed = [[l.strip() for l in r] for r in rows]
+    indent = lambda l: len(l) - len(l.lstrip(" "))
+    out, added = [], []
+    for j, line in enumerate(lines):
+        out.append(line)
+        if j < 1 or j + 2 >= len(lines):
+            continue
+        ctx = keys[j - 1:j + 3]
+        if not all(c and len(c) >= 3 and "[CUT OFF]" not in c for c in ctx[1:3]) or not ctx[0] or not ctx[3]:
+            continue
+        a0, a, b, b1 = ctx
+        between, together = Counter(), 0
+        for r, kr in zip(rows, keyed):
+            for i in range(len(kr) - 4):
+                if kr[i] == a0 and kr[i + 1] == a and kr[i + 3] == b and kr[i + 4] == b1:
+                    y = kr[i + 2]
+                    if y and y not in (a, b) and "[CUT OFF]" not in y:
+                        between[(y, indent(r[i + 2]) - indent(r[i + 1]))] += 1
+            together += sum(1 for i in range(len(kr) - 3) if kr[i:i + 4] == [a0, a, b, b1])
+        texts = {}
+        for (text, delta), n in between.items():
+            key = next((t for t in texts if _difflib.SequenceMatcher(None, t, text, autojunk=False).ratio() >= 0.9), text)
+            texts.setdefault(key, Counter())[delta] += n
+        if not texts:
+            continue
+        text, deltas = max(texts.items(), key=lambda kv: sum(kv[1].values()))
+        votes = sum(deltas.values())
+        # a lone closing bracket repeats too easily to be put back on two readings, and a reading that holds the next line whole
+        # is that line and its neighbours joined into one row, not a line of its own
+        if len(_re.sub(r"[\s)}\]>/;,]", "", text)) < 2 or b.replace(" ", "") in text.replace(" ", ""):
+            continue
+        if votes >= min_votes and votes > together:
+            out.append(" " * max(0, indent(line) + deltas.most_common(1)[0][0]) + text)
+            added.append(len(out))
+    return "\n".join(out), added
 
 
 _DASH_CHARS = "-\u2013\u2014\u2500"
@@ -1757,12 +1828,17 @@ def merge_verified(raw_parts: list, metas: list | None = None):
         final, voted = _vote_lines(final, cleaned, metas)
         if voted:
             notes["voted_lines"] = voted
-        final, doubled = _collapse_doubled_lines(final, cleaned)
+        final, doubled = _collapse_doubled_lines(final, cleaned, metas=metas)
         if doubled:
             notes["doubled_lines_dropped"] = doubled
         final, repaired = _repair_doubled_lines(final, cleaned)
         if repaired:
             notes["doubled_lines_repaired"] = repaired
+            final, doubled_again = _collapse_doubled_lines(final, cleaned, metas=metas)
+            doubled = list(doubled or []) + doubled_again
+        final, restored = _restore_skipped_lines(final, cleaned)
+        if restored:
+            notes["skipped_lines_restored"] = restored
         final, twins = _drop_garbled_twins(final, statuses)
         if twins:
             notes["garbled_twins_dropped"] = twins
