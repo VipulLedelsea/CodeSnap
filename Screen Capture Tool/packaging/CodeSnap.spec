@@ -5,7 +5,7 @@
 import os
 import sys
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 sys.path.insert(0, os.path.join(SPECPATH, '..', 'src'))   # so the app's own packages can be listed below
 
@@ -13,6 +13,9 @@ block_cipher = None
 
 # Every module of the app: many are imported lazily inside functions, which the build cannot see.
 _own = collect_submodules('core') + collect_submodules('webapp') + ['hotkey_capture', 'agent', 'team', 'tools', 'resume']
+# python-docx finds its templates through 'docx/parts/../templates', which only resolves when docx/parts exists as a real folder,
+# so its files go in as data (not only inside the app's archive).
+_docx_datas = collect_data_files('docx', include_py_files=True)
 # The syntax parsers ship native libraries and data that only collect_all picks up.
 _parsers_datas, _parsers_bins, _parsers_hidden = [], [], []
 for _pkg in ('tree_sitter', 'tree_sitter_cpp', 'tree_sitter_c_sharp', 'tree_sitter_java'):
@@ -29,7 +32,7 @@ a = Analysis(
         ('../src/webapp/static', 'webapp/static'),                          # the UI
         ('../src/core/security/eol_data.json', 'core/security'),           # end-of-life dates (security and technology views)
         ('../src/core/report/assets', 'core/report/assets'),               # the Word report template
-    ] + _parsers_datas,
+    ] + _parsers_datas + _docx_datas,
     hiddenimports=[
         # uvicorn loads these dynamically — PyInstaller can't see them without help
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',

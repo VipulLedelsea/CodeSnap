@@ -47,3 +47,10 @@ def test_the_spec_bundles_every_data_file_the_code_reads():
                if p.name not in spec and p.parent.name not in spec]
     assert not missing, f"not bundled by packaging/CodeSnap.spec: {missing}"
     assert "icon='CodeSnap.icns'" in spec and (ROOT / "packaging" / "CodeSnap.icns").exists()
+
+
+def test_the_spec_bundles_python_docx_as_real_folders():
+    """python-docx reads its templates through docx/parts/../templates, which only resolves when docx/parts exists on disk."""
+    spec = (ROOT / "packaging" / "CodeSnap.spec").read_text()
+    assert "collect_data_files('docx', include_py_files=True)" in spec and "_docx_datas" in spec.split("datas=[")[1]
+    assert (ROOT / "packaging" / "smoke_test.command").exists()
