@@ -427,17 +427,29 @@ class App:
         from core import topcheck, status
         if not topcheck.enabled() or self.paused:
             return
+        home = None
         try:
             grab = (lambda: region_grab(self.region)) if self.region else full_grab
-            steps = topcheck.scroll_to_top(grab, topcheck.scroll_wheel_up, changed)
+            # the wheel goes to whatever is under the pointer, so put the pointer over the code first and give it back afterwards
+            target = topcheck.editor_point(self.region)
+            if target is not None:
+                home = topcheck.pointer_position()
+                topcheck.move_pointer(target)
+            steps = topcheck.scroll_to_top(grab, topcheck.scroll_wheel_up, changed, scroll_down=topcheck.scroll_wheel_down)
         except Exception as exc:  # noqa: BLE001 - never block a capture on this
             print(f"(scroll to top skipped: {type(exc).__name__}: {exc})", file=sys.stderr)
             return
+        finally:
+            if home is not None:
+                try:
+                    topcheck.move_pointer(home)
+                except Exception:  # noqa: BLE001
+                    pass
         if steps:
             status.publish("Scrolled to the top of the file so the first line is captured.", "info")
             print(f"[burst] scrolled to the top ({steps} step(s)) before capturing")
         elif steps is None:
-            print("[burst] could not confirm the file is at its first line (the picture kept changing)")
+            print("[burst] could not confirm the file is at its first line (the picture kept changing, or did not move when scrolled)")
 
     def _burst_loop(self, session_dir):
         from core.capture import capture_full_png, capture_region_fixed, next_png_path, content_changed

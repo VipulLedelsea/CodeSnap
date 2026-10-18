@@ -27,3 +27,32 @@ def test_a_file_already_at_the_top_is_left_alone():
 def test_a_picture_that_never_settles_does_not_prove_the_top():
     counter = iter(range(10 ** 6))
     assert topcheck.scroll_to_top(lambda: next(counter), lambda lines: None, lambda a, b: a != b, sleep=lambda s: None) is None
+
+
+def _scrollable(position, responsive=True, length=400):
+    """An editor whose picture is its scroll position; an unresponsive one ignores the wheel (it is under another window)."""
+    state = {"top": position}
+
+    def move(delta):
+        if responsive:
+            state["top"] = min(length, max(0, state["top"] + delta))
+    return (lambda: ("frame", state["top"]), lambda lines: move(-lines), lambda lines: move(lines), lambda a, b: a != b, state)
+
+
+def test_a_wheel_that_reaches_the_editor_proves_the_top_when_the_picture_stays_put():
+    grab, up, down, changed, state = _scrollable(0)
+    assert topcheck.scroll_to_top(grab, up, changed, sleep=lambda s: None, scroll_down=down) == 0
+    assert state["top"] == 0                    # the probe scrolled down a little and came back
+
+
+def test_a_picture_that_never_moves_does_not_prove_the_top_when_the_wheel_is_not_reaching_the_editor():
+    grab, up, down, changed, state = _scrollable(250, responsive=False)
+    assert topcheck.scroll_to_top(grab, up, changed, sleep=lambda s: None, scroll_down=down) is None
+    # without the probe the same picture would have been taken for the top
+    assert topcheck.scroll_to_top(grab, up, changed, sleep=lambda s: None) == 0
+
+
+def test_a_scrolled_file_still_reaches_the_top_with_the_probe_available():
+    grab, up, down, changed, state = _scrollable(250)
+    steps = topcheck.scroll_to_top(grab, up, changed, sleep=lambda s: None, scroll_down=down)
+    assert state["top"] == 0 and steps >= 1
