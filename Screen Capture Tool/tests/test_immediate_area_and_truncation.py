@@ -8,6 +8,7 @@ from webapp import session
 @pytest.fixture
 def manager(tmp_path, monkeypatch):
     monkeypatch.setattr(session, 'PROJECT', tmp_path)
+    monkeypatch.setenv('CODESNAP_HOME', str(tmp_path))
     manager = session.SessionManager()
     manager._proc = SimpleNamespace(pid=os.getpid(), poll=lambda: None)
     return manager

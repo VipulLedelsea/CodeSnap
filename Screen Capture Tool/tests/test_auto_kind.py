@@ -54,5 +54,6 @@ def test_the_app_accepts_detect(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from webapp import server
     monkeypatch.setattr(server, "PROJECT", tmp_path)
+    monkeypatch.setenv('CODESNAP_HOME', str(tmp_path))
     r = TestClient(server.app).post("/api/session/kind?kind=auto").json()
     assert r["ok"] and (tmp_path / "captures" / ".capture_kind").read_text() == "auto"

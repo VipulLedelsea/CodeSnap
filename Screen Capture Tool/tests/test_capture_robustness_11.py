@@ -29,6 +29,7 @@ def test_single_line_disagreement_stays_a_conflict():
 
 def test_area_and_margin_survive_restart(tmp_path, monkeypatch):
     monkeypatch.setattr(S, "PROJECT", tmp_path)
+    monkeypatch.setenv('CODESNAP_HOME', str(tmp_path))
     m = S.SessionManager()
     m.configure("0.1,0.1,0.5,0.5", 1)
     again = S.SessionManager()

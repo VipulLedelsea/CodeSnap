@@ -2,13 +2,34 @@
 # Build on a Mac:  pyinstaller CodeSnap.spec   (see DEPLOY.md)
 # One binary that runs the web app by default and the capture worker with --capture.
 
+import os
+import sys
+
+from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+sys.path.insert(0, os.path.join(SPECPATH, '..', 'src'))   # so the app's own packages can be listed below
+
 block_cipher = None
+
+# Every module of the app: many are imported lazily inside functions, which the build cannot see.
+_own = collect_submodules('core') + collect_submodules('webapp') + ['hotkey_capture', 'agent', 'team', 'tools', 'resume']
+# The syntax parsers ship native libraries and data that only collect_all picks up.
+_parsers_datas, _parsers_bins, _parsers_hidden = [], [], []
+for _pkg in ('tree_sitter', 'tree_sitter_cpp', 'tree_sitter_c_sharp', 'tree_sitter_java'):
+    _d, _b, _h = collect_all(_pkg)
+    _parsers_datas += _d
+    _parsers_bins += _b
+    _parsers_hidden += _h
 
 a = Analysis(
     ['../src/main.py'],
     pathex=['../src'],
-    binaries=[],
-    datas=[('../src/webapp/static', 'webapp/static')],   # ship the UI files
+    binaries=_parsers_bins,
+    datas=[
+        ('../src/webapp/static', 'webapp/static'),                          # the UI
+        ('../src/core/security/eol_data.json', 'core/security'),           # end-of-life dates (security and technology views)
+        ('../src/core/report/assets', 'core/report/assets'),               # the Word report template
+    ] + _parsers_datas,
     hiddenimports=[
         # uvicorn loads these dynamically — PyInstaller can't see them without help
         'uvicorn', 'uvicorn.logging', 'uvicorn.loops', 'uvicorn.loops.auto',
@@ -25,7 +46,7 @@ a = Analysis(
         'core.analysis', 'core.capture', 'core.validate',
         'core.outputs', 'core.notify', 'core.status', 'core.project',
         'webapp.server', 'webapp.session', 'webapp.reports',
-    ],
+    ] + _own + _parsers_hidden,
     hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=[],
     win_no_prefer_redirects=False, win_private_assemblies=False,
     cipher=block_cipher, noarchive=False,
@@ -50,7 +71,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='CodeSnap.app',
-    icon=None,
+    icon='CodeSnap.icns',
     bundle_identifier='com.ledelsea.codesnap',
     info_plist={
         'CFBundleName': 'CodeSnap',

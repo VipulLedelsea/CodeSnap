@@ -73,6 +73,26 @@ Because the app is unsigned, the first open may be blocked by Gatekeeper —
 **right-click the app -> Open** once to allow it (or run
 `xattr -dr com.apple.quarantine "dist/CodeSnap.app"`).
 
+## Where CodeSnap keeps your data
+The app never writes inside itself. Everything it saves is in **~/CodeSnap**:
+- `programs/` — the saved programs (files, screenshots, reports)
+- `captures/` — scratch screenshots while a capture runs
+- `reports/` — exported Word reports
+
+Replacing or deleting `CodeSnap.app` leaves your data alone. Your API key stays in `~/.codesnap/.env`.
+
+## Making an installer
+`packaging/make_release.command` builds the app and produces `CodeSnap-macOS.dmg` (drag the app onto Applications) and a `.zip`.
+With an Apple Developer ID it also signs and notarizes, so colleagues open it with no warning:
+
+```bash
+CODESNAP_SIGN_ID="Developer ID Application: Your Name (TEAMID)" \
+CODESNAP_NOTARY_PROFILE=codesnap-notary \
+packaging/make_release.command
+```
+(`xcrun notarytool store-credentials codesnap-notary` saves the Apple ID credentials once.)
+Without a Developer ID the build is ad-hoc signed: it works, but each person right-clicks the app once and chooses Open.
+
 ## Notes / limits
 - The build must be done **on a Mac**; a `.app` can't be produced from Linux.
 - Unsigned build is fine for personal use. To distribute it, sign and notarize

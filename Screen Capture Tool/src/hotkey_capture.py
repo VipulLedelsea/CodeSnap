@@ -65,8 +65,10 @@ HK_QUIT = "<cmd>+<shift>+9"
 HK_PAUSE = "<cmd>+<shift>+0"   # pause / resume the running capture (Cmd+Shift+3/4/5 are macOS screenshots)
 HK_READY = "<cmd>+<shift>+7"   # owned session: "I scrolled, capture the next part"
 
-CAPTURES_ROOT = Path("captures")  # scratch PNGs (gitignored); deleted on quit
-REPORTS_ROOT = Path("reports")    # persistent .docx reports; survive quit
+from core.paths import captures_dir, reports_dir  # noqa: E402
+
+CAPTURES_ROOT = captures_dir()  # scratch PNGs (gitignored); deleted on quit
+REPORTS_ROOT = reports_dir()    # persistent .docx reports; survive quit
 BG_WORKERS = int(os.environ.get("CODESNAP_WORKERS", "12" if os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes") else "3"))   # how many images to read concurrently
 
 

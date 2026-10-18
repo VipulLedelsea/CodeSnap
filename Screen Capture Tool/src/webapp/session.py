@@ -13,7 +13,15 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent.parent
+from core.paths import captures_dir, data_root  # noqa: E402
 _UNSET = object()
+
+
+def _workdir() -> str:
+    """Where a capture worker runs: the data folder, which always exists and is writable (never the app bundle)."""
+    root = data_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return str(root)
 
 
 def capture_settings(region=None, display=None):
@@ -44,7 +52,7 @@ class SessionManager:
 
     @staticmethod
     def _saved_path():
-        return PROJECT / 'captures' / '.last_area.json'
+        return captures_dir() / '.last_area.json'
 
     def _load_saved(self):
         try:
@@ -85,7 +93,7 @@ class SessionManager:
         self._settings = settings
         self._save()
         if self.running():
-            directory = PROJECT / 'captures'
+            directory = captures_dir()
             directory.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(mode='w', dir=directory, delete=False) as file:
                 json.dump({'pid': self._proc.pid, **self._settings}, file)
@@ -134,7 +142,7 @@ class SessionManager:
             argv += ["--display", str(display)]
         if single:
             argv.append("--single")   # backup: single agent instead of the default team
-        self._proc = subprocess.Popen(argv, cwd=str(PROJECT), env=self._env(program))
+        self._proc = subprocess.Popen(argv, cwd=_workdir(), env=self._env(program))
         self.program, self._mode = program, mode
         self.configure(region, display)
         return True
@@ -145,11 +153,11 @@ class SessionManager:
         with self._lock:
             if not self.running():
                 raise RuntimeError("No capture is running.")
-            return control.write(PROJECT / 'captures', self._proc.pid, **changes)
+            return control.write(captures_dir(), self._proc.pid, **changes)
 
     def paused(self) -> bool:
         from core import control
-        return self.running() and bool(control.read(PROJECT / 'captures', self._proc.pid).get('paused'))
+        return self.running() and bool(control.read(captures_dir(), self._proc.pid).get('paused'))
 
     @staticmethod
     def _env(program):
@@ -210,7 +218,7 @@ class SessionManager:
             return False
         base = [sys.executable, "--capture"] if getattr(sys, "frozen", False) else \
             [sys.executable, str(PROJECT / "src" / "main.py"), "--capture"]
-        self._workers[program] = subprocess.Popen(base + ["--program", program, "--process-pending"], cwd=str(PROJECT),
+        self._workers[program] = subprocess.Popen(base + ["--program", program, "--process-pending"], cwd=_workdir(),
                                                   env=self._env(program))
         return True
 

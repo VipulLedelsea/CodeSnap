@@ -6,7 +6,9 @@ from pathlib import Path
 
 from .store import _owner_alive
 
-CAPTURE_ROOT = Path(__file__).resolve().parents[3] / "captures"
+from core.paths import captures_dir  # noqa: E402
+
+CAPTURE_ROOT = captures_dir()
 
 
 def remove_file(store, artifact_id, force=False):

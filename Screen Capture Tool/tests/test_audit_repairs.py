@@ -117,6 +117,7 @@ def test_live_long_running_claim_is_stolen_after_fifteen_minutes(store, tmp_path
 def test_running_worker_is_not_switched_while_a_capture_is_open(tmp_path, monkeypatch):
     from webapp import session
     monkeypatch.setattr(session, 'PROJECT', tmp_path)
+    monkeypatch.setenv('CODESNAP_HOME', str(tmp_path))
     manager = session.SessionManager()
     manager._proc = SimpleNamespace(pid=os.getpid(), poll=lambda: None)
     manager.program = 'current-program'
@@ -132,6 +133,7 @@ def test_running_worker_is_not_switched_while_a_capture_is_open(tmp_path, monkey
 def test_capture_moves_to_another_program_and_the_old_one_keeps_analysing(tmp_path, monkeypatch):
     from webapp import session
     monkeypatch.setattr(session, 'PROJECT', tmp_path)
+    monkeypatch.setenv('CODESNAP_HOME', str(tmp_path))
     monkeypatch.setattr(session.SessionManager, 'configure', lambda self, *a, **k: {})
     manager = session.SessionManager()
     ended = []

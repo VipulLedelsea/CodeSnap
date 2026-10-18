@@ -32,7 +32,9 @@ from core.project import analyze_project
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent.parent
-REPORTS = PROJECT / "reports"
+from core.paths import captures_dir, reports_dir  # noqa: E402
+
+REPORTS = reports_dir()
 PENDING = REPORTS / "pending"
 STATIC = HERE / "static"
 
@@ -1596,7 +1598,7 @@ def api_screen(delay: float = 0.0, notify: bool = False, display: str | None = N
 def api_session_kind(kind: str = "code"):
     if kind not in ("code", "screen", "auto"):
         return JSONResponse({"error": "kind must be auto, code or screen"}, status_code=400)
-    d = PROJECT / "captures"
+    d = captures_dir()
     d.mkdir(exist_ok=True)
     (d / ".capture_kind").write_text(kind)
     return {"ok": True, "kind": kind, "running": _session.running()}

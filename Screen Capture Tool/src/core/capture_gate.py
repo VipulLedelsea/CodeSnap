@@ -12,7 +12,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-FLAG = Path(__file__).resolve().parents[2] / "captures" / ".capturing"
+from core.paths import captures_dir  # noqa: E402
+
+FLAG = captures_dir() / ".capturing"
 CANCEL = FLAG.with_name(".cancel_analysis")
 STALE = 15.0
 _state = {"stop": None, "flag": None}
