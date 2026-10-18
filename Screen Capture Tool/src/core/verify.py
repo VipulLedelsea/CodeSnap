@@ -296,6 +296,22 @@ def sideways_merge(merged: list, lines: list, force: bool = False):
     return None if got is None else got[:2]
 
 
+def _matched_region(stems: list, cand: list, size: int):
+    """(first, last) row of the text where most of `cand` (a screen's rows) find a line that contains their first eight
+    characters, widened by the screen's height; None when there are too few matches to tell."""
+    rows = []
+    for l in cand:
+        head = _stem(l).strip()[:8]
+        found = [i for i, m in enumerate(stems) if head in m]
+        if found and len(found) <= 3:
+            rows.extend(found)
+    if len(rows) < 5:
+        return None
+    rows.sort()
+    mid = rows[len(rows) // 2]
+    return mid - size - 30, mid + size + 30
+
+
 def sideways_merge_ex(merged: list, lines: list, force: bool = False):
     """If `lines` is a sideways-scrolled view of text already in `merged` (pieces that start part-way into known lines),
     return (merged with the rest of cut lines joined on, number of lines extended, the joined lines); otherwise None. A sideways view is
@@ -308,6 +324,10 @@ def sideways_merge_ex(merged: list, lines: list, force: bool = False):
     blob = "\n".join(stems)
     exact = {x.strip() for x in stems}
     need, allowed = max(3, 0.4 * len(cand)), 0.25 * len(cand)
+    # A screen scrolled sideways shows one region of the text, so the lines it matches sit together. A row whose only match is
+    # far from where most of the screen's rows land is a look-alike elsewhere (the rest of "onChange={(e) =>" read on another
+    # screen), and joining it would graft that line's text onto an unrelated line.
+    near = _matched_region(stems, cand, len(lines))
     for l in cand:
         b0 = _stem(l).strip()
         head = b0[:8]
@@ -321,6 +341,8 @@ def sideways_merge_ex(merged: list, lines: list, force: bool = False):
                 if j is not None:
                     hit = (i, j)
                     break
+        if hit is not None and near is not None and not near[0] <= hit[0] <= near[1]:
+            hit = None
         if hit is None:
             if b0 not in exact and not _has_close(stems, b0):
                 miss += 1

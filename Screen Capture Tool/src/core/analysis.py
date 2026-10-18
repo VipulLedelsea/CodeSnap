@@ -1397,7 +1397,10 @@ def _repair_doubled_lines(final, parts, min_len=5, min_votes=2):
             merged_votes[slot] = Counter({(t, d.most_common(1)[0][0]): sum(d.values()) for t, d in texts.items()})
         votes = merged_votes
         best = max(((c.most_common(1)[0][1], slot, c.most_common(1)[0][0]) for slot, c in votes.items() if c), default=None)
-        if best is None or best[0] < min_votes or best[0] <= twice:
+        # the same assignment twice in a row (an enum member, a field, a keyword argument) is almost never real, so one
+        # screenshot's different line there settles a tie with the screenshot that read the copy
+        assignment = bool(_re.match(r"^[A-Za-z_][\w.]*\s*[:=]\s*\S", x))
+        if best is None or best[0] < (1 if assignment else min_votes) or best[0] < twice + (0 if assignment else 1):
             continue
         _, slot, (text, delta) = best
         at, beside = (j + 1, j) if slot == 1 else (j, j + 1)

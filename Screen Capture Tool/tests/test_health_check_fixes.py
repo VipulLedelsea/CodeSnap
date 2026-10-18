@@ -96,3 +96,21 @@ def test_a_real_nested_closing_tag_is_not_collapsed_or_replaced():
     shown = ["<p>text</p>", "</div>", "</div>", "<p>more</p>"]
     final = "\n".join(shown)
     assert _repair_doubled_lines(final, ["\n".join(shown)] * 3) == (final, [])
+
+
+def test_a_duplicated_assignment_gives_way_to_the_one_line_another_screen_shows():
+    from core.analysis import _repair_doubled_lines
+    right = ['REQ = "r"', 'FUL = "f"', 'PAY = "p"', 'SCH = "s"']
+    final = "\n".join(['REQ = "r"', 'PAY = "p"', 'PAY = "p"', 'SCH = "s"'])
+    fixed, at = _repair_doubled_lines(final, ["\n".join(right), "\n".join(['REQ = "r"', 'PAY = "p"', 'PAY = "p"', 'SCH = "s"'])])
+    assert fixed.split("\n")[1] == 'FUL = "f"' and at == [2]
+
+
+def test_a_sideways_join_ignores_a_match_far_from_the_rest_of_the_screen():
+    from core.verify import sideways_merge_ex
+    merged = [f"    row_{i:03d} = compute({i}) + another_value_{i}" for i in range(120)]
+    merged[5] = "    onChange={(e) =>"
+    view = [f"row_{i:03d} = compute({i}) + another_value_{i}"[4:] for i in range(60, 70)]
+    view.insert(0, "onChange={(e) => setApprovedAmount(e.target.value)}")
+    got = sideways_merge_ex(merged, view, force=True)
+    assert got is None or got[0][5] == "    onChange={(e) =>"
