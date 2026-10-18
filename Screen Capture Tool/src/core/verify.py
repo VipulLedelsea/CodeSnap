@@ -20,6 +20,8 @@ from core.text import normalized_line
 RANK = {"verified": 5, "reread": 5, "confirmed": 4, "joined": 3, "unchecked": 2, "edited": 2, "mismatch": 1,
         "rows": 1, "wrapped": 1, "cut": 0, "": 0}
 
+MAX_FLAGS = 150
+
 REASONS = {
     "mismatch": "the screenshot shows a different number of characters than was read (a character may be missing or "
                 "extra); a zoomed re-read didn't settle it",
@@ -657,12 +659,17 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
         if i is not None:
             flags.append({"line": i + 1, "text": nxt.strip()[:160], "reason": REASONS["break"]})
     flags.sort(key=lambda f: f["line"])
+    if len(flags) > MAX_FLAGS:
+        # the list is capped, so what is dropped must be the least serious: a dash glyph the pixels cannot settle, then a repeat
+        # of a definition, before a line whose characters or row count did not match the screenshot
+        weak = {REASONS["glyph"]: 2, REASONS["banner"]: 1}
+        flags = sorted(sorted(flags, key=lambda f: (weak.get(f["reason"], 0), f["line"]))[:MAX_FLAGS], key=lambda f: f["line"])
     total = sum(counts.values())
     gaps = notes.get("gaps") or []
     out = {"lines": total, **counts, "numbers": bool(notes.get("numbers")), "gaps": gaps,
            "gap_coordinate": "editor" if notes.get("numbers") else None,
            "first_line": notes.get("first_line"), "last_line": notes.get("last_line"),
-           "sideways": notes.get("sideways", 0), "wrapped": notes.get("wrapped", 0), "flags": flags[:50],
+           "sideways": notes.get("sideways", 0), "wrapped": notes.get("wrapped", 0), "flags": flags,
            "breaks": sum(flag['reason'] == REASONS['break'] for flag in flags)}
     if notes.get("column_shifted_frames"):
         # stretches of a screenshot that were read one column to the right and were moved back (core.analysis._align_frame_columns)

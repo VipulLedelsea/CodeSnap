@@ -114,3 +114,15 @@ def test_a_sideways_join_ignores_a_match_far_from_the_rest_of_the_screen():
     view.insert(0, "onChange={(e) => setApprovedAmount(e.target.value)}")
     got = sideways_merge_ex(merged, view, force=True)
     assert got is None or got[0][5] == "    onChange={(e) =>"
+
+
+def test_the_capped_flag_list_drops_dash_doubts_before_real_mismatches():
+    from core.verify import MAX_FLAGS, summarize
+    lines = ["# " + "-" * 20] * 0
+    code = "\n".join([f'x{i} = "a-b {i}-{i + 1}"' for i in range(MAX_FLAGS + 10)] + ["broken = 1"])
+    statuses = {l: "verified" for l in code.split("\n")}
+    statuses["broken = 1"] = "mismatch"
+    out = summarize(code, statuses)
+    assert len(out["flags"]) == MAX_FLAGS
+    assert any(f["text"] == "broken = 1" for f in out["flags"])
+    assert out["flagged"] == MAX_FLAGS + 11
