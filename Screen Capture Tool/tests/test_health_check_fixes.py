@@ -211,3 +211,27 @@ def test_a_titled_divider_is_recognised_only_when_title_widths_and_dash_ink_agre
     assert not _titled_divider(line, row, [False, False, False, False, False])                  # dashes that are not one unbroken line
     assert not _titled_divider("x = a -- b -- c", [(0, 1), (2, 1), (4, 1), (6, 2), (9, 1), (11, 2), (14, 1)], [False] * 7)
     assert _measured_word("—", 2, joined=True) == "──"
+
+
+def test_a_character_doubt_inside_a_docstring_is_listed_but_does_not_send_the_file_to_needs_attention():
+    from core import deepdive
+    from core.verify import REASONS
+
+    def store(lines):
+        class Store:
+            def verification(self, _id):
+                return {"flags": [{"line": n, "reason": REASONS["mismatch"]} for n in lines]}
+
+            def get_meta(self, *_a, **_k):
+                return {}
+
+            def pending_captures(self):
+                return {}
+        return Store()
+
+    text = '"""\nModule docs that may be read slightly off.\n"""\nx = 1\ny = 2\n'
+    doc = {"id": 1, "name": "a.py", "artifact_type": "other", "transcription": text, "language": "python"}
+    in_doc = deepdive.capture_quality(store([2]), doc)
+    assert in_doc["status"] != "rescan" and any(i["kind"] == "prose" for i in in_doc["issues"]) and in_doc["bad_lines"] == []
+    in_code = deepdive.capture_quality(store([4]), doc)
+    assert in_code["status"] == "rescan" and in_code["bad_lines"] == [4]

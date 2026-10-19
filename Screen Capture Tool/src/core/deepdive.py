@@ -213,6 +213,7 @@ ADVICE = {
     "compile": "the code does not compile as captured, which often means a mis-read: review these lines with the screenshots",
     "model": "the reviewer found text that may be mis-read: review these lines with the screenshots",
     "spacing": "the screenshots disagree about the spacing on these lines: set the source margin again and check them",
+    "prose": "this is wording inside a docstring or string; check it against the screen if the exact words matter",
 }
 
 
@@ -240,7 +241,7 @@ def _ranges(nums):
 
 # Flags that doubt only how a divider or dash is drawn, never what the line says: they stay in the review list but must not mark the
 # line unreliable for the reviewer (which then reports it back as a capture concern and sends a correct file to "needs attention").
-_STYLE_ONLY = {"glyph", "banner", "debris"}
+_STYLE_ONLY = {"glyph", "banner", "debris", "prose"}
 
 
 def capture_quality(store, art, concerns=None) -> dict:
@@ -253,10 +254,16 @@ def capture_quality(store, art, concerns=None) -> dict:
     by_kind = {}
     from core.verify import REASONS
     kind_of = {v: k for k, v in REASONS.items()}
+    from core.text import literal_continuations
+    literal = literal_continuations(text)
     for f in ver.get("flags") or []:
         k = kind_of.get(f.get("reason"), "mismatch")
         if k in ("wrapped", "edited"):
             k = "mismatch"
+        if k == "mismatch" and isinstance(f.get("line"), int) and f["line"] - 1 in literal:
+            # a character-count doubt inside a docstring or string: most are correct lines the pixel check cannot place, and a
+            # recapture does not help; it stays in the review list but does not send the file to "needs attention"
+            k = "prose"
         by_kind.setdefault(k, []).append(f["line"])
     for i, l in enumerate(lines, 1):
         if "[CUT OFF]" in l:
@@ -268,7 +275,8 @@ def capture_quality(store, art, concerns=None) -> dict:
                                                                    "break": "possible gap between screens",
                                                                    "rows": "line count differs from the screen",
                                                                    "mismatch": "text may be mis-read",
-                                                                   "spacing": "spacing differs between screenshots"}.get(k, "needs a check"),
+                                                                   "spacing": "spacing differs between screenshots",
+                                                                   "prose": "wording in a docstring or string may differ"}.get(k, "needs a check"),
                        "advice": ADVICE.get(k, "check these lines against the screen")})
     if art.get("artifact_type") in (None, "code"):
         c = check(text, art["name"], art.get("language") or "")
