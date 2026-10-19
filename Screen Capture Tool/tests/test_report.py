@@ -167,3 +167,16 @@ def test_business_inputs_reach_the_word_report_and_close_their_open_items(progra
     assert "Entered by the client and used in place of open items" in text(after)
     assert "Current licensing and capacity costs per platform" in text(before)
     assert "Current licensing and capacity costs per platform" not in text(after)
+
+
+def test_medium_report_is_the_full_report_cut_to_the_sections_a_delivery_lead_reads(program):
+    from core.report import medium
+    full = docx_bytes(program, today=TODAY) if "today" in docx_bytes.__code__.co_varnames else docx_bytes(program)
+    short = medium.cut(full)
+    heads = lambda b: [p.text.strip() for p in docx.Document(io.BytesIO(b)).paragraphs
+                       if p.style is not None and p.style.name in ("Heading 1", "Heading 2")]
+    big, small = heads(full), heads(short)
+    assert len(small) < len(big) and any(h.startswith("1.1") for h in small) and any(h.startswith("12.3") for h in small)
+    assert not any(h.startswith("Appendix") for h in small) and not any(h.startswith("7.3") for h in small)   # the register is in the full report
+    assert len(short) < len(full)
+    assert "medium-length report" in " ".join(p.text for p in docx.Document(io.BytesIO(short)).paragraphs)

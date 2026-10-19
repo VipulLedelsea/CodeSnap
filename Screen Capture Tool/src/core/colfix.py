@@ -647,6 +647,20 @@ def check(image_path, text: str, *, source_x=None) -> dict:
                        and len(measured[r]) >= 2 and measured[r][0][0] + base <= left_max)
             if real > l2 - l1 - 1:
                 status[body[l2][0]] = ROWS
+    # lines beyond the first or last row of ink on screen: the reader continued the code from memory or added lines that are not
+    # there. Only when two or more lines are surplus (one row can hide a line), and not where a band is tall enough to be two rows
+    # run together or a colour swatch could be a row
+    if pairs and not any(m["deco"]) and not any(h > 1.6 * med for h in heights):
+        (r0, l0), (r9, l9) = pairs[0], pairs[-1]
+        head_extra = l0 - r0
+        if head_extra >= 2:
+            for li in range(head_extra):
+                status[body[li][0]] = ROWS
+        tail_room = len(measured) - 1 - r9
+        tail_extra = len(plain) - 1 - l9 - tail_room
+        if tail_extra >= 2:
+            for li in range(len(plain) - tail_extra, len(plain)):
+                status[body[li][0]] = ROWS
     return {"grid": True, "status": status, "rows": rows, "x0": m["x0"], "pitch": m["pitch"],
             "absolute_columns": m["absolute_columns"]}
 

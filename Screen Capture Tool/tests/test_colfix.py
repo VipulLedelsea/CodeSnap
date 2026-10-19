@@ -69,3 +69,17 @@ def test_cut_off_lines_untouched(tmp_path):
     png = render_code("\n".join(truth), tmp_path / "x.png", font_size=16)
     text = "\n".join(truth[:-1] + [truth[-1][:20] + " [CUT OFF]"])
     assert respace(png, text)[0].splitlines()[-1] == truth[-1][:20] + " [CUT OFF]"
+
+
+def test_lines_the_screen_does_not_show_at_either_end_are_flagged_as_added(tmp_path):
+    from core.colfix import check, ROWS
+    truth = [l.rstrip() for l in (S / "cobol/AIDCALC.cbl").read_text().splitlines()][5:35]
+    png = render_code("\n".join(truth), tmp_path / "x.png", font_size=16)
+    clean = check(png, "\n".join(truth))
+    assert ROWS not in clean["status"]
+    invented_tail = ["           MOVE ZERO TO WS-RETURN-CODE.", "           PERFORM 9999-CLEANUP.", "           STOP RUN."]
+    invented_head = ["       IDENTIFICATION DIVISION.", "       PROGRAM-ID. INVENTED."]
+    text = invented_head + truth + invented_tail
+    status = check(png, "\n".join(text))["status"]
+    assert all(status[i] == ROWS for i in range(len(invented_head))) and all(status[-i] == ROWS for i in range(1, len(invented_tail) + 1))
+    assert all(status[i] != ROWS for i in range(len(invented_head), len(text) - len(invented_tail)))

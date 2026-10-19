@@ -365,3 +365,24 @@ def test_accept_everything_leaves_a_file_with_every_kind_of_flag_no_longer_needi
         assert not items(store, art)
         art["transcription"] += "x"                                    # a changed file is a different file: acceptance does not carry over
         assert deepdive.capture_quality(store, art)["status"] == "rescan"
+
+
+def test_requested_platforms_resolve_from_names_and_file_extensions():
+    from core import technology_support as t
+    want = {("Micro Focus COBOL", ""): "Micro Focus COBOL", ("microfocus cobol", ""): "Micro Focus COBOL", ("", "a.cob"): "COBOL",
+            ("CICS application", ""): "CICS", ("CICS code", ""): "CICS", ("", "m.bms"): "CICS", ("Assembly", ""): "Assembler",
+            ("", "a.mac"): "Assembler", ("ASP.NET Web Forms", ""): "Web Forms", ("ASP.NET forms", ""): "Web Forms",
+            ("", "a.ascx"): "ASP.NET", ("", "a.master"): "ASP.NET", ("PowerBuilder app", ""): "PowerBuilder", ("", "w.srw"): "PowerBuilder",
+            ("", "d.srd"): "PowerBuilder", ("", "x.pbl"): "PowerBuilder"}
+    for (label, name), tech in want.items():
+        found = t.resolve(name, label)
+        assert found and found["technology"] == tech, (label, name, found and found["technology"])
+    assert "Micro Focus" in t.analysis_context("", "Micro Focus COBOL")
+
+
+def test_a_fix_may_not_add_lines_and_the_readers_are_told_to_report_only_what_is_visible():
+    from core import analysis
+    assert analysis.fix_looks_complete("A\nB\nC", "A\nB\nC\nD")
+    assert analysis.fix_looks_complete("A\nB\nC", "A\nB\nX") is None
+    for prompt in (analysis.EXTRACT_SYSTEM_PROMPT, analysis.EXTRACT_JSON_SYSTEM_PROMPT, analysis.EXTRACT_PLAIN_SYSTEM_PROMPT):
+        assert "REPORT ONLY WHAT YOU SEE" in prompt

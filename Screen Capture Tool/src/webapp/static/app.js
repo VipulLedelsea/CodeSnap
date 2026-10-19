@@ -736,7 +736,7 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
 });
 
 // The executive summary is its own file; say why when it is not ready instead of opening a bare error page.
-["progSummaryDocx", "progSummaryPdf"].forEach(id => {
+["progSummaryDocx", "progSummaryPdf", "progMediumDocx", "progMediumPdf"].forEach(id => {
   const el = $(id); if (!el) return;
   el.addEventListener("click", async (ev) => {
     const href = el.getAttribute("href") || "";
@@ -745,12 +745,12 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
     try {
       const r = await fetch(href);
       if (!r.ok) {
-        let msg = "The executive summary is not ready yet.";
+        let msg = id.startsWith("progMedium") ? "The medium report is not ready yet." : "The executive summary is not ready yet.";
         try { msg = (await r.json()).error || msg; } catch (e) {}
         toast(msg); return;
       }
       window.location.assign(href);
-    } catch (e) { toast("Couldn't get the executive summary."); }
+    } catch (e) { toast(id.startsWith("progMedium") ? "Couldn't get the medium report." : "Couldn't get the executive summary."); }
   });
 });
 
@@ -1248,6 +1248,8 @@ async function loadProgram(poll) {
   $("progReportZip").href = `${rb}.zip`;
   if (typeof refreshReportGap === "function") refreshReportGap();
   const sb = `/api/programs/${encodeURIComponent(_program)}/executive-summary`;
+  $("progMediumDocx").href = `/api/programs/${encodeURIComponent(_program)}/report-medium.docx`;
+  $("progMediumPdf").href = `/api/programs/${encodeURIComponent(_program)}/report-medium.pdf`;
   $("progSummaryDocx").href = `${sb}.docx`;
   $("progSummaryPdf").href = `${sb}.pdf`;
 }
@@ -1323,7 +1325,7 @@ function renderCaptureBar(d) {
       ? `Your next capture adds to <b>${escapeHtml(t.name)}</b> — just capture the lines that were missing.`
       : `Your next capture replaces <b>${escapeHtml(t.name)}</b> (the current version is kept).`} <button class="btn-link" data-cb="cancel" type="button">Cancel</button></div>` : "")
     + (stuck ? `<div class="cb wait">Some captures are saved but not being read. <button class="btn-link" data-cb="process" type="button">Read them now</button></div>` : "");
-  ["progReportHtml", "progReportDocx", "progReportPdf", "progReportZip"].forEach(id => { const el = $(id); if (el) el.classList.toggle("disabled", !!d.waiting); });
+  ["progReportHtml", "progReportDocx", "progReportPdf", "progReportZip", "progMediumDocx", "progMediumPdf"].forEach(id => { const el = $(id); if (el) el.classList.toggle("disabled", !!d.waiting); });
   bar.querySelectorAll("[data-cb]").forEach(b => b.addEventListener("click", async () => {
     try {
       if (b.dataset.cb === "cancel") { await _json(`${_pbase()}/recapture`, { method: "DELETE" }); toast("Recapture cancelled."); }

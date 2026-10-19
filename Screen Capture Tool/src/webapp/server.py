@@ -1220,6 +1220,29 @@ def api_program_report(slug: str, fmt: str, rescan: bool = True, client: str | N
     return Response(body, media_type=mt, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@app.get("/api/programs/{slug}/report-medium.{fmt}")
+def api_program_report_medium(slug: str, fmt: str):
+    """The medium-length report: the full report cut to the sections a delivery lead reads."""
+    from core import report as rep
+    if fmt not in ("docx", "pdf"):
+        raise HTTPException(status_code=404, detail="Use docx or pdf.")
+    with _open_program(slug) as store:
+        n = rep.waiting(store)
+        if n:
+            return JSONResponse({"error": f"The report is built once every file is analysed: {n} still waiting."}, status_code=409)
+        res = rep.cached_package(store)
+        full = (Path(res["dir"]) / res["files"][1]).read_bytes()
+    from core.report import medium
+    body = medium.cut(full)
+    if fmt == "pdf":
+        body = rep.pdf_from_docx(body)
+        if body is None:
+            return JSONResponse({"error": rep.PDF_MISSING}, status_code=501)
+    media = "application/pdf" if fmt == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    return Response(body, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{slug}_medium_report.{fmt}"'})
+
+
 @app.get("/api/programs/{slug}/executive-summary.{fmt}")
 def api_program_executive_summary(slug: str, fmt: str):
     """The executive summary as its own Word or PDF file, built from the saved summary while it still matches the findings."""

@@ -4,7 +4,7 @@ Frameworks use their visible source languages. Visual designers and binaries
 can only contribute visible text or exported textual source.
 """
 GROUPS = {
-    'Mainframe': 'COBOL|CICS|JCL|PL/I|Assembler|REXX|CLIST|Natural|Easytrieve|SAS|CA Gen|COOL:Gen|Telon|FOCUS|ADS/O|Ideal|embedded DB2 SQL|IMS|IDMS',
+    'Mainframe': 'COBOL|Micro Focus COBOL|CICS|JCL|PL/I|Assembler|REXX|CLIST|Natural|Easytrieve|SAS|CA Gen|COOL:Gen|Telon|FOCUS|ADS/O|Ideal|embedded DB2 SQL|IMS|IDMS',
     'IBM i': 'RPG III|RPG IV|ILE RPG|free form RPG|CL|COBOL/400|DDS|Synon/2E|LANSA',
     'Java': 'Java SE|Java EE|J2EE|Servlets|EJB|Spring|Hibernate|Swing|AWT|JavaFX|Groovy|Scala|Kotlin',
     '.NET': 'C#|VB.NET|F#|WinForms|WPF|WCF|Silverlight|Entity Framework|LINQ',

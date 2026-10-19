@@ -38,6 +38,7 @@ P=smoke
 for path in "" /graph /technologies /findings /assessment /diagrams /health /coverage /report.docx /report.pdf /export; do
   check GET "/api/programs/$P$path" '^200$'
 done
+check GET  /api/programs/$P/report-medium.docx '^(200|409)$'
 check GET  /api/programs/$P/diagrams/export/zip '^(200|404|409)$'
 if grep -q "Traceback\|No such file or directory" "$WORK/app.log"; then
   echo "FAIL the app log reports errors:"; grep -m5 -B1 "Error" "$WORK/app.log" | cut -c1-220; fail=1

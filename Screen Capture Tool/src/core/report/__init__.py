@@ -41,6 +41,12 @@ def docx_bytes(store, **kw) -> bytes:
     return template_docx.render(store, g["report"], g["diagrams"])
 
 
+def medium_docx_bytes(store, **kw) -> bytes:
+    """The medium-length report: the full report cut to the sections a delivery lead reads (core.report.medium)."""
+    from . import medium
+    return medium.cut(docx_bytes(store, **kw))
+
+
 def pdf_from_docx(docx: bytes):
     """The Word report as PDF, through LibreOffice or Microsoft Word when one is installed; None otherwise."""
     import shutil

@@ -33,13 +33,22 @@ PLATFORMS = {'SharePoint','WordPress','Drupal','Joomla','Sitecore','Adobe Experi
 REGISTRY = {name.casefold(): {'technology':name,'group':group,'guide':GUIDES[group],
                              'visible_only':True,'model_enrichment':name in VISUAL | PLATFORMS | TEMPLATES}
             for group,names in GROUPS.items() for name in names.split('|')}
-ALIASES = {'java':'Java SE','rpg':'ILE RPG','rpg free':'free form RPG','assembly':'Assembler','hlasm':'Assembler',
+ALIASES = {'microfocus cobol':'Micro Focus COBOL','micro focus':'Micro Focus COBOL','visual cobol':'Micro Focus COBOL','net express':'Micro Focus COBOL',
+           'server express':'Micro Focus COBOL','enterprise developer':'Micro Focus COBOL','acucobol':'Micro Focus COBOL',
+           'cics application':'CICS','cics code':'CICS','cics cobol':'CICS','cics transaction':'CICS','cics program':'CICS','cics bms':'CICS','bms':'CICS',
+           'assembly':'Assembler','assembly language':'Assembler','assembler language':'Assembler','ibm assembler':'Assembler','bal':'Assembler','hlasm':'Assembler',
+           'asp.net forms':'Web Forms','asp.net web forms':'Web Forms','webforms':'Web Forms','aspnet':'ASP.NET','asp.net application':'ASP.NET','asp.net app':'ASP.NET',
+           'powerbuilder application':'PowerBuilder','powerbuilder app':'PowerBuilder','powerscript':'PowerBuilder','datawindow':'PowerBuilder','pb':'PowerBuilder','java':'Java SE','rpg':'ILE RPG','rpg free':'free form RPG','assembly':'Assembler','hlasm':'Assembler',
            'pli':'PL/I','csharp':'C#','c sharp':'C#','vbnet':'VB.NET','visual basic .net':'VB.NET',
            'javascript/react':'React','typescript/react':'React','vue':'Vue.js','node':'Node.js',
            'shell':'Bash shell','bash':'Bash shell','ksh':'Korn shell','powershell script':'PowerShell',
            'visual basic 6':'VB6','plsql':'PL/SQL','tsql':'T-SQL','progress abl':'OpenEdge ABL',
            'sqlwindows':'Centura SQLWindows','lotus formula':'Formula language','powerfx':'Power Fx'}
 EXTENSIONS = {
+    'cob':'COBOL','cobol':'COBOL','ccp':'COBOL','cblle':'COBOL','cobcopy':'COBOL','bms':'CICS','map':'CICS','mac':'Assembler','mlc':'Assembler','hlasm':'Assembler','s':'Assembler',
+    'ascx':'ASP.NET','master':'ASP.NET','asmx':'ASP.NET','ashx':'ASP.NET','asax':'ASP.NET','axd':'ASP.NET','sitemap':'ASP.NET','skin':'ASP.NET','vbhtml':'Razor',
+    'srw':'PowerBuilder','sru':'PowerBuilder','srd':'PowerBuilder','srf':'PowerBuilder','srm':'PowerBuilder','srs':'PowerBuilder','sra':'PowerBuilder',
+    'srq':'PowerBuilder','srp':'PowerBuilder','srx':'PowerBuilder','srj':'PowerBuilder','pbl':'PowerBuilder','pbt':'PowerBuilder','pbg':'PowerBuilder','pbw':'PowerBuilder',
     'kt':'Kotlin','kts':'Kotlin','scala':'Scala','groovy':'Groovy','gvy':'Groovy',
     'fs':'F#','fsx':'F#','fsi':'F#','vb':'VB.NET','go':'Go','rs':'Rust','swift':'Swift','m':'Objective-C','mm':'Objective-C','dart':'Dart',
     'ts':'TypeScript','tsx':'React','jsx':'React','vue':'Vue.js','scss':'Sass','sass':'Sass','less':'LESS','css':'CSS',
@@ -73,11 +82,21 @@ def resolve(filename='', language=''):
     return {**record,'basis':basis,'revision':REVISION} if record else None
 
 
+SPECIFIC = {
+    'Micro Focus COBOL': 'Micro Focus dialect: source may be free format (>>SOURCE FREE) or fixed; keep $SET directives, SCREEN SECTION, ADIS/COBOL screen entries, EXEC SQL/EXEC CICS blocks and copybook COPY statements exactly as shown.',
+    'CICS': 'CICS source: keep every EXEC CICS ... END-EXEC block, DFHCOMMAREA, BMS map macros (DFHMSD/DFHMDI/DFHMDF) and RESP/RESP2 handling exactly as shown; the host language is usually COBOL, PL/I, C or assembler.',
+    'Assembler': 'Assembler: label, operation, operands and continuation columns are significant; keep macros, DSECTs, USING/DROP, EQU, DC/DS and column-72 continuation characters exactly as shown.',
+    'ASP.NET': 'ASP.NET: separate .aspx/.ascx/.master markup (directives, runat="server" controls, data-binding expressions) from the code-behind (.aspx.cs/.aspx.vb) and from web.config.',
+    'Web Forms': 'ASP.NET Web Forms: keep page directives, server controls, event handler names (OnClick, OnItemCommand), ViewState and data-binding expressions as shown; markup and code-behind are separate files.',
+    'PowerBuilder': 'PowerBuilder: keep PowerScript events (clicked, constructor), embedded SQL, DataWindow object source (.srd) with its release/table/column/text sections, and window/user-object (.srw/.sru) export headers exactly as shown.',
+}
+
+
 def analysis_context(filename='', language=''):
     scope = resolve(filename,language)
     if not scope:
         return ''
-    return ('Visible source format: '+scope['technology']+'. '+scope['guide']+
+    return ('Visible source format: '+scope['technology']+'. '+scope['guide']+' '+SPECIFIC.get(scope['technology'],'')+
             ' Screens are the only evidence. Mark unknown configuration and omitted source as unknown. '
             'A technology label is a routing hint, not evidence that a framework is deployed.\n')
 

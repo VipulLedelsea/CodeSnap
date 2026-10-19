@@ -188,6 +188,13 @@ def _media_type(path: Path) -> str:
 # stitch the per-image text together locally, then make a single cheap text-only
 # call for the overview. This is the Milestone 5 path used by the hotkey tool.
 
+_NO_INVENTION_CLAUSE = (
+    "REPORT ONLY WHAT YOU SEE. Every line you output must be visible in THIS image. Never add, complete, continue or "
+    "recall lines from memory, even when you recognise the program, a copybook, a standard template or boilerplate; if the "
+    "picture ends in the middle of a statement, stop there. Never fill in a line that is hidden, scrolled out or cut off, "
+    "and never add a blank line, comment, END statement or closing bracket that is not on screen. "
+)
+
 EXTRACT_SYSTEM_PROMPT = (
     "You are a LITERAL OCR engine, not a programmer. Your ONLY job is to copy the exact "
     "characters visible on screen into text — like a photocopier. You do NOT understand or "
@@ -209,6 +216,7 @@ EXTRACT_SYSTEM_PROMPT = (
     "editor pane); ignore other windows, the dock, and menu bars. "
     "If a line is cut off at the screen edge or truly unreadable, transcribe what is visible and "
     "append the marker [CUT OFF] — never guess the hidden part. "
+    + _NO_INVENTION_CLAUSE +
     "If there is no meaningful text, output nothing."
 )
 
@@ -216,7 +224,7 @@ FINALIZE_SYSTEM_PROMPT = (
     "You are given the full text extracted from a sequence of screenshots that "
     "together form one document. Classify it and summarise it.\n"
     "Return ONLY a JSON object with exactly these keys:\n"
-    '  "overview": a concise plain-English overview, leading with the content type.\n'
+    '  "overview": a concise plain-English overview, leading with the content type. Describe only what the text contains; do not add what a program of this kind usually does.\n'
     '  "is_code": true if the content is primarily source code, otherwise false.\n'
     '  "language": if code, the programming language name (e.g. "Python", "C++", '
     '"C#", "JavaScript"); otherwise "".\n'
@@ -230,6 +238,8 @@ _FIXED_COLUMN_CLAUSE = (
     "FIXED-COLUMN SOURCE (COBOL, copybooks, JCL, BMS/assembler): every column is significant. Keep each line's characters in their exact columns, including sequence numbers in columns 1-6 and the indicator character in column 7 (* / - D) — these are part of the source, NOT an editor gutter. Never shift, re-align or trim leading spaces on these lines. Count spaces exactly, both leading spaces and runs of spaces inside a line (aligned PIC/VALUE clauses must land in the same column as on screen); in assembler/BMS keep continuation characters in the columns actually shown, even when nonstandard. Preserve observed Unicode characters and quotes. "
 )
 
+
+
 _PANE_CLAUSE = (
     "Do NOT include the editor's line-number gutter, fold arrows, breakpoint dots, minimaps, "
     "scrollbars, tab bars, or status bars \u2014 only the content itself. The editor's own text is never source: "
@@ -238,6 +248,7 @@ _PANE_CLAUSE = (
     "visible, transcribe ONLY the primary focused editor pane; ignore other windows, the dock, and "
     "menu bars. If a line is cut off at the screen edge or truly unreadable, transcribe what is "
     "visible and end that line's string with the marker [CUT OFF] \u2014 never guess the hidden part. "
+    + _NO_INVENTION_CLAUSE
 )
 
 EXTRACT_JSON_SYSTEM_PROMPT = (
@@ -2917,6 +2928,7 @@ FIX_SYSTEM_PROMPT = (
     "not clearly required to resolve the specific reported error. Preserve the "
     "original code exactly everywhere else. If a fix is genuinely ambiguous, leave "
     "that line unchanged rather than guessing.\n"
+    "Never add a line that was not in the code you were given, and never delete one.\n"
     "Return ONLY the corrected, complete source file — no commentary, no markdown."
 )
 
@@ -2969,6 +2981,8 @@ def fix_looks_complete(original: str, fixed: str, min_ratio: float = 0.7):
     after = len([l for l in fixed.splitlines() if l.strip()])
     if before and after < before * min_ratio:
         return f"the fix has {after} lines against {before} in the original (looks truncated)"
+    if after > before:
+        return f"the fix added {after - before} line(s) that were not in the captured text; a fix may only correct what was captured"
     return None
 
 
