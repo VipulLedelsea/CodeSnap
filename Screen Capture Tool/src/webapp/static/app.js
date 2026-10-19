@@ -180,7 +180,7 @@ function buildReportHtml(name, r) {
     ? mer.map(b => `<pre class="mermaid">${_esc(b)}</pre>`).join("")
     : (diagrams ? `<pre>${_esc(diagrams)}</pre>` : "");
   const merScript = mer.length
-    ? '<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script><script>try{mermaid.initialize({startOnLoad:true});}catch(e){}</script>'
+    ? '<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js" integrity="sha512-6a80OTZVmEJhqYJUmYd5z8yHUCDlYnj6q9XwB/gKOEyNQV/Q8u+XeSG59a2ZKFEHGTYzgfOQKYEBtrZV7vBr+Q==" crossorigin="anonymous"></script><script>try{mermaid.initialize({startOnLoad:true});}catch(e){}</script>'
     : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

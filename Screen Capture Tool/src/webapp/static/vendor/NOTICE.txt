@@ -1,0 +1,4 @@
+mermaid 10.9.1 (mermaid.min.js) - MIT licence, (c) Knut Sveidqvist and contributors. https://github.com/mermaid-js/mermaid
+Bundled so diagrams work offline and no third-party script is loaded into the app.
+Fetched from https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js and checked against the integrity hash cdnjs publishes:
+sha512-6a80OTZVmEJhqYJUmYd5z8yHUCDlYnj6q9XwB/gKOEyNQV/Q8u+XeSG59a2ZKFEHGTYzgfOQKYEBtrZV7vBr+Q==

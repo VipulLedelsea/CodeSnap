@@ -96,3 +96,15 @@ def test_about_reports_the_version_the_bundle_is_built_with():
     assert about["version"] == VERSION and about["programs"]
     spec = (ROOT / "packaging" / "CodeSnap.spec").read_text()
     assert "'CFBundleShortVersionString': VERSION" in spec and "1.0.0'" not in spec.split("info_plist")[1]
+
+
+def test_the_page_loads_no_third_party_script_and_the_bundled_mermaid_is_the_checked_one():
+    import base64
+    import hashlib
+    html = (ROOT / "src" / "webapp" / "static" / "index.html").read_text()
+    assert not re.findall(r'<script[^>]+src="https?://', html), "the app page must not load a script from another site"
+    lib = ROOT / "src" / "webapp" / "static" / "vendor" / "mermaid.min.js"
+    want = re.search(r"sha512-[A-Za-z0-9+/=]+", (lib.parent / "NOTICE.txt").read_text()).group(0)
+    assert "sha512-" + base64.b64encode(hashlib.sha512(lib.read_bytes()).digest()).decode() == want
+    js = (ROOT / "src" / "webapp" / "static" / "app.js").read_text()
+    assert all("integrity=" in tag for tag in re.findall(r"<script src=\"https://[^>]+>", js))   # the exported report pins its copy
