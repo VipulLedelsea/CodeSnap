@@ -164,7 +164,8 @@ def test_the_bundled_app_opens_in_batch_mode_and_a_saved_choice_or_a_variable_ov
     from core import settings
     monkeypatch.setenv("CODESNAP_HOME", str(tmp_path))
     for name in ("CODESNAP_BATCH", "CODESNAP_PIPELINE"):
-        monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv(name, "x")          # so the teardown restores them: apply_defaults writes to the real environment
+        monkeypatch.delenv(name)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     settings.apply_defaults()
     assert os.environ["CODESNAP_BATCH"] == "1" and os.environ["CODESNAP_PIPELINE"] == "staged"      # the app's own default
@@ -205,4 +206,4 @@ def test_the_program_page_says_when_files_hold_the_batch():
     root = Path(__file__).resolve().parent.parent / "src" / "webapp" / "static"
     assert 'id="progAttn"' in (root / "index.html").read_text()
     js = (root / "app.js").read_text()
-    assert "renderAttention(d);" in js and "run for every file as one batch" in js and "/accept-all" in js
+    assert "renderAttention(d)" in js and "run for every file as one batch" in js and "/accept-all" in js

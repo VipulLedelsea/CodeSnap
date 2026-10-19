@@ -1202,7 +1202,7 @@ async function loadProgram(poll) {
     }
   });
   renderProgress(d);
-  renderAttention(d);
+  if (typeof renderAttention === "function") renderAttention(d);
   const recaps = {};
   d.artifacts.forEach(a => { const t = a.pending && a.pending.recapture_of; if (t && d.artifacts.some(x => x.name === t && x.id !== a.id)) recaps[t] = a; });
   const rows = d.artifacts.filter(a => !(a.pending && recaps[a.pending.recapture_of] === a));
