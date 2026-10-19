@@ -742,6 +742,30 @@ if ($("keySave")) $("keySave").addEventListener("click", async () => {
 });
 checkApiKey();
 
+// ── First-run macOS permissions (Screen Recording, Accessibility) ─────────────
+const PERM_COPY = {
+  screen: ["Screen Recording", "so it can read the code on your screen"],
+  accessibility: ["Accessibility", "so the capture hotkeys (Cmd+Shift+1 and friends) work"],
+};
+let _permTimer = null;
+async function checkPermissions() {
+  const banner = $("permBanner"); if (!banner) return;
+  let j;
+  try { j = await (await fetch("/api/permissions")).json(); } catch (e) { return; }
+  const missing = (j.missing || []).filter(k => PERM_COPY[k]);
+  banner.style.display = missing.length ? "flex" : "none";
+  clearTimeout(_permTimer);
+  if (!missing.length) return;
+  $("permText").textContent = "Turn on " + missing.map(k => `${PERM_COPY[k][0]} (${PERM_COPY[k][1]})`).join(" and ") +
+    " for CodeSnap in System Settings, then return here. This page notices by itself; you may need to reopen CodeSnap afterwards.";
+  $("permButtons").innerHTML = missing.map(k => `<button class="btn-primary" type="button" data-perm="${k}">Open ${PERM_COPY[k][0]} settings</button>`).join("");
+  $("permButtons").querySelectorAll("[data-perm]").forEach(b => b.addEventListener("click", async () => {
+    try { await fetch("/api/permissions/open?pane=" + b.dataset.perm, { method: "POST" }); } catch (e) { toast("Couldn't open System Settings."); }
+  }));
+  _permTimer = setTimeout(checkPermissions, 4000);
+}
+checkPermissions();
+
 
 // ── Project mode: pick captured files, build a cross-file dependency map ──────
 function _attr(v){ return String(v||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;"); }

@@ -64,3 +64,25 @@ def test_a_fresh_install_creates_its_data_folder_on_first_use(monkeypatch, tmp_p
     reply = TestClient(server.app).post("/api/session/kind?kind=code")
     assert reply.status_code == 200
     assert (tmp_path / "new" / "CodeSnap" / "captures" / ".capture_kind").read_text() == "code"
+
+
+def test_permissions_report_what_is_missing_and_only_open_known_panes(monkeypatch):
+    from core import permissions
+    monkeypatch.setattr(permissions, "screen_recording", lambda: False)
+    monkeypatch.setattr(permissions, "accessibility", lambda: None)       # unknown is not "missing"
+    assert permissions.missing() == ["screen"]
+    opened = []
+    monkeypatch.setattr(permissions.subprocess, "run", lambda argv, **k: opened.append(argv))
+    monkeypatch.setattr(permissions.sys, "platform", "darwin")
+    assert permissions.request("accessibility") is True and opened[-1][0] == "open"
+    assert permissions.request("../../etc/passwd") is False and len(opened) == 1
+
+
+def test_the_permissions_endpoints(monkeypatch):
+    from fastapi.testclient import TestClient
+    from core import permissions
+    from webapp import server
+    monkeypatch.setattr(permissions, "status", lambda: {"screen": False, "accessibility": True})
+    client = TestClient(server.app)
+    assert client.get("/api/permissions").json() == {"screen": False, "accessibility": True, "missing": ["screen"]}
+    assert client.post("/api/permissions/open?pane=bogus").status_code == 400

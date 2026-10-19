@@ -783,3 +783,6 @@ body.dark .pf-state.attn, body.dark .pf-note.attn, body.dark .pp-head em.attn{ c
   .prog-pick{ flex:1 1 100%; flex-wrap:wrap; }
   .prog-pick select{ flex:1 1 180px; max-width:none; }
 }
+
+.perm-banner .key-row{ display:flex; gap:8px; flex-wrap:wrap; }
+.perm-banner{ border-color:rgba(193,127,92,.35); }

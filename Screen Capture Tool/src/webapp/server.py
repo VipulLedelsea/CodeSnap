@@ -1393,6 +1393,21 @@ def api_program_import(slug: str, extract: bool = True):
         return {"ok": True, "imported": imported}
 
 
+@app.get("/api/permissions")
+def api_permissions():
+    """Which of the macOS permissions CodeSnap needs are still missing (null = cannot tell, shown as fine)."""
+    from core import permissions
+    return {**permissions.status(), "missing": permissions.missing()}
+
+
+@app.post("/api/permissions/open")
+def api_permissions_open(pane: str = "screen"):
+    from core import permissions
+    if pane not in permissions.PANES:
+        return JSONResponse({"error": "pane must be screen or accessibility"}, status_code=400)
+    return {"ok": permissions.request(pane)}
+
+
 @app.get("/api/key/status")
 def api_key_status():
     """Does the app have an Anthropic API key yet? (drives the first-run banner)"""
