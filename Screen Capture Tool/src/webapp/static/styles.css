@@ -799,3 +799,6 @@ body.dark .settings-about code{ background:rgba(255,255,255,.08); }
 .region-note{ margin:8px 16px 0; font-size:13px; font-weight:500; color:var(--copper-ink,#7A4A2E); min-height:18px; }
 .region-note.bad{ color:#B42318; }
 .btn-primary:disabled, .btn-secondary:disabled{ opacity:.4; cursor:not-allowed; box-shadow:none; filter:grayscale(.3); }
+
+.settings-row{ gap:12px; }
+.settings-note{ display:block; font-size:11.5px; color:var(--muted); font-weight:400; margin-top:2px; }

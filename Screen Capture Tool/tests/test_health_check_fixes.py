@@ -281,3 +281,61 @@ def test_a_top_proof_never_cancels_a_structural_finding_that_the_start_is_missin
         store.set_verification(aid, {"lines": 4, "flags": []})
         q = deepdive.capture_quality(store, store.artifact(aid))
         assert q["status"] == "rescan" and any(i["kind"] == "partial" for i in q["issues"])
+
+
+def test_a_pixel_scroll_estimate_that_calls_unrelated_rows_a_repeat_is_rejected():
+    """On repetitive content the image alignment can claim a screenshot mostly repeats the text above it. If the rows it calls repeats do
+    not read like that text, the claim is dropped and the screenshot is kept whole instead of losing its new rows."""
+    from core.analysis import _guided_agrees
+    row = lambda table, i: f"INSERT INTO {table} VALUES ('{table[-1].upper()}-{i:04d}', {i * 7}, 'x{i}');"
+    earlier = [row("mun_a", i) for i in range(40)]                      # what the text already holds
+    new_rows = [row("mun_b", i) for i in range(4)]
+    # a real overlap: the screenshot's first 35 rows are the last 35 rows of the text, then 4 new rows
+    real = earlier[5:] + new_rows
+    assert _guided_agrees(real, (earlier + new_rows, 4))
+    # a false one: the screenshot is all new rows, yet the estimate calls 35 of them repeats
+    unrelated = [row("mun_b", i + 100) for i in range(39)]
+    assert not _guided_agrees(unrelated, (earlier + unrelated[35:], 4))
+    # too few repeated rows to judge: accepted as before
+    assert _guided_agrees(real, (earlier + new_rows, 36))
+
+
+def test_the_reviewers_concerns_stop_reopening_a_file_once_its_review_is_closed(tmp_path, monkeypatch):
+    """One pass: before the analysis starts a concern is a question for the person; once the analysis has started (every question was
+    answered) the same concern is a note, still in the report's open items, and no longer puts the file back in 'needs attention'."""
+    from PIL import Image
+    from core import deepdive
+    from core.model import ProgramStore
+    from core.model.line_review import items
+    monkeypatch.setenv("CODESNAP_PROGRAMS", str(tmp_path / "programs"))
+    text = "import os\n\n\ndef run():\n    return os.name\n"
+    with ProgramStore.create("One pass") as store:
+        png = tmp_path / "f.png"
+        Image.new("RGB", (40, 20), (7, 7, 7)).save(png)
+        evidence = store.add_evidence(png, session_id=store.add_session(mode="burst", note="top_proven"))
+        aid = store.add_artifact("a.py", language="Python", transcription=text, evidence_ids=[evidence])
+        store.set_status(aid, "structured")
+        store.set_verification(aid, {"lines": 5, "flags": []})
+        store.set_meta("deepdive", {str(aid): {"hash": deepdive._hash(text), "capture_concerns": [{"line": 5, "reason": "looks wrong"}]}})
+        art = store.artifact(aid)
+        assert deepdive.current_concerns(store, art) and any("looks wrong" in r for i in items(store, art) for r in i["reasons"])
+        assert deepdive.capture_quality(store, art, deepdive.current_concerns(store, art))["status"] == "rescan"
+        deepdive.close_review(store, [aid])
+        art = store.artifact(aid)
+        assert deepdive.review_closed(store, art) and deepdive.current_concerns(store, art) == []
+        assert not any("looks wrong" in r for i in items(store, art) for r in i["reasons"])
+        assert deepdive.all_concerns(store, art)                                     # still there for the report
+        quality = deepdive.capture_quality(store, art, deepdive.current_concerns(store, art))
+        assert quality["status"] != "rescan" and any(i["kind"] == "concern" for i in quality["issues"])
+
+
+def test_accept_all_clears_structural_findings_and_batch_defers_per_file_starts(tmp_path):
+    from core.model import confirmed
+    class S:
+        def __init__(self): self.m = {}
+        def get_meta(self, k): return self.m.get(k)
+        def set_meta(self, k, v): self.m[k] = v
+    st, art = S(), {"id": 7, "transcription": "A\nB"}
+    confirmed.accept_reasons(st, art, ["paragraph 5120 is missing"])
+    assert confirmed.accepted_reasons(st, art) == {"paragraph 5120 is missing"}
+    assert confirmed.accepted_reasons(st, dict(art, transcription="A\nC")) == set()

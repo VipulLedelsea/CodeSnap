@@ -2492,6 +2492,29 @@ def _seam(merged, head, m=4, slack=3, clipped=3):
     return None
 
 
+def _guided_agrees(lines, guided, min_rows=6, thresh=0.8, share=0.8):
+    """Does the screen the pixels call 'already seen' really repeat the text above it? The pixel scroll estimate says how many of a
+    screenshot's rows are new; the rest must be rows the text already holds, matching row for row. On repetitive content (tables of
+    near-identical INSERT lines) a wrong alignment can pass a check of the seam alone, and everything the estimate calls a repeat is
+    then thrown away. If most of the claimed repeats do not read like the end of the text they would sit on, the estimate is wrong."""
+    text, new = guided[0], guided[1]
+    repeated = len(lines) - new
+    if repeated < min_rows:
+        return True
+    head = [l for l in lines[:repeated] if l.strip()]
+    base = [l for l in text[:len(text) - new] if l.strip()]
+    if len(head) < min_rows or len(base) < len(head):
+        return True
+    tail = base[-len(head):]
+    return sum(1 for a, b in zip(tail, head) if _sim(a, b) >= thresh) >= share * len(head)
+
+
+def _pixel_guided_checked(merged, lines, *args, **kwargs):
+    """_pixel_guided, but None (the pixels cannot say) when its claimed repeats do not match the text they would repeat."""
+    guided = _pixel_guided(merged, lines, *args, **kwargs)
+    return guided if guided is None or _guided_agrees(lines, guided) else None
+
+
 def _pixel_guided(merged, lines, info, at, prev_image, clipped=0):
     """Append `lines` (a screenshot) to `merged` using the scroll the pixels measured between it and the screenshot before it,
     instead of guessing the overlap from text. Rows with any part on the previous screen are repeats, the rest are new, so
@@ -2647,7 +2670,7 @@ def _stitch(parts: list, prefer, notes: dict, rows=None, from_left=None) -> str:
             stitched = _fuzzy_overlap(merged, lines, notes)
         before = order[fi - 1] if fi else None
         if id(lines) in pixel and before is not None and id(before) in pixel and id(before) not in side_ids:
-            guided = _pixel_guided(merged, lines, pixel[id(lines)][0], pixel[id(lines)][1],
+            guided = _pixel_guided_checked(merged, lines, pixel[id(lines)][0], pixel[id(lines)][1],
                                    pixel[id(before)][0]["image"])
             text_new = None if stitched is None else len(stitched) - len(merged)
             # The text found almost no overlap (a short look-alike tail inside the wrong block) while the pixels show a firm
@@ -2661,7 +2684,7 @@ def _stitch(parts: list, prefer, notes: dict, rows=None, from_left=None) -> str:
             # the same body make the text look for its overlap in the wrong one, and the whole screen goes in a second time
             heavy = None
             if not fixed_format and not tiny and text_new is not None and text_new >= 20:
-                heavy = guided or _pixel_guided(merged, lines, pixel[id(lines)][0], pixel[id(lines)][1],
+                heavy = guided or _pixel_guided_checked(merged, lines, pixel[id(lines)][0], pixel[id(lines)][1],
                                                 pixel[id(before)][0]["image"], clipped=3)
                 if heavy is not None and (text_new < 2 * heavy[1] + 4 or not _appended_duplicates(merged, stitched, text_new)):
                     heavy = None
@@ -2672,7 +2695,7 @@ def _stitch(parts: list, prefer, notes: dict, rows=None, from_left=None) -> str:
                     and _appended_repeats(merged, stitched, text_new)):
                 # the text appended a run it already holds; the screenshot's own rows may include ones the previous screen showed
                 # clipped, so the seam may be looser here than where the text found nothing at all
-                again = _pixel_guided(merged, lines, pixel[id(lines)][0], pixel[id(lines)][1],
+                again = _pixel_guided_checked(merged, lines, pixel[id(lines)][0], pixel[id(lines)][1],
                                       pixel[id(before)][0]["image"], clipped=3)
                 if again is not None and text_new > again[1] + 2:
                     guided, tiny = again, True

@@ -170,7 +170,7 @@ def _files(store, skip=None, fact_cap=None, rows=None):
             shown = _pick(shown, fact_cap)
         facts = [{"cite": f"[{art['name']}:{_fid(f)}]", "category": f.get("category"), "severity": f.get("severity"),
                   "basis": f.get("basis"), "statement": f"{f.get('statement', '')} (lines {f['lines'][0]}-{f['lines'][-1]})"} for f in shown]
-        concerns = [c.get("line") for c in D.current_concerns(store, art, dd) or []]
+        concerns = [c.get("line") for c in D.all_concerns(store, art, dd) or []]
         row = {"file": art["name"], "language": art.get("language"), "file_role": d.get("file_role") or "not shown",
                "run_mode": d.get("run_mode") or "not shown", "purpose": d.get("purpose"), "facts": facts,
                "findings_total": len(d.get("facts") or []), "findings_shown": len(facts),

@@ -157,3 +157,39 @@ def test_the_unmeasurable_margin_message_says_what_to_do():
     with pytest.raises(ValueError) as why:
         spacing.profile(blank.getvalue(), [0.1, 0.1, 0.5, 0.5], 0.2)
     assert "line numbers" in str(why.value) and "fixed-width" in str(why.value)
+
+
+def test_the_bundled_app_opens_in_batch_mode_and_a_saved_choice_or_a_variable_overrides_it(monkeypatch, tmp_path):
+    import os
+    from core import settings
+    monkeypatch.setenv("CODESNAP_HOME", str(tmp_path))
+    for name in ("CODESNAP_BATCH", "CODESNAP_PIPELINE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    settings.apply_defaults()
+    assert os.environ["CODESNAP_BATCH"] == "1" and os.environ["CODESNAP_PIPELINE"] == "staged"      # the app's own default
+    monkeypatch.delenv("CODESNAP_BATCH")
+    settings.set_batch(False)                                                                         # the person switched it off
+    assert settings.load() == {"batch": False} and os.environ["CODESNAP_BATCH"] == "0"
+    monkeypatch.delenv("CODESNAP_BATCH")
+    settings.apply_defaults()
+    assert os.environ["CODESNAP_BATCH"] == "0"                                                        # saved choice survives a restart
+    monkeypatch.setenv("CODESNAP_BATCH", "1")
+    settings.apply_defaults()
+    assert os.environ["CODESNAP_BATCH"] == "1"                                                        # a variable set by hand wins
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    monkeypatch.delenv("CODESNAP_BATCH")
+    (tmp_path / "settings.json").unlink()
+    settings.apply_defaults()
+    assert os.environ["CODESNAP_BATCH"] == "0"                                                        # from source it stays off unless asked for
+
+
+def test_the_settings_endpoint_saves_the_batch_choice(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from webapp import server
+    monkeypatch.setenv("CODESNAP_HOME", str(tmp_path))
+    monkeypatch.setenv("CODESNAP_BATCH", "0")
+    client = TestClient(server.app)
+    assert client.get("/api/settings").json() == {"batch": False}
+    assert client.post("/api/settings", json={"batch": True}).json() == {"batch": True}
+    assert (tmp_path / "settings.json").read_text().count("true") == 1

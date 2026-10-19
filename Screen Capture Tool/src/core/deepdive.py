@@ -269,8 +269,10 @@ def capture_quality(store, art, concerns=None) -> dict:
             # recapture does not help; it stays in the review list but does not send the file to "needs attention"
             k = "prose"
         by_kind.setdefault(k, []).append(f["line"])
+    from core.model import confirmed as _confirmed
+    _sigs = (store.get_meta("confirmed_lines") or {}).get(art.get("name")) or []
     for i, l in enumerate(lines, 1):
-        if "[CUT OFF]" in l:
+        if "[CUT OFF]" in l and not (_sigs and _confirmed.is_confirmed(_sigs, lines, i)):
             by_kind.setdefault("cut", []).append(i)
     for k, ls in by_kind.items():
         if k not in _STYLE_ONLY:
@@ -290,6 +292,10 @@ def capture_quality(store, art, concerns=None) -> dict:
         c = check(text, art["name"], art.get("language") or "")
         from core.model import edges
         c = edges.settle(store, art, c)
+        accepted = _confirmed.accepted_reasons(store, art)
+        if accepted and c["partial"]:
+            c = dict(c, reasons=[r for r in c["reasons"] if r not in accepted])
+            c["partial"] = bool(c["reasons"])
         if c["partial"]:
             issues.append({"kind": "partial", "lines": [], "reason": "; ".join(c["reasons"]), "advice": ADVICE["partial"]})
         from core.model import edges
@@ -305,6 +311,11 @@ def capture_quality(store, art, concerns=None) -> dict:
         for a, b in shifted_spacing(lines)[:3] if c.get("spacing") else []:
             issues.append({"kind": "spacing", "lines": _ranges(list(range(a, b + 1))),
                            "reason": "indented one column off the rest of the file", "advice": ADVICE["spacing"]})
+    if not concerns and review_closed(store, art):
+        noted = [c.get("line") for c in all_concerns(store, art) or [] if isinstance(c.get("line"), int)]
+        if noted:
+            issues.append({"kind": "concern", "lines": _ranges(noted), "reason": "the reviewer noted text to double-check",
+                           "advice": "listed in the report's open items; they no longer hold the file back"})
     for c in concerns or []:
         ln = c.get("line")
         if isinstance(ln, int) and 0 < ln <= len(lines):
@@ -317,12 +328,44 @@ def capture_quality(store, art, concerns=None) -> dict:
     return {"status": status, "issues": issues, "bad_lines": sorted(bad), "verified": bool(ver)}
 
 
-def current_concerns(store, art, dd=None):
+def all_concerns(store, art, dd=None):
+    """Every capture concern the reviewer raised that still describes the file's current text (blocking or not)."""
     found = _current_concerns(store, art, dd)
     if not found:
         return found
     from core.model import confirmed
     return confirmed.keep_unconfirmed(store, art["name"], art.get("transcription"), found)
+
+
+def review_closed(store, art) -> bool:
+    """Has this version of the file already been through the person's review and into analysis? The analysis only starts once every
+    question on the file is answered, so from then on the reviewer's own concerns are notes, not questions: they used to put the file
+    back into 'needs attention' after the person believed they were finished, and each round of fixes re-ran the analysis."""
+    try:
+        return str(art["id"]) in (store.get_meta("review_closed") or {})
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def close_review(store, artifact_ids) -> None:
+    """Record that these files are going into analysis, so their review is finished."""
+    ids = {str(i) for i in artifact_ids or []}
+    if not ids:
+        return
+    closed = dict(store.get_meta("review_closed") or {})
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+    new = {i: stamp for i in ids if i not in closed}
+    if new:
+        closed.update(new)
+        store.set_meta("review_closed", closed)
+
+
+def current_concerns(store, art, dd=None):
+    """The concerns that still block the file: none once its review is closed (they remain in all_concerns, the executive summary and
+    the report's open items)."""
+    if review_closed(store, art):
+        return []
+    return all_concerns(store, art, dd)
 
 
 def _current_concerns(store, art, dd=None):

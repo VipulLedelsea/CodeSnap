@@ -67,3 +67,25 @@ def mark_missing(store, name, text, n):
 def is_marked_missing(store, name, text, n):
     sigs = (store.get_meta('missing_marks') or {}).get(name)
     return is_confirmed(sigs, (text or '').splitlines(), n)
+
+
+# ── structural findings that belong to the whole file, not to a line ─────────────────────────────────────────────────────────────
+
+def _hash(text):
+    import hashlib
+    return hashlib.sha256((text or '').encode()).hexdigest()
+
+
+def accept_reasons(store, art, reasons):
+    """The person accepted these whole-file findings ("paragraph 5120 is missing", "unclosed brace") as they are. Valid for this exact
+    text of this version of the file only."""
+    allr = store.get_meta('accepted_reasons') or {}
+    key, digest = str(art['id']), _hash(art.get('transcription'))
+    have = set(allr.get(key, {}).get('reasons', [])) if allr.get(key, {}).get('hash') == digest else set()
+    allr[key] = {'hash': digest, 'reasons': sorted(have | set(reasons))}
+    store.set_meta('accepted_reasons', allr)
+
+
+def accepted_reasons(store, art):
+    entry = (store.get_meta('accepted_reasons') or {}).get(str(art['id'])) or {}
+    return set(entry.get('reasons') or []) if entry.get('hash') == _hash(art.get('transcription')) else set()

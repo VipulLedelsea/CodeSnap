@@ -16,6 +16,11 @@ import sys
 
 
 def main() -> int:
+    try:
+        from core import settings
+        settings.apply_defaults()          # batch processing and the staged pipeline, from the saved settings
+    except Exception as exc:  # noqa: BLE001 - never stop the app from starting over a settings file
+        print(f"(settings not applied: {exc})", file=sys.stderr)
     if "--capture" in sys.argv:
         import hotkey_capture
         # drop --capture, keep the rest (e.g. --single) for hotkey_capture's argparse

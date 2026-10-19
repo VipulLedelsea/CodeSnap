@@ -400,6 +400,12 @@ def _deep_start(slug: str, artifact_ids=None) -> dict:
     client = _program_client(slug)
     with _open_program(slug) as store:
         total = len(artifact_ids) if artifact_ids else len(deepdive.pending(store)) or int(deepdive.program_stale(store))
+        # going into analysis ends the person's review of these files: what the reviewer finds next is a note, not a new question
+        # (bookkeeping only: it must never stop the analysis from starting)
+        try:
+            deepdive.close_review(store, artifact_ids or [a["id"] if isinstance(a, dict) else a for a in deepdive.pending(store)])
+        except Exception:  # noqa: BLE001
+            pass
     with _JOB_LOCK:   # re-check and register atomically: two requests must not both start a job
         job = _DEEP.get(slug)
         if job and job.get("running"):
@@ -484,19 +490,21 @@ def _deep_when_ready(slug: str, artifact_id: int | None = None):
             if slug in _REBUILDS or not api_key_status()["has_key"]:
                 return
             from core.model.line_review import items
-            if artifact_id is not None:
+            from core import batching
+            file_id = None if batching.enabled() else artifact_id    # batch: stop for attention, then run the rest as one batch
+            if file_id is not None:
                 with _open_program(slug) as store:
-                    art = store.artifact(artifact_id)
+                    art = store.artifact(file_id)
                     if not art or not art.get("is_current", 1) or items(store, art):
                         return
-                    if not any(a["id"] == artifact_id for a in deepdive.pending(store)):
+                    if not any(a["id"] == file_id for a in deepdive.pending(store)):
                         return
                 with _JOB_LOCK:
                     if (_DEEP.get(slug) or {}).get("running") or _pipeline_running(slug):
-                        _DEEP_QUEUE.setdefault(slug, set()).add(artifact_id)
+                        _DEEP_QUEUE.setdefault(slug, set()).add(file_id)
                         _deep_watch(slug)
                         return
-                _deep_start(slug, [artifact_id])
+                _deep_start(slug, [file_id])
                 return
             if (_DEEP.get(slug) or {}).get("running"):
                 return
@@ -1391,6 +1399,48 @@ def api_program_import(slug: str, extract: bool = True):
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"Import failed: {exc}"}, status_code=500)
         return {"ok": True, "imported": imported}
+
+
+@app.post("/api/programs/{slug}/artifacts/{artifact_id}/accept-all")
+def api_accept_all_file(slug: str, artifact_id: int):
+    """Accept every flag on one file, of whatever kind, as it is."""
+    from core.model.accept import accept_all
+    with _open_program(slug) as store:
+        art = store.artifact(artifact_id)
+        if art is None:
+            raise HTTPException(status_code=404, detail="No such file in this program.")
+        done = accept_all(store, art)
+    _deep_when_ready(slug)
+    return {"ok": True, **done}
+
+
+@app.post("/api/programs/{slug}/accept-all")
+def api_accept_all_program(slug: str):
+    """Accept every flag on every current file of the program, so nothing holds the analysis back."""
+    from core.model.accept import accept_all
+    count, lines = 0, 0
+    with _open_program(slug) as store:
+        for art in store.artifacts():
+            if (art.get("transcription") or "").strip() and art.get("is_current", 1):
+                done = accept_all(store, art)
+                count += 1
+                lines += len(done["lines"]) + len(done["findings"])
+    _deep_when_ready(slug)
+    return {"ok": True, "files": count, "accepted": lines}
+
+
+@app.get("/api/settings")
+def api_settings():
+    from core import settings
+    return {"batch": os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes")}
+
+
+@app.post("/api/settings")
+def api_settings_set(payload: dict = Body(...)):
+    from core import settings
+    if "batch" in payload:
+        settings.set_batch(bool(payload["batch"]))
+    return api_settings()
 
 
 @app.get("/api/about")

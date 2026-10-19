@@ -801,6 +801,19 @@ async function checkPermissions() {
 checkPermissions();
 
 
+// ── Settings: batch processing (saved; the app opens in this mode) ────────────
+(async function loadBatchSetting() {
+  const box = $("setBatch"); if (!box) return;
+  try { box.checked = !!(await (await fetch("/api/settings")).json()).batch; } catch (e) { return; }
+  box.addEventListener("change", async () => {
+    try {
+      const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ batch: box.checked }) });
+      box.checked = !!(await r.json()).batch;
+      toast(box.checked ? "Batch processing on: half price, results take longer." : "Batch processing off: results come back quickly at full price.");
+    } catch (e) { toast("Couldn't save that setting."); box.checked = !box.checked; }
+  });
+})();
+
 // ── Settings: version and where the data lives (what support asks for) ────────
 (async function loadAbout() {
   const box = $("settingsAbout"); if (!box) return;
@@ -1062,6 +1075,7 @@ function _toConfirm(a) {
   else if (kinds.has("start")) parts.push("Not yet confirmed: that the first line is the top of the file.");
   else if (kinds.has("end")) parts.push("Not yet confirmed: that the last line is the end of the file.");
   if (kinds.has("dup")) parts.push("A definition appears twice; one copy may have been captured twice.");
+  if (kinds.has("concern")) parts.push("The reviewer noted text to double-check; it is listed in the report's open items.");
   return parts.join(" ");
 }
 function _issues(list) {
@@ -1132,6 +1146,7 @@ function _fileRow(a, pendingFor) {
         <span class="pf-state ${cls}">${label}${reading}</span>
         <span class="pf-menu" tabindex="0">⋯<span class="pf-acts">
           <button class="btn-link" data-act="rename" type="button">Rename</button>
+          ${st === "needs_recapture" || note.includes("pf-note soft") ? `<button class="btn-link" data-act="accept-all" type="button">Accept everything as is</button>` : ""}
           <button class="btn-link" data-act="remove" type="button">Remove from analysis</button>
           ${a.pending && a.pending.paused ? `<button class="btn-link" data-act="resume" type="button">Resume capture</button>
           <button class="btn-link" data-act="finish" type="button">Finish &amp; analyse</button>` : ""}
@@ -1318,8 +1333,14 @@ async function fileAction(el, act, targetId) {
     if (act === "review-lines") {
       const base = actionBase;
       const d = await _json(`${base}/artifacts/${id}`);
-      if (!(d.review_lines || []).length) { toast("This warning needs additional screenshots; no single source line can resolve it."); return; }
+      if (!(d.review_lines || []).length) { toast("No single line resolves this warning. Capture the missing part, or choose Accept everything as is."); return; }
       await openLineReview(base, id, d.review_lines);
+      return;
+    } else if (act === "accept-all") {
+      if (!window.confirm(`Accept every warning on ${name} as it is? The file stops needing attention; the report still lists what was accepted.`)) return;
+      await _json(`${actionBase}/artifacts/${id}/accept-all`, { method: "POST" });
+      toast("Accepted as is.");
+      loadProgram();
       return;
     } else if (act === "remove") {
       if (!window.confirm(`Remove ${name} and its capture history from analysis? Its findings, screenshots and old report exports will be removed. Your original source file will stay on disk.`)) return;
