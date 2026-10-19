@@ -193,3 +193,9 @@ def test_the_settings_endpoint_saves_the_batch_choice(monkeypatch, tmp_path):
     assert client.get("/api/settings").json() == {"batch": False}
     assert client.post("/api/settings", json={"batch": True}).json() == {"batch": True}
     assert (tmp_path / "settings.json").read_text().count("true") == 1
+
+
+def test_area_picker_screenshot_is_never_cropped_by_its_frame():
+    css = (Path(__file__).resolve().parent.parent / "src" / "webapp" / "static" / "styles.css").read_text()
+    stage = next(l for l in css.splitlines() if l.startswith(".region-stage {"))
+    assert "flex:0 0 auto" in stage and "max-height" not in stage      # the frame must not shrink below the picture
