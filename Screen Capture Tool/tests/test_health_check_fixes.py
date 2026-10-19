@@ -179,3 +179,35 @@ def test_rows_the_calibration_misplaces_by_a_column_are_not_character_mismatches
     rows = analysis._shifted_origin_rows(path, "\n".join(shown), chk, 29.0)
     assert rows == set(range(10))               # the 130-character row reaches the edge of the 1300 px picture
     assert analysis._shifted_origin_rows(path, "\n".join(shown), chk, None) == set()
+
+
+def test_a_dash_style_doubt_does_not_make_a_line_unreliable_for_the_reviewer():
+    from core import deepdive
+    from core.verify import REASONS
+
+    class Store:
+        def verification(self, _id):
+            return {"flags": [{"line": 2, "reason": REASONS["glyph"]}, {"line": 3, "reason": REASONS["mismatch"]}]}
+
+        def get_meta(self, *_a, **_k):
+            return {}
+
+        def pending_captures(self):
+            return {}
+
+    art = {"id": 1, "name": "a.json", "artifact_type": "other", "transcription": "{\n  \"d\": \"x — y\",\n  \"e\": 1\n}", "language": "json"}
+    q = deepdive.capture_quality(Store(), art)
+    assert q["bad_lines"] == [3]                        # the mismatch is unreliable; the dash doubt is only listed
+    assert any(i["kind"] == "glyph" for i in q["issues"])
+
+
+def test_a_titled_divider_is_recognised_only_when_title_widths_and_dash_ink_agree():
+    from core.colfix import _measured_word, _titled_divider
+    line = "# — Web framework ----------------"
+    row = [(0, 1), (2, 2), (5, 3), (9, 9), (19, 17)]
+    joined = [False, True, False, False, True]
+    assert _titled_divider(line, row, joined)
+    assert not _titled_divider(line, [(0, 1), (2, 2), (5, 4), (9, 9), (19, 17)], joined)     # a title word of another width
+    assert not _titled_divider(line, row, [False, False, False, False, False])                  # dashes that are not one unbroken line
+    assert not _titled_divider("x = a -- b -- c", [(0, 1), (2, 1), (4, 1), (6, 2), (9, 1), (11, 2), (14, 1)], [False] * 7)
+    assert _measured_word("—", 2, joined=True) == "──"

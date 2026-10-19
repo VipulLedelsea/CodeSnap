@@ -238,6 +238,11 @@ def _ranges(nums):
     return [f"{a}" if a == b else f"{a}–{b}" for a, b in out]
 
 
+# Flags that doubt only how a divider or dash is drawn, never what the line says: they stay in the review list but must not mark the
+# line unreliable for the reviewer (which then reports it back as a capture concern and sends a correct file to "needs attention").
+_STYLE_ONLY = {"glyph", "banner", "debris"}
+
+
 def capture_quality(store, art, concerns=None) -> dict:
     """{status: good | rescan | unchecked, issues: [{kind, lines, reason, advice}], bad_lines: set}"""
     from core.model.completeness import check
@@ -257,7 +262,8 @@ def capture_quality(store, art, concerns=None) -> dict:
         if "[CUT OFF]" in l:
             by_kind.setdefault("cut", []).append(i)
     for k, ls in by_kind.items():
-        bad.update(ls)
+        if k not in _STYLE_ONLY:
+            bad.update(ls)
         issues.append({"kind": k, "lines": _ranges(ls), "reason": {"cut": "text cut off at the screen edge",
                                                                    "break": "possible gap between screens",
                                                                    "rows": "line count differs from the screen",

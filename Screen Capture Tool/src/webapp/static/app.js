@@ -1148,6 +1148,7 @@ async function loadProgram(poll) {
   $("progReportDocx").href = `${rb}.docx`;
   $("progReportPdf").href = `${rb}.pdf`;
   $("progReportZip").href = `${rb}.zip`;
+  if (typeof refreshReportGap === "function") refreshReportGap();
   const sb = `/api/programs/${encodeURIComponent(_program)}/executive-summary`;
   $("progSummaryDocx").href = `${sb}.docx`;
   $("progSummaryPdf").href = `${sb}.pdf`;
@@ -1809,6 +1810,25 @@ document.querySelectorAll("#kindSeg .seg-opt").forEach(b => b.addEventListener("
 
 $("progFixBox").addEventListener("toggle", () => { if ($("progFixBox").open) loadCorrections(); });
 $("progReportBox").addEventListener("toggle", () => { if ($("progReportBox").open) loadReportSettings(); });
+// The cover and summary of a report carry placeholders for what only the person knows (client, engagement, owners). Say so next to
+// the download links, and open the form from there, instead of leaving the form three folds down.
+const REPORT_KEY_FIELDS = ["client", "engagement", "app_id", "prepared_by", "firm"];
+async function refreshReportGap() {
+  const program = _program, box = $("progReportGap");
+  if (!box || !program) return;
+  let d;
+  try { d = await _json(`/api/programs/${encodeURIComponent(program)}/report-settings`); } catch (e) { return; }
+  if (program !== _program) return;
+  const labels = Object.fromEntries(d.fields.map(f => [f.key, f.label.replace(/ \(.*\)$/, "")]));
+  const blank = REPORT_KEY_FIELDS.filter(k => !String(d.values[k] || "").trim());
+  box.hidden = !blank.length;
+  if (!blank.length) return;
+  box.innerHTML = `The report still has placeholders for: ${blank.map(k => escapeHtml((labels[k] || k).toLowerCase())).join(", ")}. <button class="btn-link" id="progReportGapOpen" type="button">Fill them in</button>`;
+  $("progReportGapOpen").addEventListener("click", () => {
+    $("progMoreBox").open = true; $("progReportBox").open = true;
+    $("progReportBox").scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+}
 async function loadReportSettings() {
   const program = _program;
   const request = loadReportSettings.sequence = (loadReportSettings.sequence || 0) + 1;
@@ -1826,7 +1846,7 @@ async function loadReportSettings() {
     const body = {};
     box.querySelectorAll("input[data-k]").forEach(i => { body[i.dataset.k] = i.value; });
     try { await _json(`/api/programs/${encodeURIComponent(program)}/report-settings`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (program !== _program || request !== loadReportSettings.sequence) return; toast("Report details saved — the report will be rebuilt."); }
+    if (program !== _program || request !== loadReportSettings.sequence) return; toast("Report details saved — the report will be rebuilt."); refreshReportGap(); }
     catch (e) { if (program !== _program) return; toast(e.message); }
   });
 }
