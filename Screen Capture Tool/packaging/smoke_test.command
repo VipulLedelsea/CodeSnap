@@ -7,6 +7,13 @@ APP="${1:-dist/CodeSnap.app}"
 BIN="$APP/Contents/MacOS/CodeSnap"
 [ -x "$BIN" ] || { echo "No built app at $APP — run packaging/build_app.command first."; exit 1; }
 
+# The app listens on port 8000. If something else already does (a running CodeSnap), every check below would be answered by THAT
+# app and pass or fail for the wrong build, so stop here instead.
+if lsof -iTCP:8000 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "Port 8000 is already in use: quit any running CodeSnap first (osascript -e 'quit app \"CodeSnap\"'), then run this again."
+  exit 2
+fi
+
 WORK="$(mktemp -d)"
 trap 'kill $PID 2>/dev/null; rm -rf "$WORK"' EXIT
 env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN HOME="$WORK/home" CODESNAP_HOME="$WORK/data" CODESNAP_PROGRAMS="$WORK/programs" \
@@ -14,6 +21,10 @@ env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN HOME="$WORK/home" CODESNAP_HOME
 PID=$!
 B=http://127.0.0.1:8000
 for i in $(seq 1 40); do curl -s -o /dev/null "$B/" && break; sleep 0.5; done
+# the answers must come from the process we started, not from some other program on the port
+if ! lsof -tiTCP:8000 -sTCP:LISTEN | grep -qx "$PID"; then
+  echo "FAIL: the process answering on port 8000 is not the app under test ($BIN)"; exit 1
+fi
 fail=0
 check() {  # method path expected-status-pattern
   body="$4"; [ -z "$body" ] && body='{}'
