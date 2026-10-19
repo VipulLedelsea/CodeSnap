@@ -352,13 +352,28 @@ def _joined_of(m, ri):
 
 
 _DASHES = re.compile(r"^[-\u2013\u2014\u2500]{2,}$")
+# a divider's dashes as the reader wrote them: the box-drawing dash of two or more cells is often read as one em dash
+_DASH_WORD = re.compile(r"^[-\u2013\u2014\u2500]+$")
+
+
+def _titled_divider(line, row, joined) -> bool:
+    """A comment divider with a title ("# ── Web framework ────"): the pixel row has the same number of words, every word that is
+    not a run of dashes has exactly the width the row shows, and every dash run is one unbroken line (the box-drawing dash). Only
+    the dashes' kind and length were uncertain, and the pixels settle both."""
+    words = line.split()
+    if len(words) != len(row) or len(words) < 3 or not re.match(r"^\s*(#|//|--|;)", line):
+        return False
+    dashes = [i for i, t in enumerate(words) if _DASH_WORD.match(t) and i > 0]
+    if not dashes or not all(i < len(joined) and joined[i] for i in dashes):
+        return False
+    return all(w == len(t) for i, ((_, w), t) in enumerate(zip(row, words)) if i not in dashes)
 
 
 def _measured_word(word, width, joined=False):
     """Separator rules (------, ======, ******) are where the model miscounts characters; there the pixels decide. A run of
     dashes whose ink is one unbroken line is the box-drawing dash, which a reader tends to take for a hyphen or an em dash;
     its length is the number of cells it covers."""
-    if joined and width >= 2 and _DASHES.match(word):
+    if joined and width >= 2 and _DASH_WORD.match(word):
         return "\u2500" * width
     m = _RULE.match(word)
     if m and 0 < abs(width - len(word)) <= RULE_SLACK:
@@ -514,7 +529,7 @@ def respace(image_path, text: str, *, source_x=None) -> tuple:
             line = plain[li]
             if (m["deco"][ri] or body[li][0] in protected or "\t" in line or len(measured[ri]) != len(line.split())):
                 continue
-            rule = _rule_only(line)
+            rule = _rule_only(line) or _titled_divider(line, measured[ri], _joined_of(m, ri))
             exact = all(w == len(t) or (_DASHES.match(t) and _joined_of(m, ri)[i]) for i, ((_, w), t) in enumerate(zip(measured[ri], line.split())))
             if not (rule or (exact and _anchored(plain, pairset, ri, li) and m["absolute_columns"])):
                 continue
@@ -524,7 +539,7 @@ def respace(image_path, text: str, *, source_x=None) -> tuple:
             new = _rebuild(line, cols, [w for _, w in measured[ri]], _joined_of(m, ri))
             from core.text import normalized_line
             if normalized_line(new) != normalized_line(line) and not rule and not all(
-                    a == b or (_DASHES.match(a) and _DASHES.match(b)) for a, b in zip(new.split(), line.split())):
+                    a == b or (_DASH_WORD.match(a) and _DASH_WORD.match(b)) for a, b in zip(new.split(), line.split())):
                 continue
             if new != line and len(new.split()) == len(line.split()):
                 lines[body[li][0]] = new
