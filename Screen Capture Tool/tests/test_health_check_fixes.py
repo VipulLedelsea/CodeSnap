@@ -235,3 +235,32 @@ def test_a_character_doubt_inside_a_docstring_is_listed_but_does_not_send_the_fi
     assert in_doc["status"] != "rescan" and any(i["kind"] == "prose" for i in in_doc["issues"]) and in_doc["bad_lines"] == []
     in_code = deepdive.capture_quality(store([4]), doc)
     assert in_code["status"] == "rescan" and in_code["bad_lines"] == [4]
+
+
+def test_a_multiplication_sign_the_picture_cannot_tell_from_an_x_is_flagged_in_text_only():
+    from core.verify import _dash_glyph_doubt
+    assert _dash_glyph_doubt('formula_detail=f"${allowable} x {RATE}",')
+    assert _dash_glyph_doubt("area = width x height  # in cells")
+    assert not _dash_glyph_doubt("box = x * 2")
+    assert not _dash_glyph_doubt("y = a x b")                     # no string or comment: not prose
+
+
+def test_an_unconfirmed_start_is_reported_for_the_card_without_holding_up_the_report(tmp_path, monkeypatch):
+    from PIL import Image
+    from core import deepdive
+    from core.model import ProgramStore, edges
+    monkeypatch.setenv("CODESNAP_PROGRAMS", str(tmp_path / "programs"))
+    text = "import os\n\n\ndef run():\n    return os.name\n"
+    with ProgramStore.create("Edges") as store:
+        def file_from(note, name):
+            png = tmp_path / f"{name}.png"
+            Image.new("RGB", (40, 20), (ord(name[0]) % 250, 2, 2)).save(png)
+            evidence = store.add_evidence(png, session_id=store.add_session(mode="burst", note=note))
+            aid = store.add_artifact(name, language="Python", transcription=text, evidence_ids=[evidence])
+            store.set_status(aid, "structured")
+            store.set_verification(aid, {"lines": 5, "flags": []})
+            return store.artifact(aid)
+        unproven = deepdive.capture_quality(store, file_from("", "a.py"))
+        assert unproven["status"] != "rescan" and {i["kind"] for i in unproven["issues"]} >= {"start"}
+        proven = deepdive.capture_quality(store, file_from("top_proven", "b.py"))
+        assert "start" not in {i["kind"] for i in proven["issues"]}

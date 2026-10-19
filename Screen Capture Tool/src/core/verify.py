@@ -34,8 +34,8 @@ REASONS = {
              "over this part more slowly and use Add screenshots",
     "edited": "changed by the compile-fix step after reading; compare it with the screenshot",
     "spacing": "screenshots disagree about this line's spacing; confirm its source margin and compare the saved readings",
-    "glyph": "this divider or banner was not verified against the screenshot: check its dash characters (-, \u2013, \u2014, "
-             "\u2500) and how many there are",
+    "glyph": "the picture cannot tell this dash or symbol from its look-alike (-, \u2013, \u2014, \u2500, x and \u00d7): check it against "
+             "the screenshot, and how many dashes there are",
     "banner": "two dividers sit one directly after the other: the title line of this banner may be missing; compare it with the "
               "screenshots",
     "debris": "a bare comment marker sits next to a divider: part of this banner may be misread or stitched in twice; compare it "
@@ -53,7 +53,9 @@ _DASH_RUN = re.compile(r"[-\u2013\u2014\u2500]{3,}")
 _LONE_DASH_BANNER = re.compile(r"^\s*(?:#|//|--|;)\s*[\u2013\u2014\u2500]{1,2}\s+\S")
 
 
-_PROSE_DASH = re.compile(r"[\u2013\u2014]|(?<![\w.-])\$?\d[\d,.]*-\$?\d[\d,.]*(?![\w-])|(?<=\w) - (?=\w)")
+# a lone "x" between two operands inside text may be the multiplication sign, which the picture cannot tell from the letter
+_PROSE_DASH = re.compile(r"[\u2013\u2014\u00d7]|(?<![\w.-])\$?\d[\d,.]*-\$?\d[\d,.]*(?![\w-])|(?<=\w) - (?=\w)"
+                         r"|(?<=[\w})\]]) x (?=[\w{(\[$])")
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 

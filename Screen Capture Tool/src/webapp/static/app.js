@@ -1018,6 +1018,18 @@ const ISSUE = { cut: "lines cut off at the edge of the screen", break: "a gap be
   compile: "it doesn't compile as read", model: "the reviewer found text that can't be right" };
 const FIXED = { cut: "cut-off lines", break: "gaps between screens", rows: "skipped or extra lines", mismatch: "misread characters",
   partial: "missing start or end", compile: "compile errors", model: "unreadable text" };
+// A finished file whose first or last line nothing has proved is the one place a capture can silently lose lines (most of the lines a
+// capture misses are at its start or end), and a repeated definition is usually a screen stitched in twice. They do not hold up the
+// report, but the file must not look finished without saying so.
+function _toConfirm(a) {
+  const kinds = new Set(((a.quality && a.quality.issues) || []).map(i => i.kind));
+  const parts = [];
+  if (kinds.has("start") && kinds.has("end")) parts.push("Not yet confirmed: that the first line is the top and the last line the end of the file.");
+  else if (kinds.has("start")) parts.push("Not yet confirmed: that the first line is the top of the file.");
+  else if (kinds.has("end")) parts.push("Not yet confirmed: that the last line is the end of the file.");
+  if (kinds.has("dup")) parts.push("A definition appears twice; one copy may have been captured twice.");
+  return parts.join(" ");
+}
 function _issues(list) {
   const kinds = new Set(list.map(i => i.kind));
   const txt = list.filter(i => !(i.kind === "partial" && kinds.has("cut"))).map(i => (ISSUE[i.kind] || i.reason) + _lines(i.lines)).join("; ");
@@ -1075,6 +1087,7 @@ function _fileRow(a, pendingFor) {
   else if (rc && rc.result === "fixed") note = `<div class="pf-note ok">✓ Fixed by the recapture (now v${rc.version})${rc.fixed.length ? " — no more " + [...new Set(rc.fixed.filter(i => !(i.kind === "partial" && rc.fixed.some(j => j.kind === "cut"))).map(i => FIXED[i.kind] || "problems"))].join(" or ") : ""}.</div>`;
   else if (rc && rc.result === "still") note = `<div class="pf-note attn">Updated to v${rc.version}; a few lines still need attention: ${_issues(rc.remaining).toLowerCase()}. <button class="btn-link" data-act="review-lines" type="button">Review with screenshots</button> <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
   else if (st === "needs_recapture") note = `<div class="pf-note attn">${_issues(a.quality.issues)}. <button class="btn-link" data-act="review-lines" type="button">Review with screenshots</button> <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
+  else if (st === "done" && _toConfirm(a)) note = `<div class="pf-note soft">${_toConfirm(a)} <button class="btn-link" data-act="review-lines" type="button">Confirm in the review</button></div>`;
   else if (st === "failed" && a.pending && a.pending.error) note = `<div class="pf-note bad">${escapeHtml(a.pending.error)} <button class="btn-link" data-act="retry" type="button">Retry</button></div>`;
   const reading = st === "reading" && a.pending && a.pending.frames ? ` · ${a.pending.read || 0}/${a.pending.frames}` : "";
   return `

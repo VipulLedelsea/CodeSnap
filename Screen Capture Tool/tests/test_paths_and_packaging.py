@@ -108,3 +108,23 @@ def test_the_page_loads_no_third_party_script_and_the_bundled_mermaid_is_the_che
     assert "sha512-" + base64.b64encode(hashlib.sha512(lib.read_bytes()).digest()).decode() == want
     js = (ROOT / "src" / "webapp" / "static" / "app.js").read_text()
     assert all("integrity=" in tag for tag in re.findall(r"<script src=\"https://[^>]+>", js))   # the exported report pins its copy
+
+
+def test_a_file_scrolled_to_its_top_before_capture_is_not_asked_whether_its_first_line_is_the_top(tmp_path, monkeypatch):
+    """The capture proves the top by scrolling up until the picture stops changing, and records it with the session."""
+    from PIL import Image
+    from core.model import ProgramStore, edges
+    monkeypatch.setenv("CODESNAP_PROGRAMS", str(tmp_path / "programs"))
+    text = "import os\nimport sys\n\nprint(os.name)\n"
+    with ProgramStore.create("Top proof") as store:
+        def file_from(session_note, name):
+            png = tmp_path / f"{name}.png"
+            Image.new("RGB", (40, 20), (len(name) * 7, 1, 1)).save(png)
+            session = store.add_session(mode="burst", note=session_note)
+            evidence = store.add_evidence(png, session_id=session)
+            return store.add_artifact(name, language="Python", transcription=text, evidence_ids=[evidence])
+        proven = store.artifact(file_from("top_proven", "proven.py"))
+        unproven = store.artifact(file_from("", "unproven.py"))
+        assert edges.top_proven(store, proven) and not edges.top_proven(store, unproven)
+        assert "start" not in [f["kind"] for f in edges.flags(store, proven)]
+        assert "start" in [f["kind"] for f in edges.flags(store, unproven)]

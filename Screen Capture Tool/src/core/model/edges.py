@@ -56,6 +56,17 @@ def start_evidence(art) -> str | None:
     return None
 
 
+def top_proven(store, art) -> bool:
+    """Was the file scrolled to its first line before its first screenshot? The capture does that and records it with the session."""
+    try:
+        first = store.artifact_evidence(art["id"])[:1]
+        sid = first[0].get("session_id") if first else None
+        row = store._one("SELECT note FROM capture_session WHERE id = ?", (sid,)) if sid else None
+        return bool(row and "top_proven" in (row["note"] or ""))
+    except Exception:  # noqa: BLE001 - older programs have no such record
+        return False
+
+
 def end_evidence(store, art) -> str | None:
     from .completeness import end_reached
     ver = store.verification(art["id"]) or {}
@@ -81,7 +92,8 @@ def flags(store, art) -> list:
         return []
     out = []
     ver = store.verification(art["id"]) or {}
-    start_known = bool(ver.get("numbers") and ver.get("first_line") == 1) or start_evidence(art) or _confirmed(store, art, 1)
+    start_known = (bool(ver.get("numbers") and ver.get("first_line") == 1) or start_evidence(art) or _confirmed(store, art, 1)
+                   or top_proven(store, art))
     if not start_known:
         out.append({"line": 1, "kind": "start", "reason": START_ASK})
     last = len(lines)
@@ -104,7 +116,8 @@ def settle(store, art, result):
     from .completeness import drop_end_reasons, drop_start_reasons
     lines = (art.get("transcription") or "").splitlines()
     ver = store.verification(art["id"]) or {}
-    if (ver.get("numbers") and ver.get("first_line") == 1) or start_evidence(art) or _confirmed(store, art, 1):
+    if ((ver.get("numbers") and ver.get("first_line") == 1) or start_evidence(art) or _confirmed(store, art, 1)
+            or top_proven(store, art)):
         result = drop_start_reasons(result)
     if lines and (end_evidence(store, art) or _confirmed(store, art, len(lines))):
         result = drop_end_reasons(result)

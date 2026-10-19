@@ -430,6 +430,7 @@ class App:
         if not topcheck.enabled() or self.paused:
             return
         home = None
+        self.top_proven = False
         try:
             grab = (lambda: region_grab(self.region)) if self.region else full_grab
             # the wheel goes to whatever is under the pointer, so put the pointer over the code first and give it back afterwards
@@ -447,6 +448,7 @@ class App:
                     topcheck.move_pointer(home)
                 except Exception:  # noqa: BLE001
                     pass
+        self.top_proven = steps is not None             # the first frame is the top of the file (kept with the capture)
         if steps:
             status.publish("Scrolled to the top of the file so the first line is captured.", "info")
             print(f"[burst] scrolled to the top ({steps} step(s)) before capturing")
@@ -632,7 +634,8 @@ class App:
                         raise ValueError("The recapture target changed. Choose the current file before retrying.")
                 if target:
                     store.set_meta("recapture_target", None)
-                session_id = store.add_session(mode="burst", region=",".join(map(str, self.region)) if self.region else None)
+                session_id = store.add_session(mode="burst", region=",".join(map(str, self.region)) if self.region else None,
+                                         note="top_proven" if getattr(self, "top_proven", False) else "")
                 resumed = bool(target.get("paused"))
                 append_to = target.get("artifact_id") if target.get("mode") == "append" or resumed else None
                 if resumed:   # a paused file grows in place; it is analysed once, when it is finished
@@ -1068,7 +1071,8 @@ class App:
             return
         try:
             with ProgramStore.open(self.program) as store:
-                session_id = store.add_session(mode="burst", region=",".join(map(str, self.region)) if self.region else None)
+                session_id = store.add_session(mode="burst", region=",".join(map(str, self.region)) if self.region else None,
+                                         note="top_proven" if getattr(self, "top_proven", False) else "")
                 status.publish("Adding file to the program model", "tool", stage="save")
                 artifact_id = ingest_capture(store, self.client, imgs, ctx.last_report, session_id=session_id)
                 for r in records:
