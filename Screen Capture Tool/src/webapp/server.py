@@ -1393,6 +1393,16 @@ def api_program_import(slug: str, extract: bool = True):
         return {"ok": True, "imported": imported}
 
 
+@app.get("/api/about")
+def api_about():
+    """What support will ask for: the version and where this install keeps its data."""
+    from core import paths, version
+    from core.model.workspace import DEFAULT_ROOT
+    import os
+    return {"version": version.VERSION, "data": str(paths.data_root()),
+            "programs": str(Path(os.environ.get("CODESNAP_PROGRAMS") or DEFAULT_ROOT).expanduser())}
+
+
 @app.get("/api/permissions")
 def api_permissions():
     """Which of the macOS permissions CodeSnap needs are still missing (null = cannot tell, shown as fine)."""

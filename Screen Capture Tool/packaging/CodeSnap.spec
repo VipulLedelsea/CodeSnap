@@ -8,6 +8,7 @@ import sys
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 sys.path.insert(0, os.path.join(SPECPATH, '..', 'src'))   # so the app's own packages can be listed below
+from core.version import VERSION  # noqa: E402
 
 block_cipher = None
 
@@ -79,8 +80,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'CodeSnap',
         'CFBundleDisplayName': 'CodeSnap',
-        'CFBundleShortVersionString': '1.0.0',
-        'CFBundleVersion': '1.0.0',
+        'CFBundleShortVersionString': VERSION,
+        'CFBundleVersion': VERSION,
         'LSMinimumSystemVersion': '12.0',
         # osascript notifications send Apple events:
         'NSAppleEventsUsageDescription': 'CodeSnap uses AppleScript to show desktop notifications.',

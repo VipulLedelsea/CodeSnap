@@ -86,3 +86,13 @@ def test_the_permissions_endpoints(monkeypatch):
     client = TestClient(server.app)
     assert client.get("/api/permissions").json() == {"screen": False, "accessibility": True, "missing": ["screen"]}
     assert client.post("/api/permissions/open?pane=bogus").status_code == 400
+
+
+def test_about_reports_the_version_the_bundle_is_built_with():
+    from fastapi.testclient import TestClient
+    from core.version import VERSION
+    from webapp import server
+    about = TestClient(server.app).get("/api/about").json()
+    assert about["version"] == VERSION and about["programs"]
+    spec = (ROOT / "packaging" / "CodeSnap.spec").read_text()
+    assert "'CFBundleShortVersionString': VERSION" in spec and "1.0.0'" not in spec.split("info_plist")[1]

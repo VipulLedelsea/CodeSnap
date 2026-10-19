@@ -767,6 +767,17 @@ async function checkPermissions() {
 checkPermissions();
 
 
+// ── Settings: version and where the data lives (what support asks for) ────────
+(async function loadAbout() {
+  const box = $("settingsAbout"); if (!box) return;
+  try {
+    const a = await (await fetch("/api/about")).json();
+    const home = p => String(p || "").replace(/^\/Users\/[^/]+/, "~");
+    box.innerHTML = `CodeSnap ${escapeHtml(a.version)}<br>Saved programs: <code>${escapeHtml(home(a.programs))}</code>`;
+  } catch (e) { /* the line is a convenience */ }
+})();
+
+
 // ── Project mode: pick captured files, build a cross-file dependency map ──────
 function _attr(v){ return String(v||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;"); }
 async function loadProjectPicker() {
@@ -2067,3 +2078,4 @@ async function openLineReview(base, artifactId, queue) {
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && _view === "review" && _program) loadProgram(true);
 });
+
