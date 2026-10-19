@@ -70,7 +70,8 @@ def test_permissions_report_what_is_missing_and_only_open_known_panes(monkeypatc
     from core import permissions
     monkeypatch.setattr(permissions, "screen_recording", lambda: False)
     monkeypatch.setattr(permissions, "accessibility", lambda: None)       # unknown is not "missing"
-    assert permissions.missing() == ["screen"]
+    monkeypatch.setattr(permissions, "input_monitoring", lambda: False)   # the hotkey cannot hear keys without it
+    assert permissions.missing() == ["screen", "input"]
     opened = []
     monkeypatch.setattr(permissions.subprocess, "run", lambda argv, **k: opened.append(argv))
     monkeypatch.setattr(permissions.sys, "platform", "darwin")
@@ -82,9 +83,10 @@ def test_the_permissions_endpoints(monkeypatch):
     from fastapi.testclient import TestClient
     from core import permissions
     from webapp import server
-    monkeypatch.setattr(permissions, "status", lambda: {"screen": False, "accessibility": True})
+    monkeypatch.setattr(permissions, "status", lambda: {"screen": False, "accessibility": True, "input": False})
     client = TestClient(server.app)
-    assert client.get("/api/permissions").json() == {"screen": False, "accessibility": True, "missing": ["screen"]}
+    assert client.get("/api/permissions").json() == {"screen": False, "accessibility": True, "input": False, "missing": ["screen", "input"]}
+    assert permissions.PANES["input"].endswith("Privacy_ListenEvent")
     assert client.post("/api/permissions/open?pane=bogus").status_code == 400
 
 

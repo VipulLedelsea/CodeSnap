@@ -12,14 +12,15 @@ For anyone who just wants to use it. About five minutes. You need a Mac (macOS 1
 
 ## 2. Allow what it needs
 
-CodeSnap shows a banner at the top until these are on. Each button opens the right page of System Settings:
+CodeSnap shows a banner at the top until these three are on. Each button opens the right page of System Settings:
 
 | Permission | Why |
 |---|---|
 | **Screen Recording** | to read the code on your screen |
-| **Accessibility** | so the capture hotkeys work |
+| **Accessibility** | so CodeSnap can work with your editor window |
+| **Input Monitoring** | so the capture hotkeys can hear your key presses |
 
-Turn **CodeSnap** on in both lists, then reopen the app if the banner does not clear by itself.
+Turn **CodeSnap** on in each list. **Input Monitoring only takes effect after you quit and reopen CodeSnap.**
 
 ## 3. Add your API key
 
@@ -50,6 +51,6 @@ Everything lives in **~/CodeSnap**: your programs, scratch screenshots and expor
 ## If something is off
 
 - **"Needs attention" on a file**: open it and choose *Review with screenshots*. CodeSnap lines up the screenshot with the text and asks one question at a time.
-- **Hotkeys do nothing**: Accessibility is off for CodeSnap (see step 2). After an update, remove CodeSnap from the list and add it again.
+- **Hotkeys do nothing**: Input Monitoring is off for CodeSnap (see step 2), or you have not quit and reopened the app since turning it on. After an update that is not signed with a Developer ID, macOS treats the app as new: run `tccutil reset All com.ledelsea.codesnap` in Terminal, reopen CodeSnap and grant the permissions again.
 - **The capture is blank or shows only the desktop**: Screen Recording is off for CodeSnap.
 - **Settings → About** shows the version and where your data is. Include it when you ask for help.
