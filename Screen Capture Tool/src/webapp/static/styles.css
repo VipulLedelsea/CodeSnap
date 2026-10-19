@@ -765,3 +765,21 @@ body.dark .pf-state.attn, body.dark .pf-note.attn, body.dark .pp-head em.attn{ c
 .report-gap{ margin:2px 2px 14px; padding:8px 12px; border-radius:10px; font-size:13px; color:var(--muted);
   background:rgba(193,127,92,.08); border:1px solid rgba(193,127,92,.22); }
 .report-gap[hidden]{ display:none; }
+
+/* Narrow windows (a resized app window, a small laptop): the sidebar becomes a bar across the top and rows wrap instead of
+   squeezing text a word per line or running off the card. */
+@media (max-width:860px){
+  .app{ flex-direction:column; }
+  .sidebar, body.glass .sidebar{ width:auto; flex-direction:row; align-items:center; flex-wrap:wrap; gap:2px 6px; padding:10px 14px;
+    border-right:0; border-bottom:0.5px solid var(--line-soft); }
+  .sidebar .brand{ padding:0 10px 0 0; }
+  .sidebar .brand-logo{ max-width:120px; margin:0; }
+  .sidebar .nav-label{ display:none; }
+  .sidebar .spacer{ flex:1 1 0; }
+  .sidebar .nav-item{ padding:7px 10px; }
+  .main{ padding:18px 16px; max-width:none; }
+  .project-head, .start-row{ flex-wrap:wrap; }
+  .project-head > div:first-child, .start-row > div:first-child{ flex:1 1 100%; }
+  .prog-pick{ flex:1 1 100%; flex-wrap:wrap; }
+  .prog-pick select{ flex:1 1 180px; max-width:none; }
+}

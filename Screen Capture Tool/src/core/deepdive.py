@@ -214,6 +214,10 @@ ADVICE = {
     "model": "the reviewer found text that may be mis-read: review these lines with the screenshots",
     "spacing": "the screenshots disagree about the spacing on these lines: set the source margin again and check them",
     "prose": "this is wording inside a docstring or string; check it against the screen if the exact words matter",
+    "glyph": "the kind of dash (-, \u2013, \u2014) or how many there are cannot be told from the picture: check it against the screen if it matters",
+    "banner": "a divider has no title line between it and the next one: check this part against the screen",
+    "debris": "a stray comment mark sits next to a divider: check this part against the screen",
+    "dup": "this definition appears twice, so one copy may have been captured twice: check it against the screen",
 }
 
 
@@ -276,7 +280,11 @@ def capture_quality(store, art, concerns=None) -> dict:
                                                                    "rows": "line count differs from the screen",
                                                                    "mismatch": "text may be mis-read",
                                                                    "spacing": "spacing differs between screenshots",
-                                                                   "prose": "wording in a docstring or string may differ"}.get(k, "needs a check"),
+                                                                   "prose": "wording in a docstring or string may differ",
+                                                                   "glyph": "dash style or length may differ",
+                                                                   "banner": "divider missing its title",
+                                                                   "debris": "stray mark beside a divider",
+                                                                   "dup": "possibly captured twice"}.get(k, "needs a check"),
                        "advice": ADVICE.get(k, "check these lines against the screen")})
     if art.get("artifact_type") in (None, "code"):
         c = check(text, art["name"], art.get("language") or "")

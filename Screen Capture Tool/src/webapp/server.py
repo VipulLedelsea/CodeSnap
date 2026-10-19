@@ -131,6 +131,26 @@ async def no_cache(request, call_next):
     return resp
 
 
+def _account_name() -> str:
+    """The first name of whoever is signed in to this Mac (shown in the sidebar), or their account name."""
+    import getpass
+    try:
+        import pwd
+        full = (pwd.getpwuid(os.getuid()).pw_gecos or "").split(",")[0].strip()
+    except Exception:  # noqa: BLE001
+        full = ""
+    try:
+        user = getpass.getuser()
+    except Exception:  # noqa: BLE001
+        user = ""
+    return (full.split()[0] if full else user) or "You"
+
+
+def _html_escape(text: str) -> str:
+    import html as _h
+    return _h.escape(text, quote=True)
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     # Stamp asset URLs with the files' mtime so the browser always fetches the
@@ -144,6 +164,8 @@ def index():
     html = html.replace("/static/app.js", f"/static/app.js?v={v}")
     html = html.replace("/static/styles.css", f"/static/styles.css?v={v}")
     html = html.replace("__CODESNAP_TOKEN__", CSRF_TOKEN)
+    name = _account_name()
+    html = html.replace("__CODESNAP_USER__", _html_escape(name)).replace("__CODESNAP_INITIAL__", _html_escape(name[:1].upper() or "?"))
     return html
 
 
