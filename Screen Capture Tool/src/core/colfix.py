@@ -521,22 +521,30 @@ def respace(image_path, text: str, *, source_x=None) -> tuple:
     # Rows between two matched rows with equal counts sit on known screen rows even though no 3-row run anchored them. Such a
     # row is placed by the pixels when it is a divider (its dash count may have been misread, so only its shape must match) or
     # when every word has exactly the width the row shows, so only the leading spaces and gaps were uncertain.
+    candidates = []
     for (r1, l1), (r2, l2) in zip(m["pairs"], m["pairs"][1:]):
-        if not r2 - r1 == l2 - l1 > 1:
-            continue
-        for k in range(1, r2 - r1):
-            ri, li = r1 + k, l1 + k
+        if r2 - r1 == l2 - l1 > 1:
+            candidates += [(r1 + k, l1 + k, False) for k in range(1, r2 - r1)]
+    if m["pairs"]:                                  # the few rows above the first and below the last matched row line up the same way,
+        r0, l0 = m["pairs"][0]                      # but only dividers are rewritten there: nothing anchors an ordinary row's column
+        candidates += [(r0 - k, l0 - k, True) for k in range(1, min(r0, l0, 3) + 1)]
+        r9, l9 = m["pairs"][-1]
+        candidates += [(r9 + k, l9 + k, True) for k in range(1, min(len(measured) - 1 - r9, len(plain) - 1 - l9, 3) + 1)]
+    for ri, li, dividers_only in candidates:
+        if True:
             line = plain[li]
             if (m["deco"][ri] or body[li][0] in protected or "\t" in line or len(measured[ri]) != len(line.split())):
                 continue
             rule = _rule_only(line) or _titled_divider(line, measured[ri], _joined_of(m, ri))
             exact = all(w == len(t) or (_DASHES.match(t) and _joined_of(m, ri)[i]) for i, ((_, w), t) in enumerate(zip(measured[ri], line.split())))
-            if not (rule or (exact and _anchored(plain, pairset, ri, li) and m["absolute_columns"])):
+            if not (rule or (exact and not dividers_only and _anchored(plain, pairset, ri, li) and m["absolute_columns"])):
                 continue
             cols = [c + base for c, _ in measured[ri]]
             if min(cols) < 0:
                 continue
             new = _rebuild(line, cols, [w for _, w in measured[ri]], _joined_of(m, ri))
+            if dividers_only:       # nothing anchors this row's column, so only its dashes are taken from the pixels
+                new = line[:len(line) - len(line.lstrip())] + new.lstrip()
             from core.text import normalized_line
             if normalized_line(new) != normalized_line(line) and not rule and not all(
                     a == b or (_DASH_WORD.match(a) and _DASH_WORD.match(b)) for a, b in zip(new.split(), line.split())):
