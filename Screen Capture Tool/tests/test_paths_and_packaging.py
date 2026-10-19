@@ -199,3 +199,10 @@ def test_area_picker_screenshot_is_never_cropped_by_its_frame():
     css = (Path(__file__).resolve().parent.parent / "src" / "webapp" / "static" / "styles.css").read_text()
     stage = next(l for l in css.splitlines() if l.startswith(".region-stage {"))
     assert "flex:0 0 auto" in stage and "max-height" not in stage      # the frame must not shrink below the picture
+
+
+def test_the_program_page_says_when_files_hold_the_batch():
+    root = Path(__file__).resolve().parent.parent / "src" / "webapp" / "static"
+    assert 'id="progAttn"' in (root / "index.html").read_text()
+    js = (root / "app.js").read_text()
+    assert "renderAttention(d);" in js and "run for every file as one batch" in js and "/accept-all" in js

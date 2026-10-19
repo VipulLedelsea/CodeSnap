@@ -339,3 +339,29 @@ def test_accept_all_clears_structural_findings_and_batch_defers_per_file_starts(
     confirmed.accept_reasons(st, art, ["paragraph 5120 is missing"])
     assert confirmed.accepted_reasons(st, art) == {"paragraph 5120 is missing"}
     assert confirmed.accepted_reasons(st, dict(art, transcription="A\nC")) == set()
+
+
+def test_accept_everything_leaves_a_file_with_every_kind_of_flag_no_longer_needing_attention(tmp_path, monkeypatch):
+    from PIL import Image
+    from core import deepdive
+    from core.model import ProgramStore
+    from core.model.accept import accept_all
+    from core.model.line_review import items
+    monkeypatch.setenv("CODESNAP_PROGRAMS", str(tmp_path / "programs"))
+    cobol = "       ENVIRONMENT DIVISION.\n       DATA DIVISION.\n       PROCEDURE DIVISION.\n           MOVE A TO B [CUT OFF]\n           STOP RUN.\n"
+    with ProgramStore.create("Accept") as store:
+        png = tmp_path / "f.png"
+        Image.new("RGB", (40, 20), (5, 9, 9)).save(png)
+        evidence = store.add_evidence(png, session_id=store.add_session(mode="burst", note=""))
+        aid = store.add_artifact("PAY.cbl", language="COBOL", transcription=cobol, evidence_ids=[evidence])
+        store.set_status(aid, "structured")
+        store.set_verification(aid, {"lines": 5, "flags": [{"line": 3, "reason": "character count differs from the screenshot"}]})
+        before = deepdive.capture_quality(store, store.artifact(aid))
+        assert before["status"] == "rescan" and {"partial", "cut"} <= {i["kind"] for i in before["issues"]}
+        accept_all(store, store.artifact(aid))
+        art = store.artifact(aid)
+        after = deepdive.capture_quality(store, art, deepdive.current_concerns(store, art))
+        assert after["status"] != "rescan", after["issues"]
+        assert not items(store, art)
+        art["transcription"] += "x"                                    # a changed file is a different file: acceptance does not carry over
+        assert deepdive.capture_quality(store, art)["status"] == "rescan"

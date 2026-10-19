@@ -1202,6 +1202,7 @@ async function loadProgram(poll) {
     }
   });
   renderProgress(d);
+  renderAttention(d);
   const recaps = {};
   d.artifacts.forEach(a => { const t = a.pending && a.pending.recapture_of; if (t && d.artifacts.some(x => x.name === t && x.id !== a.id)) recaps[t] = a; });
   const rows = d.artifacts.filter(a => !(a.pending && recaps[a.pending.recapture_of] === a));
@@ -1249,6 +1250,24 @@ async function loadProgram(poll) {
   const sb = `/api/programs/${encodeURIComponent(_program)}/executive-summary`;
   $("progSummaryDocx").href = `${sb}.docx`;
   $("progSummaryPdf").href = `${sb}.pdf`;
+}
+// Files that need a person stop the batch; the analysis and report run once every file is cleared.
+function renderAttention(d) {
+  const box = $("progAttn"); if (!box) return;
+  const need = d.artifacts.filter(a => a.state === "needs_recapture").length;
+  const reading = d.artifacts.filter(a => ["waiting", "reading", "reviewing"].includes(a.state)).length;
+  if (!need) { box.style.display = "none"; box.innerHTML = ""; return; }
+  box.style.display = "block";
+  box.innerHTML = `${need} file${need === 1 ? " needs" : "s need"} your attention. The analysis and report wait until ${need === 1 ? "it is" : "they are"} cleared, then run for every file as one batch${reading ? ` (${reading} still being read)` : ""}. `
+    + `Open a file to review it, or <button class="btn-link" id="progAcceptAll" type="button">accept everything as is</button> for all files.`;
+  $("progAcceptAll").addEventListener("click", async () => {
+    if (!window.confirm(`Accept every warning on all ${d.artifacts.length} files as they are? The analysis then starts; the report still lists what was accepted.`)) return;
+    try {
+      const r = await _json(`/api/programs/${encodeURIComponent(_program)}/accept-all`, { method: "POST" });
+      toast(`Accepted ${r.files} file${r.files === 1 ? "" : "s"} as is.`);
+    } catch (e) { toast(e.message); }
+    _progSig = ""; loadProgram();
+  });
 }
 let _progPoll = null;
 function scheduleProgramPoll(d) {
