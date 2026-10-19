@@ -264,3 +264,20 @@ def test_an_unconfirmed_start_is_reported_for_the_card_without_holding_up_the_re
         assert unproven["status"] != "rescan" and {i["kind"] for i in unproven["issues"]} >= {"start"}
         proven = deepdive.capture_quality(store, file_from("top_proven", "b.py"))
         assert "start" not in {i["kind"] for i in proven["issues"]}
+
+
+def test_a_top_proof_never_cancels_a_structural_finding_that_the_start_is_missing(tmp_path, monkeypatch):
+    from PIL import Image
+    from core import deepdive
+    from core.model import ProgramStore
+    monkeypatch.setenv("CODESNAP_PROGRAMS", str(tmp_path / "programs"))
+    cobol = "       ENVIRONMENT DIVISION.\n       DATA DIVISION.\n       PROCEDURE DIVISION.\n           STOP RUN.\n"
+    with ProgramStore.create("Structure") as store:
+        png = tmp_path / "f.png"
+        Image.new("RGB", (40, 20), (9, 9, 9)).save(png)
+        evidence = store.add_evidence(png, session_id=store.add_session(mode="burst", note="top_proven"))
+        aid = store.add_artifact("PAY.cbl", language="COBOL", transcription=cobol, evidence_ids=[evidence])
+        store.set_status(aid, "structured")
+        store.set_verification(aid, {"lines": 4, "flags": []})
+        q = deepdive.capture_quality(store, store.artifact(aid))
+        assert q["status"] == "rescan" and any(i["kind"] == "partial" for i in q["issues"])

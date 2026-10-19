@@ -116,8 +116,10 @@ def settle(store, art, result):
     from .completeness import drop_end_reasons, drop_start_reasons
     lines = (art.get("transcription") or "").splitlines()
     ver = store.verification(art["id"]) or {}
-    if ((ver.get("numbers") and ver.get("first_line") == 1) or start_evidence(art) or _confirmed(store, art, 1)
-            or top_proven(store, art)):
+    # The scroll-to-top proof is not used here: it shows the editor was at the top, not that the first screenshot shows the top (the
+    # box can start below the first lines), so it must never cancel what the structure of the file says is missing (a COBOL program
+    # with a PROCEDURE DIVISION and no IDENTIFICATION DIVISION).
+    if (ver.get("numbers") and ver.get("first_line") == 1) or start_evidence(art) or _confirmed(store, art, 1):
         result = drop_start_reasons(result)
     if lines and (end_evidence(store, art) or _confirmed(store, art, len(lines))):
         result = drop_end_reasons(result)
