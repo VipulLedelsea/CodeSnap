@@ -30,7 +30,7 @@ def profile(data, region, origin):
         p = Path(directory)/'source.png'; crop.save(p)
         fit,pitch,_ = colfix._grid(colfix._rows(colfix._ink(p)))
     if pitch is None or fit < colfix.MIN_GRID_FIT:
-        raise ValueError('Spacing cannot be measured here. Select only the source pane, with a fixed-width font.')
+        raise ValueError('Spacing cannot be measured here. Drag the box around only the code text (leave out line numbers, the minimap, scrollbars and side panels) and use a fixed-width font.')
     return {'reviewed':True, 'origin':float(origin), 'size':list(crop.size), 'pitch':pitch,
             'reference_sha256':hashlib.sha256(data).hexdigest()}
 

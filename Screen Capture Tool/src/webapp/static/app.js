@@ -537,12 +537,21 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
 
   let box = null, active = false;   // box = selection coords; active = mouse button held
   let marginMode = false, marginX = null, spacingReference = null;
+  let loading = false;              // the screenshot is being taken: nothing drawn now would survive it
+  const note = $("regionNote");
+  // Messages for this dialog go inside it: the page's toast sits underneath the dialog's dark overlay and cannot be seen.
+  const say = (text, bad) => { if (note) { note.textContent = text || ""; note.className = "region-note" + (bad ? " bad" : ""); } };
+  const hintFor = () => !box || useBtn.disabled ? "Drag a box around the code to begin." : marginX !== null ? "Ready: the red line is locked. Press Use this area."
+    : "Optional: press Align red line with code start for exact indentation, or just press Use this area.";
   const marginLine = $("sourceMarginLine"), marginBtn = $("regionMargin"), spacingHint = $("regionSpacingHint");
 
   function openModal() { modal.style.display = "flex"; }
   function closeModal() { modal.style.display = "none"; box = null; active = false; }
 
   async function loadShot(delay) {
+    loading = true; box = null; active = false; sel.style.display = "none"; useBtn.disabled = true;
+    marginMode = false; marginX = null; if (marginLine) marginLine.style.display = "none";
+    say("Getting the screenshot… draw your box once it appears.");
     shot.style.opacity = ".3";
     msg.textContent = delay ? "Bring your code to the front… snapping in " + delay + "s" : "Loading screenshot…";
     msg.style.display = "block";
@@ -554,10 +563,12 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
       spacingReference = res.headers.get("X-CodeSnap-Spacing-Reference");
       const blob = await res.blob();
       shot.src = URL.createObjectURL(blob);
-      shot.onload = () => { shot.style.opacity = "1"; msg.style.display = "none"; };
+      shot.onload = () => { shot.style.opacity = "1"; msg.style.display = "none"; say(hintFor()); };
     } catch (e) {
       msg.textContent = "Couldn't grab the screen — grant Screen Recording permission and retry.";
+      say("Couldn't grab the screen. Turn on Screen Recording for CodeSnap in System Settings, then press Re-take screenshot.", true);
     }
+    loading = false;
     sel.style.display = "none"; useBtn.disabled = true; box = null; active = false;
     marginMode=false; marginX=null; if (marginLine) marginLine.style.display="none";
   }
@@ -573,6 +584,7 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
     sel.style.left = (x - sr.left) + "px"; sel.style.top = (y - sr.top) + "px";
     sel.style.width = w + "px"; sel.style.height = h + "px";
     useBtn.disabled = (w < 8 || h < 8);
+    if (!marginMode && !loading) say(hintFor());
   }
 
   function drawMargin(x) {
@@ -581,10 +593,18 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
   }
 
   stage.addEventListener("mousedown", (e) => {
+    if (loading) { say("Wait for the screenshot, then draw your box.", true); e.preventDefault(); return; }
+    if (marginX !== null && box && !marginMode) {
+      const l = Math.min(box.x0, box.x1), r = Math.max(box.x0, box.x1), t = Math.min(box.y0, box.y1), b = Math.max(box.y0, box.y1);
+      if (e.clientX >= l && e.clientX < r && e.clientY >= t && e.clientY < b) {
+        say("The red line is locked. Press Use this area, or drag outside the box to start over.");
+        e.preventDefault(); return;
+      }
+    }
     if (marginMode && box) {
       const left=Math.min(box.x0,box.x1), right=Math.max(box.x0,box.x1);
       const top=Math.min(box.y0,box.y1), bottom=Math.max(box.y0,box.y1);
-      if (e.clientX < left || e.clientX >= right || e.clientY < top || e.clientY >= bottom) { toast("Move the red line inside the selected code area, then click to lock it."); return; }
+      if (e.clientX < left || e.clientX >= right || e.clientY < top || e.clientY >= bottom) { say("Click inside the box you drew to lock the red line.", true); e.preventDefault(); return; }
       marginX=e.clientX; marginMode=false;
       drawMargin(marginX);
       spacingHint.textContent="Red line locked at the start of the code, before any spaces. Choose Use this area to save. Reset after moving, zooming or scrolling sideways.";
@@ -599,8 +619,7 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
     if (marginMode && box) {
       const left=Math.min(box.x0,box.x1), right=Math.max(box.x0,box.x1);
       const top=Math.min(box.y0,box.y1), bottom=Math.max(box.y0,box.y1);
-      if (e.clientX >= left && e.clientX < right && e.clientY >= top && e.clientY < bottom) drawMargin(e.clientX);
-      else marginLine.style.display="none";
+      drawMargin(Math.max(left, Math.min(right - 1, e.clientX)));
     } else if (active && box) { box.x1 = e.clientX; box.y1 = e.clientY; drawSel(); }
   });
   window.addEventListener("mouseup", () => { active = false; });   // box stays put after release
@@ -618,14 +637,15 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
   $("pickAreaBtn").addEventListener("click", () => { openModal(); loadShot(3); });
   $("regionRetake").addEventListener("click", () => loadShot(3));
   if (marginBtn) marginBtn.addEventListener("click", () => {
-    if (!box || useBtn.disabled) { toast("Draw the source area first."); return; }
+    if (!box || useBtn.disabled) { say("Draw the box around the code first.", true); return; }
     marginMode=true;
+    say("Move the pointer over the code, line the red line up where each line starts, then click to lock it.");
     drawMargin(marginX === null ? Math.min(box.x0,box.x1) : marginX);
     spacingHint.textContent="Move your mouse over the code: the red line follows it. Line it up where each line can begin, before any spaces, then click to lock it. Keep the editor scrolled fully left.";
   });
   $("regionCancel").addEventListener("click", closeModal);
   $("regionUse").addEventListener("click", async () => {
-    if (!box) return;
+    if (!box) { say("Drag a box around the code first.", true); return; }
     const f = fractions();
     const region = f.join(",");
     const settings={region, display: _shotDisplay || _display};
@@ -634,15 +654,28 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
       settings.spacing_origin=(((marginX-r.left)/r.width)-Number(f[0]))/Number(f[2]);
       settings.spacing_reference=spacingReference;
     } else settings.clear_spacing=true;
+    let withoutMargin = "";
     try {
-      await _json("/api/session/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
-    } catch (error) { toast(error.message); return; }
+      useBtn.disabled = true; say("Saving…");
+      try {
+        await _json("/api/session/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
+      } catch (error) {
+        // The red line could not be measured (the box holds more than a block of code, or the screenshot was retaken). The area is
+        // still good to capture: save it without the margin and say so, instead of leaving the person stuck in the dialog.
+        if (marginX === null || !/Spacing cannot be measured|Retake the screenshot/.test(error.message || "")) throw error;
+        withoutMargin = error.message;
+        const plain = { region, display: settings.display, clear_spacing: true };
+        await _json("/api/session/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(plain) });
+        marginX = null;
+      }
+    } catch (error) { useBtn.disabled = false; say(error.message || "Couldn't save the area.", true); return; }
     pickedRegion = region;
     pickedRegionDisplay = _shotDisplay || _display;
     statusEl.textContent = marginX !== null ? "Code area and source margin set" : "Capturing a selected area only — source margin unconfirmed";
     clearBtn.style.display = "";
     closeModal();
-    toast("Code area set — the next capture will use this box on the selected screen.");
+    toast(withoutMargin ? "Area saved without the red line (" + withoutMargin.split(".")[0].toLowerCase() + "). Spacing is checked less strictly."
+                        : "Code area set — the next capture will use this box on the selected screen.");
   });
   (async () => {
     try {

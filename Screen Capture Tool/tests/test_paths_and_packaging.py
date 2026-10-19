@@ -128,3 +128,30 @@ def test_a_file_scrolled_to_its_top_before_capture_is_not_asked_whether_its_firs
         assert edges.top_proven(store, proven) and not edges.top_proven(store, unproven)
         assert "start" not in [f["kind"] for f in edges.flags(store, proven)]
         assert "start" in [f["kind"] for f in edges.flags(store, unproven)]
+
+
+def test_the_area_dialog_can_always_say_what_went_wrong():
+    """The page toast sat under the dialog's overlay, so a failed save looked like nothing happening; the dialog now has its own message
+    line, the disabled button looks disabled, and a margin that cannot be measured does not stop the area from being saved."""
+    css = (ROOT / "src" / "webapp" / "static" / "styles.css").read_text()
+    html = (ROOT / "src" / "webapp" / "static" / "index.html").read_text()
+    js = (ROOT / "src" / "webapp" / "static" / "app.js").read_text()
+    modal_z = int(re.search(r"\.region-modal\s*\{[^}]*z-index:(\d+)", css).group(1))
+    toast_z = int(re.findall(r"\.toast\s*\{\s*z-index:(\d+)", css)[-1])
+    assert toast_z > modal_z
+    assert 'id="regionNote"' in html and ".btn-primary:disabled" in css
+    use = js[js.index('$("regionUse").addEventListener'):]
+    assert "Spacing cannot be measured" in use and "clear_spacing: true" in use          # falls back to saving the area without the margin
+    assert "if (loading)" in js and "The red line is locked" in js                       # no drawing during the countdown; a click in a locked box keeps it
+
+
+def test_the_unmeasurable_margin_message_says_what_to_do():
+    from core import spacing
+    import pytest
+    from PIL import Image
+    import io
+    blank = io.BytesIO()
+    Image.new("RGB", (400, 300), (255, 255, 255)).save(blank, format="PNG")
+    with pytest.raises(ValueError) as why:
+        spacing.profile(blank.getvalue(), [0.1, 0.1, 0.5, 0.5], 0.2)
+    assert "line numbers" in str(why.value) and "fixed-width" in str(why.value)

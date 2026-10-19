@@ -1407,7 +1407,8 @@ def api_about():
 def api_permissions():
     """Which of the macOS permissions CodeSnap needs are still missing (null = cannot tell, shown as fine)."""
     from core import permissions
-    return {**permissions.status(), "missing": permissions.missing()}
+    now = permissions.status()                       # one check, so the two fields can never disagree
+    return {**now, "missing": [name for name, ok in now.items() if ok is False]}
 
 
 @app.post("/api/permissions/open")

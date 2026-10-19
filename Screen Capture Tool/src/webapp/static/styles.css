@@ -792,3 +792,10 @@ body.dark .pf-state.attn, body.dark .pf-note.attn, body.dark .pp-head em.attn{ c
 body.dark .settings-about code{ background:rgba(255,255,255,.08); }
 
 .pf-note.soft{ color:#7B6A58; }
+
+/* The page toast sat under the area dialog's overlay, so errors there were invisible. */
+.toast{ z-index:5000; }
+.region-modal-inner{ overflow:auto; }
+.region-note{ margin:8px 16px 0; font-size:13px; font-weight:500; color:var(--copper-ink,#7A4A2E); min-height:18px; }
+.region-note.bad{ color:#B42318; }
+.btn-primary:disabled, .btn-secondary:disabled{ opacity:.4; cursor:not-allowed; box-shadow:none; filter:grayscale(.3); }
