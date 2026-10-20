@@ -68,7 +68,12 @@ def scroll_to_top(grab, scroll_up, changed, settle=0.35, sleep=time.sleep, scrol
             sleep(settle)
             current = grab()
             if not changed(previous, current):
-                return steps
+                # one more scroll up that must change nothing: a person scrolling down at the same moment can leave two
+                # pictures that match without the file being at its top
+                scroll_up(STEP_LINES[min(n, len(STEP_LINES) - 1)])
+                sleep(settle)
+                if not changed(current, grab()):
+                    return steps
             steps += 1
             previous = current
         return None

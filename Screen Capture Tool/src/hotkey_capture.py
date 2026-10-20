@@ -431,6 +431,7 @@ class App:
             return
         home = None
         self.top_proven = False
+        status.publish("Going to the top of the file. Wait for 'At the top' before you scroll: scrolling now can leave the first lines out.", "info")
         try:
             grab = (lambda: region_grab(self.region)) if self.region else full_grab
             # the wheel goes to whatever is under the pointer, so put the pointer over the code first and give it back afterwards
@@ -449,6 +450,8 @@ class App:
                 except Exception:  # noqa: BLE001
                     pass
         self.top_proven = steps is not None             # the first frame is the top of the file (kept with the capture)
+        if steps is not None:
+            status.publish("At the top of the file. Start scrolling down slowly.", "info")
         if steps:
             status.publish("Scrolled to the top of the file so the first line is captured.", "info")
             print(f"[burst] scrolled to the top ({steps} step(s)) before capturing")

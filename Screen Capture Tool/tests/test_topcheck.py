@@ -56,3 +56,18 @@ def test_a_scrolled_file_still_reaches_the_top_with_the_probe_available():
     grab, up, down, changed, state = _scrollable(250)
     steps = topcheck.scroll_to_top(grab, up, changed, sleep=lambda s: None, scroll_down=down)
     assert state["top"] == 0 and steps >= 1
+
+
+def test_a_person_scrolling_at_the_same_moment_cannot_fake_the_top():
+    """Two matching pictures in a row are not enough: the person's own wheel can leave them equal. One more scroll up must also change nothing."""
+    from core import topcheck
+    state = {"pos": 10, "calls": 0}
+    def grab():
+        return state["pos"]
+    def up(lines):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return                       # the wheel did nothing once (the person's scroll cancelled it): two equal pictures
+        state["pos"] = max(0, state["pos"] - lines)
+    steps = topcheck.scroll_to_top(grab, up, lambda a, b: a != b, sleep=lambda s: None)
+    assert steps is not None and state["pos"] == 0
