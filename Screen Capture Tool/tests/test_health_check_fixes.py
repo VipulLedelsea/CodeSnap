@@ -386,3 +386,39 @@ def test_a_fix_may_not_add_lines_and_the_readers_are_told_to_report_only_what_is
     assert analysis.fix_looks_complete("A\nB\nC", "A\nB\nX") is None
     for prompt in (analysis.EXTRACT_SYSTEM_PROMPT, analysis.EXTRACT_JSON_SYSTEM_PROMPT, analysis.EXTRACT_PLAIN_SYSTEM_PROMPT):
         assert "REPORT ONLY WHAT YOU SEE" in prompt
+
+
+def test_a_scroll_estimate_one_repeated_block_out_is_rejected_and_never_drops_earlier_lines():
+    """RPG routines repeat an 18-line block with only the name, number and limit changed. A pixel scroll estimate can land one block
+    out; the rows it calls repeats then differ from the text only in those few lines. They must still be called different."""
+    from core.analysis import _guided_agrees, _pixel_guided_checked
+    def block(n):
+        return [f"      * CHG-199{n}-10{n}: DISTRICT{n} treasury cap.", f"     C     R0{n}           BEGSR",
+                "     C                   EVAL      Status = 'ACCEPT'", f"     C                   IF        Amount > {18000 + 750 * n}",
+                "     C                   EVAL      Status = 'DEFER'", "     C                   ENDIF",
+                "     C                   IF        Priority = 'TREASURY'", "     C                   EVAL      Status = 'ACCEPT'",
+                "     C                   ENDIF", "      * FIX-1999: old feed supports whole currency units only.",
+                "     C                   IF        Channel = 'BANK-V1'", "     C                   EVAL      LegacyWhole = %INT(Amount)",
+                "     C                   EVAL      ExportAmount = LegacyWhole", "     C                   ENDIF",
+                "      * INC-2002: operators requested account in spool diagnostics.",
+                "     C                   EVAL      Reason = Status + ':' + Account", "     C                   DSPLY                   Reason",
+                "     C                   ENDSR"]
+    merged = block(0) + block(1) + block(2)[:5]
+    screen = block(1)[3:] + block(2) + block(3)[:6]             # the true screen: starts in R01, runs through R02 into R03
+    wrong = (merged + screen[-8:], 8)                           # the estimate: "only 8 rows are new", so 36 rows are repeats
+    assert not _guided_agrees(screen, wrong)
+    overlap = block(2)                                          # a true overlap: the screen's first 18 rows are the text's last 18
+    truth = (block(0) + block(1) + overlap + block(3)[:6], 6)
+    assert _guided_agrees(overlap + block(3)[:6], truth)
+
+
+def test_screens_added_for_the_top_of_a_file_go_above_the_text_not_after_its_end():
+    """Capturing the first screens of a file again (the part a capture missed) must place them before the lines already read, even when
+    one overlapping line was read a little differently by the two screenshots."""
+    from core.analysis import _prepend
+    head = [f"         DFHMDF POS=({n},2),LENGTH={n + 6},INITIAL='LINE NUMBER {n}',ATTRB=ASKIP" for n in range(1, 31)]
+    existing = head + ["         DFHMSD TYPE=FINAL", "         END"]
+    top = ["MUNMAP   DFHMSD TYPE=&SYSPARM,MODE=INOUT,LANG=COBOL,               X", "               STORAGE=AUTO,TIOAPFX=YES"] + list(head)
+    top[12] = top[12].replace("LINE NUMBER", "LlNE NUMBER")   # one overlapping line read a little differently
+    got = _prepend(existing, top)
+    assert got is not None and got[:2] == top[:2] and got[2:] == existing and len(got) == len(existing) + 2

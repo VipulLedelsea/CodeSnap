@@ -2358,7 +2358,9 @@ def _prepend(merged: list, b: list, min_overlap: int = 2) -> "list | None":
             head, tail = head_all[:k], b[-k:]
             if k < 4 and sum(len(_re.sub(r"\W", "", x)) for x in head) < 12:
                 continue
-            if min(_sim(x, y) for x, y in zip(tail, head)) >= 0.85:
+            sims = [_sim(x, y) for x, y in zip(tail, head)]
+            # every line must match (a long overlap may hold one line read a little differently by the two screenshots)
+            if min(sims) >= 0.85 or (k >= 12 and min(sims) >= 0.7 and sum(sims) / k >= 0.95):
                 return b[:-k] + head_all
     return None
 
@@ -2517,13 +2519,28 @@ def _guided_agrees(lines, guided, min_rows=6, thresh=0.8, share=0.8):
     if len(head) < min_rows or len(base) < len(head):
         return True
     tail = base[-len(head):]
-    return sum(1 for a, b in zip(tail, head) if _sim(a, b) >= thresh) >= share * len(head)
+    if sum(1 for a, b in zip(tail, head) if _sim(a, b) >= thresh) < share * len(head):
+        return False
+    # Rows the screenshot calls repeats are the same rows read twice, so they read the same. Blocks that repeat with only a number or a
+    # name changed (R01/R02, a limit of 18750 against 19500) pass a similarity test one block out, and the estimate then lands on the
+    # wrong copy and drops the lines between.
+    def same(a, b):
+        a, b = " ".join(a.replace("[CUT OFF]", "").split()), " ".join(b.replace("[CUT OFF]", "").split())
+        return a == b or a.startswith(b) or b.startswith(a)
+    return sum(1 for a, b in zip(tail, head) if not same(a, b)) <= max(1, len(head) // 25)
 
 
 def _pixel_guided_checked(merged, lines, *args, **kwargs):
     """_pixel_guided, but None (the pixels cannot say) when its claimed repeats do not match the text they would repeat."""
     guided = _pixel_guided(merged, lines, *args, **kwargs)
-    return guided if guided is None or _guided_agrees(lines, guided) else None
+    if guided is None:
+        return None
+    # a new screenshot adds lines after what is already read; it never takes earlier lines away. In repeated blocks a scroll estimate
+    # can be one block out and the screenshot then lands on the wrong copy, silently dropping the lines between.
+    keep = max(0, len(merged) - 4)
+    if [x.rstrip() for x in guided[0][:keep]] != [x.rstrip() for x in merged[:keep]]:
+        return None
+    return guided if _guided_agrees(lines, guided) else None
 
 
 def _pixel_guided(merged, lines, info, at, prev_image, clipped=0):
