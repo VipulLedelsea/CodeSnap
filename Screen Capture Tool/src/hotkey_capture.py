@@ -427,10 +427,12 @@ class App:
     def _reach_top(self, region_grab, full_grab, changed):
         """Scroll the file to its first line before the first frame, so a capture never starts below the head of the file."""
         from core import topcheck, status
+        self.top_proven = False                         # never carry a proof over from the previous capture
         if not topcheck.enabled() or self.paused:
+            if not self.paused:
+                status.publish("CodeSnap leaves your editor alone. Make sure the file is showing its first line, then scroll down slowly.", "info")
             return
         home = None
-        self.top_proven = False
         status.publish("Going to the top of the file. Wait for 'At the top' before you scroll: scrolling now can leave the first lines out.", "info")
         try:
             grab = (lambda: region_grab(self.region)) if self.region else full_grab

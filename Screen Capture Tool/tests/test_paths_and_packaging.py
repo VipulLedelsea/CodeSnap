@@ -191,8 +191,8 @@ def test_the_settings_endpoint_saves_the_batch_choice(monkeypatch, tmp_path):
     monkeypatch.setenv("CODESNAP_HOME", str(tmp_path))
     monkeypatch.setenv("CODESNAP_BATCH", "0")
     client = TestClient(server.app)
-    assert client.get("/api/settings").json() == {"batch": False}
-    assert client.post("/api/settings", json={"batch": True}).json() == {"batch": True}
+    assert client.get("/api/settings").json() == {"batch": False, "scroll_to_top": False}
+    assert client.post("/api/settings", json={"batch": True}).json() == {"batch": True, "scroll_to_top": False}
     assert (tmp_path / "settings.json").read_text().count("true") == 1
 
 
@@ -207,3 +207,15 @@ def test_the_program_page_says_when_files_hold_the_batch():
     assert 'id="progAttn"' in (root / "index.html").read_text()
     js = (root / "app.js").read_text()
     assert "renderAttention(d)" in js and "run for every file as one batch" in js and "/accept-all" in js
+
+
+def test_scroll_to_top_is_a_saved_setting_read_at_each_capture(monkeypatch, tmp_path):
+    from core import settings, topcheck
+    monkeypatch.setenv("CODESNAP_HOME", str(tmp_path))
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("CODESNAP_SCROLL_TO_TOP", raising=False)
+    assert topcheck.enabled() is False                   # in a screen-share the person keeps control of the editor
+    settings.set("scroll_to_top", True)
+    assert topcheck.enabled() is True
+    settings.set("scroll_to_top", False)
+    assert topcheck.enabled() is False

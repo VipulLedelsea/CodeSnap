@@ -14,8 +14,16 @@ PROBE_LINES = 3                                   # a short scroll down that mus
 
 
 def enabled() -> bool:
-    """On by default; never under a test run, which must not scroll a real window."""
-    return os.environ.get("CODESNAP_SCROLL_TO_TOP", "1") != "0" and "PYTEST_CURRENT_TEST" not in os.environ
+    """Off by default: in a screen-share the person must keep full control of their editor. Never under a test run, which must not scroll a real window."""
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return False
+    if "CODESNAP_SCROLL_TO_TOP" in os.environ:
+        return os.environ["CODESNAP_SCROLL_TO_TOP"] != "0"
+    try:
+        from core import settings
+        return bool(settings.get("scroll_to_top", False))        # the person's choice in Settings, read at each capture
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def scroll_wheel_up(lines: int) -> None:
@@ -56,7 +64,7 @@ def move_pointer(point) -> None:
     Quartz.CGAssociateMouseAndMouseCursorPosition(True)
 
 
-def scroll_to_top(grab, scroll_up, changed, settle=0.35, sleep=time.sleep, scroll_down=None):
+def scroll_to_top(grab, scroll_up, changed, settle=0.6, sleep=time.sleep, scroll_down=None):
     """Scroll up until two pictures in a row are the same. Returns the number of scroll steps taken (0: already at the top),
     or None if the top is not proven: the picture never settled (a video, a blinking element), or it did not move when the
     file was scrolled a little down and back, so the wheel may not be reaching the editor (a picture that never changes proves
@@ -80,6 +88,8 @@ def scroll_to_top(grab, scroll_up, changed, settle=0.35, sleep=time.sleep, scrol
 
     steps = up()
     if steps != 0 or scroll_down is None:
+        if steps is not None:
+            sleep(settle)
         return steps
     top = grab()
     scroll_down(PROBE_LINES)
@@ -87,4 +97,7 @@ def scroll_to_top(grab, scroll_up, changed, settle=0.35, sleep=time.sleep, scrol
     moved = changed(top, grab())
     if moved and up() is None:
         return None                      # scrolled away from the top and could not get back to a settled picture
-    return 0 if moved else None
+    if not moved:
+        return None
+    sleep(settle)                         # the editor's smooth-scroll animation must have finished before the first frame is taken
+    return 0

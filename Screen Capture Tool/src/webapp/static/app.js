@@ -814,6 +814,18 @@ checkPermissions();
   });
 })();
 
+(async function loadTopSetting() {
+  const box = $("setTop"); if (!box) return;
+  try { box.checked = !!(await (await fetch("/api/settings")).json()).scroll_to_top; } catch (e) { return; }  // off unless the person turns it on
+  box.addEventListener("change", async () => {
+    try {
+      const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scroll_to_top: box.checked }) });
+      box.checked = !!(await r.json()).scroll_to_top;
+      toast(box.checked ? "CodeSnap will scroll to the top when a capture starts." : "CodeSnap will start from where you are. Scroll to the first line yourself before you start.");
+    } catch (e) { toast("Couldn't save that setting."); box.checked = !box.checked; }
+  });
+})();
+
 // ── Settings: version and where the data lives (what support asks for) ────────
 (async function loadAbout() {
   const box = $("settingsAbout"); if (!box) return;

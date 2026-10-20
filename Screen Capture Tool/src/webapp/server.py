@@ -1455,7 +1455,8 @@ def api_accept_all_program(slug: str):
 @app.get("/api/settings")
 def api_settings():
     from core import settings
-    return {"batch": os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes")}
+    return {"batch": os.environ.get("CODESNAP_BATCH", "0").lower() in ("1", "true", "on", "yes"),
+            "scroll_to_top": bool(settings.get("scroll_to_top", False))}
 
 
 @app.post("/api/settings")
@@ -1463,6 +1464,8 @@ def api_settings_set(payload: dict = Body(...)):
     from core import settings
     if "batch" in payload:
         settings.set_batch(bool(payload["batch"]))
+    if "scroll_to_top" in payload:
+        settings.set("scroll_to_top", bool(payload["scroll_to_top"]))
     return api_settings()
 
 
