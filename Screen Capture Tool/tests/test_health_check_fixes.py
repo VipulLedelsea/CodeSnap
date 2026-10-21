@@ -422,3 +422,28 @@ def test_screens_added_for_the_top_of_a_file_go_above_the_text_not_after_its_end
     top[12] = top[12].replace("LINE NUMBER", "LlNE NUMBER")   # one overlapping line read a little differently
     got = _prepend(existing, top)
     assert got is not None and got[:2] == top[:2] and got[2:] == existing and len(got) == len(existing) + 2
+
+
+def test_a_scroll_gap_is_still_flagged_when_the_final_text_was_respaced_after_stitching():
+    """The gap was recorded with the two lines either side as stitched; the final text can carry them with other leading spaces. The
+    flag must not be lost for want of an exact match (128 missing lines once went unflagged this way)."""
+    from core.verify import _break_line
+    lines = ["PAGE 05", " * CHG-2002-1006: EXCEPTION PAGE 06.", " X070     DFHMDF POS=(11,12),LENGTH=1", "ATTRB=ASKIP"]
+    assert _break_line(lines, "* CHG-2002-1006: EXCEPTION PAGE 06.", "X070     DFHMDF POS=(11,12),LENGTH=1") == 2
+    twice = ["A", "ATTRB=ASKIP", "ATTRB=ASKIP", "B", "ATTRB=ASKIP"]
+    assert _break_line(twice, "ATTRB=ASKIP", "ATTRB=ASKIP") == 2
+    assert _break_line(["A", "B"], "X", "never there at all") is None
+
+
+def test_two_identical_substantial_lines_in_a_row_are_questioned_but_never_changed():
+    from core.verify import identical_neighbours, summarize
+    rows = ["INSERT INTO district_policy VALUES ('VALLEYFORD', 2020, 2750, 35550, 15, 1, 1);",
+            "INSERT INTO district_policy VALUES ('WESTHAVEN', 1996, 2875, 34500, 5, 2, 1);",
+            "INSERT INTO district_policy VALUES ('WESTHAVEN', 1996, 2875, 34500, 5, 2, 1);",
+            "INSERT INTO district_policy VALUES ('WESTHAVEN', 1997, 2875, 34700, 5, 2, 1);"]
+    assert identical_neighbours(rows) == {2, 3}
+    assert identical_neighbours(["END-IF", "END-IF", "           MOVE A TO B", "           MOVE A TO B"]) == set()   # short, ordinary repeats
+    code = "\n".join(rows)
+    out = summarize(code, {l: "verified" for l in rows})
+    assert [f["line"] for f in out["flags"]] == [2, 3] and "neighbour" in out["flags"][0]["reason"]
+    assert code == "\n".join(rows)                                                                                # nothing was rewritten

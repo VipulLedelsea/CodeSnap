@@ -41,6 +41,8 @@ REASONS = {
     "debris": "a bare comment marker sits next to a divider: part of this banner may be misread or stitched in twice; compare it "
               "with the screenshots",
     "pass": "the two captures of this file read this line differently: compare it with the screenshots",
+    "twin": "this line is identical to the line directly beside it: a row may have been read as its neighbour, so compare both with the "
+            "screen",
     "dup": "this definition appears more than once in the file: one copy may be a screenshot stitched in twice; compare it with "
            "the screenshots",
     "syntax": "the source stops parsing here: this line, or one just before it, may be misread, misplaced or missing; compare "
@@ -91,6 +93,19 @@ def repeated_definitions(lines) -> set:
         if key in seen:
             out.add(number)
         seen.add(key)
+    return out
+
+
+def identical_neighbours(lines) -> set:
+    """1-based numbers of both lines of a pair of identical, substantial lines one directly after the other. In a table of
+    near-identical rows (INSERT lines, record layouts) a screenshot that is read with one row taken for its neighbour gives exactly
+    this, and the pixel check cannot tell: both rows have the same width. It is a question for the person, not a change."""
+    out = set()
+    for i in range(1, len(lines)):
+        a, b = lines[i - 1].strip(), lines[i].strip()
+        if a and a == b and len(a) >= 30 and re.search(r"[A-Za-z]", a) and re.search(r"[0-9'\"]", a) \
+                and not _DASH_RUN.search(a) and "[CUT OFF]" not in a:
+            out.update((i, i + 1))
     return out
 
 
@@ -593,6 +608,34 @@ def align_line_evidence(code: str, raw_parts: list, clean_parts: list, metas: li
         notes["source_lines"] = source_lines
 
 
+def _break_line(lines_, prev, nxt):
+    """Index of the first line after a scroll gap. The two lines either side were recorded as stitched; the final text may have
+    re-spaced them since, so compare them without regard to spacing, and when the pair is no longer exact fall back to the line
+    after the gap on its own. A gap is never dropped for want of an exact match."""
+    squash = lambda t: " ".join((t or "").replace("[CUT OFF]", "").split())
+    norm = [squash(l) for l in lines_]
+    nb = [k for k, l in enumerate(norm) if l]
+    p, n = squash(prev), squash(nxt)
+    for j in range(len(nb) - 1):
+        if norm[nb[j]] == p and norm[nb[j + 1]] == n:
+            return nb[j + 1]
+    hits = [k for k in nb if norm[k] == n]
+    prevs = [k for k in nb if norm[k] == p]
+    if p and len(hits) == 1 and len(prevs) == 1:
+        return None                                    # both lines are there, apart: a screenshot filled the gap between them
+    if len(hits) == 1:
+        return hits[0]
+    if hits:
+        pos = {k: j for j, k in enumerate(nb)}
+        near = [k for k in hits if any(norm[x] == p for x in nb[max(0, pos[k] - 3):pos[k]])]
+        return (near or hits)[0]
+    close = [(difflib.SequenceMatcher(None, norm[k], n).ratio(), k) for k in nb if n and norm[k][:12] == n[:12]]
+    if close:
+        return max(close)[1]
+    before = [j for j, k in enumerate(nb[:-1]) if p and norm[k] == p]
+    return nb[before[0] + 1] if len(before) == 1 else None
+
+
 def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: str | None = None, name: str = "") -> dict:
     """Counts for one file plus the lines to look at. `read_code` is the text as read, before any compile fix: lines
     that differ from it are reported as edited."""
@@ -611,6 +654,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
     pass_confirmed = set(notes.get('pass_confirmed') or [])
     repeated = repeated_definitions(final_lines)
     banners = adjacent_dividers(final_lines)
+    twins = identical_neighbours(final_lines)
     debris = banner_debris(final_lines)
     for i, l in enumerate(final_lines, 1):
         if not l.strip():
@@ -640,6 +684,8 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
             s = "confirmed"                  # two independent captures read this line alike (dividers excepted: a wrong glyph repeats)
         if number_in(repeated, i) and s not in ("mismatch", "rows", "cut", "pass"):
             s = "dup"
+        elif i in twins and s not in ("mismatch", "rows", "cut", "pass", "dup"):
+            s = "twin"
         if s in (None, "unchecked", "joined") and (_DASH_RUN.search(l) or _LONE_DASH_BANNER.match(l)):
             # a divider or banner the pixels did not verify: a hyphen, an en or em dash and the box-drawing dash look alike,
             # and the reader's choice and its dash count were wrong on most of these in testing
@@ -670,9 +716,7 @@ def summarize(code: str, statuses: dict, notes: dict | None = None, read_code: s
     lines_ = final_lines
     for b in notes.get("breaks") or []:
         prev, nxt = b if isinstance(b, (list, tuple)) else ("", b)
-        nb = [k for k, l in enumerate(lines_) if l.strip()]
-        i = next((nb[j + 1] for j in range(len(nb) - 1)
-                  if lines_[nb[j]].rstrip() == prev and lines_[nb[j + 1]].rstrip() == nxt), None)
+        i = _break_line(lines_, prev, nxt)
         if i is not None:
             flags.append({"line": i + 1, "text": nxt.strip()[:160], "reason": REASONS["break"]})
     flags.sort(key=lambda f: f["line"])

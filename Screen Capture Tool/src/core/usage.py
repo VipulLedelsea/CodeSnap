@@ -260,7 +260,8 @@ class _TrackedMessages:
             self._tracker.budget.check(self._tracker)
         began = time.monotonic()
         step = step_for(kwargs.get("system"))
-        kwargs = cached_request(kwargs)
+        from core.promptguard import guard_request
+        kwargs = cached_request(guard_request(kwargs))
         try:
             with capture_gate.bound(getattr(self._tracker.budget, "program", None)):
                 msg = self._messages.create(**kwargs)
@@ -284,7 +285,8 @@ class _TrackedMessages:
         if self._tracker.budget is not None:
             self._tracker.budget.check(self._tracker)
         step = step_for(kwargs.get("system"))
-        kwargs = cached_request(kwargs)
+        from core.promptguard import guard_request
+        kwargs = cached_request(guard_request(kwargs))
         return _TrackedStream(self._messages.stream(**kwargs), self._tracker, step, kwargs.get("model"))
 
     def __getattr__(self, name):

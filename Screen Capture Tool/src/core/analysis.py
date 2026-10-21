@@ -2133,9 +2133,11 @@ def _stitch_two(merged: list, b: list, min_overlap: int = 2, thresh: float = 0.8
                     # procedures that end alike), and skipping them would drop real lines.
                     # (A row is "seen" when an earlier row is nearly the same text: a separator comment read with a different
                     # number of dashes is the same line, a procedure header with a different number is not.)
+                    # (a row that differs only in a number is a different row: page X03 is not page X00, however alike the text)
                     unseen = [row for row in new_prefix
                               if len(_re.sub(r"\W", "", row)) >= 6 and " ".join(row.split()) not in old_collapsed
-                              and not any(_difflib.SequenceMatcher(None, _re.sub(r"[\W_]", "", row), _re.sub(r"[\W_]", "", m),
+                              and not any(_re.findall(r"\d+", row) == _re.findall(r"\d+", m) and
+                                          _difflib.SequenceMatcher(None, _re.sub(r"[\W_]", "", row), _re.sub(r"[\W_]", "", m),
                                                                    autojunk=False).ratio() >= 0.93 for m in merged[-200:])]
                     if len(unseen) > max(1, len(new_prefix) // 8):
                         continue
@@ -2423,11 +2425,19 @@ def _bridge(merged: list, incoming: list):
         h = inc.index(head)
         if h < 1:
             continue
+        # A screenshot bridges a gap only if it shows BOTH sides of it: the line before the gap as well as the line after. One that
+        # holds only the far side may be showing another copy of a repeated block (paragraph 5200 for paragraph 5160), and would be
+        # put in the gap in place of the lines that were never seen.
+        near = norm(merged[b-1])
+        starts = [i for i in range(h) if len(near) >= 6 and inc[i] and (inc[i] == near or (
+            '[CUT OFF]' in merged[b-1] and inc[i].startswith(near[:max(6, len(near) - 4)])))]
+        if len(starts) != 1:
+            continue
         ends = [j for j in range(h+1, len(inc)) if inc[j] and after.startswith(inc[j]) and (inc[j] == after or '[CUT OFF]' in incoming[j])]
         if not ends:
             continue
         j = ends[-1]
-        return merged[:b] + incoming[:j] + merged[b+2:], (merged[b-1].rstrip(), merged[b+1].rstrip())
+        return merged[:b] + incoming[starts[0] + 1:j] + merged[b+2:], (merged[b-1].rstrip(), merged[b+1].rstrip())
     return None
 
 

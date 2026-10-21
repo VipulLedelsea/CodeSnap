@@ -219,3 +219,17 @@ def test_scroll_to_top_is_a_saved_setting_read_at_each_capture(monkeypatch, tmp_
     assert topcheck.enabled() is True
     settings.set("scroll_to_top", False)
     assert topcheck.enabled() is False
+
+
+def test_links_for_a_new_window_open_in_the_default_browser_from_the_app_window(monkeypatch):
+    from fastapi.testclient import TestClient
+    from webapp import server
+    opened = []
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url) or True)
+    client = TestClient(server.app)
+    assert client.post("/api/open-in-browser", json={"url": "/api/programs/demo/report.html"}).status_code == 200
+    assert opened[-1].endswith("/api/programs/demo/report.html") and opened[-1].startswith("http://127.0.0.1:")
+    assert client.post("/api/open-in-browser", json={"url": "https://evil.example/"}).status_code == 400
+    assert client.post("/api/open-in-browser", json={"url": "//evil.example/x"}).status_code == 400
+    js = (Path(__file__).resolve().parent.parent / "src" / "webapp" / "static" / "app.js").read_text()
+    assert "openInNewWindow(href)" in js and "/api/open-in-browser" in js

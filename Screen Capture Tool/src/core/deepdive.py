@@ -204,6 +204,7 @@ PROGRAM_TOOL = {
 # ── capture quality ─────────────────────────────────────────────────────────────────────────────────────────────
 
 ADVICE = {
+    "twin": "compare both lines with the screenshot: if one is a repeat of its neighbour, correct it; if the file really has two identical lines, confirm them",
     "cut": "the line runs past the edge of the screen: widen the window or scroll right and capture the rest",
     "break": "the screens did not overlap here, so lines may be missing: scroll back over this part and use Add screenshots on just that part",
     "rows": "the screen shows a different number of lines than was read, so a line may be skipped or added: capture "
@@ -286,7 +287,8 @@ def capture_quality(store, art, concerns=None) -> dict:
                                                                    "glyph": "dash style or length may differ",
                                                                    "banner": "divider missing its title",
                                                                    "debris": "stray mark beside a divider",
-                                                                   "dup": "possibly captured twice"}.get(k, "needs a check"),
+                                                                   "dup": "possibly captured twice",
+                                                                   "twin": "identical to the line beside it: a row may be a misread of its neighbour"}.get(k, "needs a check"),
                        "advice": ADVICE.get(k, "check these lines against the screen")})
     if art.get("artifact_type") in (None, "code"):
         c = check(text, art["name"], art.get("language") or "")

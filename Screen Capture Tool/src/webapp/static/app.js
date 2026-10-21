@@ -722,6 +722,28 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
 })();
 
 
+// The app's own window cannot open a second window: a link meant for a new tab opens in the default browser instead.
+async function openInNewWindow(href) {
+  const inApp = !!(window.pywebview);
+  if (inApp) {
+    try {
+      const path = href.startsWith(location.origin) ? href.slice(location.origin.length) : href;
+      const r = await fetch("/api/open-in-browser", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: path }) });
+      if (r.ok) return;
+    } catch (e) { /* fall through */ }
+  }
+  const w = window.open(href, "_blank", "noopener");
+  if (!w && !inApp) window.location.assign(href);
+}
+document.addEventListener("click", (ev) => {
+  const a = ev.target.closest && ev.target.closest('a[target="_blank"][href]');
+  if (!a || !window.pywebview || ev.defaultPrevented) return;
+  const href = a.getAttribute("href") || "";
+  if (!href.startsWith("/") && !href.startsWith("https://console.anthropic.com/")) return;
+  ev.preventDefault();
+  openInNewWindow(href);
+});
+
 // Viewing a report may need the deep analysis to run first; that is a POST, never a side effect of the GET.
 ["progReportHtml", "progReportDocx", "progReportPdf", "progReportZip"].forEach(id => {
   const el = $(id); if (!el) return;
@@ -731,7 +753,7 @@ let pickedRegion = null;   // "L,T,W,H" fractions string, or null = full screen
     if (el.classList.contains("disabled") || !base || base === href) return;
     ev.preventDefault();
     try { await fetch(`${base}/prepare`, { method: "POST" }); } catch (e) {}
-    if (el.getAttribute("target") === "_blank") window.open(href, "_blank", "noopener"); else window.location.assign(href);
+    if (el.getAttribute("target") === "_blank") openInNewWindow(href); else window.location.assign(href);
   });
 });
 

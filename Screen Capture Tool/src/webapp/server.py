@@ -1452,6 +1452,20 @@ def api_accept_all_program(slug: str):
     return {"ok": True, "files": count, "accepted": lines}
 
 
+@app.post("/api/open-in-browser")
+def api_open_in_browser(payload: dict = Body(...)):
+    """The app's own window cannot open a second window, so a link meant for a new tab (the report, a saved screenshot, a diagram)
+    opens in the person's default browser. Only this app's own pages and the Anthropic console are opened."""
+    import webbrowser
+    target = str(payload.get("url") or "")
+    if target.startswith("/") and not target.startswith("//"):
+        target = f"http://127.0.0.1:{os.environ.get('CODESNAP_PORT', '8000')}{target}"
+    elif not target.startswith("https://console.anthropic.com/"):
+        raise HTTPException(status_code=400, detail="That address cannot be opened from here.")
+    webbrowser.open(target)
+    return {"ok": True}
+
+
 @app.get("/api/settings")
 def api_settings():
     from core import settings
