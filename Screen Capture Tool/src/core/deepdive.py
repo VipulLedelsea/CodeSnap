@@ -225,6 +225,7 @@ ADVICE = {
 REPORT_REASON = {"cut": "lines cut short in the copy provided", "break": "lines may be missing from the copy provided",
                  "rows": "a line may be missing or extra in the copy provided",
                  "mismatch": "characters that may be wrong in the copy provided", "compile": "does not compile as provided",
+                 "twin": "two identical lines in a row that may be one line copied over its neighbour in the copy provided",
                  "model": "text that cannot be right as provided"}
 
 

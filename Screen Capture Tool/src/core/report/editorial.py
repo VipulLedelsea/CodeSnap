@@ -264,8 +264,16 @@ def _short(text, words=SUMMARY_WORDS):
     if len(parts) <= words:
         return text
     cut = " ".join(parts[:words])
-    k = max(cut.rfind(". "), cut.rfind("; "), cut.rfind(", "))
-    return (cut[:k] if k > len(cut) // 2 else cut).rstrip(" ,;:.") + "."
+    # a full stop after e.g., i.e., etc. or vs. is not the end of a sentence
+    stops = [m.start() for m in re.finditer(r"(?<!e\.g)(?<!i\.e)(?<!etc)(?<!vs)\. ", cut)]
+    k = max(stops[-1] if stops else -1, cut.rfind("; "), cut.rfind(", "))
+    whole = k > len(cut) // 2
+    # when no sentence or clause ends inside the limit, say the text was cut instead of ending it with a full stop
+    out = (cut[:k] if whole else cut).rstrip(" ,;:.")
+    while out.count("(") > out.count(")"):                  # never leave a bracket open: back up to before it
+        out = out[:out.rfind("(")].rstrip(" ,;:.")
+        whole = False
+    return out + ("." if whole else "\u2026")
 
 
 

@@ -180,3 +180,14 @@ def test_medium_report_is_the_full_report_cut_to_the_sections_a_delivery_lead_re
     assert not any(h.startswith("Appendix") for h in small) and not any(h.startswith("7.3") for h in small)   # the register is in the full report
     assert len(short) < len(full)
     assert "medium-length report" in " ".join(p.text for p in docx.Document(io.BytesIO(short)).paragraphs)
+
+
+def test_a_shortened_cell_never_ends_inside_an_abbreviation_and_says_when_it_was_cut():
+    from core.report.editorial import _short
+    text = ("Findings show INPUT-FILE and OUTPUT-FILE are read and written across multiple programs (e.g. 301 receipts a day, "
+            "in MUNPAY and MUNREV) and the same record layout is described in more than one source so the copies can drift apart "
+            "over the years as each program is changed on its own schedule by different teams")
+    out = _short(text, 30)
+    assert out.count("(") == out.count(")") and "e.g. 301" not in out
+    assert out.endswith("\u2026") or out.endswith(".")
+    assert _short("one two three four five six seven eight nine ten", 4).endswith("\u2026")        # cut mid-sentence: says so
