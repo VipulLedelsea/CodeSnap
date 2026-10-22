@@ -223,3 +223,16 @@ def test_the_summary_marks_statements_beside_a_gap_and_does_not_claim_there_were
                               {"07_MUNREV.cbl": [(919, 925)], "12_MUNINQ.bms": [(475, 481)]})
     assert level == "medium" and "no reading concerns" not in text and text.startswith("The copy of 2 files has gaps")
     assert _confidence("high", "All good.", {}) == ("high", "All good.")
+
+
+def test_evidence_rows_read_cleanly_in_the_executive_summary():
+    from core import exec_summary as ES
+    index = {"a.cbl:F1": {"lines": [7, 7], "severity": "high", "category": "high",
+                          "statement": "Four IFs are not exclusive, so if several are true (e.g. WS-RESULT is moved four times in a row) the last wins."},
+             "a.cbl:F2": {"lines": [10, 20], "severity": "medium", "category": "data_integrity", "statement": "A short finding."}}
+    s = {"verdict": "Retain", "risks": [{"severity": "High", "text": "x", "facts": ["a.cbl:F1", "a.cbl:F2"]}]}
+    rows = ES.evidence_rows(s, index)
+    assert rows[0][1] == "7" and rows[0][2] == "Finding" and rows[1][1] == "10-20" and rows[1][2] == "Data integrity"
+    assert rows[0][3].count("(") == rows[0][3].count(")") and "e.g.." not in rows[0][3]
+    short = ES.brief("Word " * 80 + "(e.g. something here and more that runs on", 10)
+    assert short.count("(") == short.count(")") and short.endswith(("…", "."))

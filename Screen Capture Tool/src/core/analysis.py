@@ -1649,6 +1649,65 @@ def _align_origins(parts, metas, min_anchored=3, tol=0.25):
     return out
 
 
+def _align_clicked_origins(parts, metas, tol=0.25, max_whole=3):
+    """Screenshots calibrated from the person's one click disagree about column one by whole characters when the click sits near the
+    middle of a character cell: each screenshot rounds it to a cell by its own grid, and some round the other way, so every line of
+    them reads that many columns too far right (or left). Lines the odd screenshot shares with the majority settle it: when they sit one
+    column too far right (or left) by the same whole number the calibrations differ by, the odd ones are moved onto the majority."""
+    evidence = [((m or {}).get("spacing") or {}) for m in metas]
+    clicked = [(i, e["calibration"]["source_x"], (e["calibration"].get("pitch") or 0)) for i, e in enumerate(evidence)
+               if e.get("calibrated") is True and not e.get("auto") and (e.get("calibration") or {}).get("source_x") is not None
+               and i < len(parts)]
+    if len(clicked) < 4:
+        return parts
+    pitch = sorted(c[2] for c in clicked if c[2])[len([c for c in clicked if c[2]]) // 2] if any(c[2] for c in clicked) else None
+    if not pitch:
+        return parts
+    # the largest group of screenshots that agree on column one
+    groups = []
+    for i, x, _ in clicked:
+        for g in groups:
+            if abs(g["x"] - x) <= tol * pitch:
+                g["members"].append((i, x)); break
+        else:
+            groups.append({"x": x, "members": [(i, x)]})
+    main = max(groups, key=lambda g: len(g["members"]))
+    if len(main["members"]) < 0.4 * len(clicked) or len(groups) < 2:
+        return parts
+    consensus = sorted(x for _, x in main["members"])[len(main["members"]) // 2]
+    # what the screenshots agree on, line by line: a line shown by the agreeing majority and by an odd screenshot must sit in the
+    # same column in both when the editor did not move
+    reference = {}
+    for i, _ in main["members"]:
+        for line in parts[i].split("\n"):
+            key = line.strip()
+            if len(key) >= 8 and "[CUT OFF]" not in line:
+                reference.setdefault(key, set()).add(len(line) - len(line.lstrip(" ")))
+    out = list(parts)
+    for g in groups:
+        if g is main:
+            continue
+        for i, x in g["members"]:
+            d = (x - consensus) / pitch
+            whole = round(d)
+            if whole == 0 or abs(d - whole) > tol or abs(whole) > max_whole:
+                continue
+            shared = [(len(l) - len(l.lstrip(" "))) - next(iter(reference[l.strip()])) for l in parts[i].split("\n")
+                      if "[CUT OFF]" not in l and len(l.strip()) >= 8 and len(reference.get(l.strip(), ())) == 1]
+            if len(shared) < 6 or sum(1 for v in shared if v == -whole) < 0.8 * len(shared):
+                continue          # no clear agreement with the majority's own lines: leave this screenshot as it was read
+            lines = []
+            for line in parts[i].split("\n"):
+                lead = len(line) - len(line.lstrip(" "))
+                lines.append(line if not line.strip() or "[CUT OFF]" in line or "\t" in line or lead + whole < 0
+                             else " " * (lead + whole) + line.lstrip(" "))
+            out[i] = "\n".join(lines)
+            placed = evidence[i].get("lead_px")
+            if isinstance(placed, list):
+                evidence[i]["lead_px"] = [None if v is None else max(0, v + whole) for v in placed]
+    return out
+
+
 def _align_auto_frames(parts, metas, tol=0.25, max_whole=12):
     """In free-form code a screenshot whose column one was found from the picture (a line beginning with '*', which only means
     column 7 in fixed-format source: Python's star-unpacking, a JSDoc continuation) sits at the wrong origin, and every line of
@@ -1812,6 +1871,7 @@ def merge_verified(raw_parts: list, metas: list | None = None):
     metas = list(metas or [])
     metas += [{}] * (len(raw_parts) - len(metas))
     raw_parts = _align_origins(raw_parts, metas)
+    raw_parts = _align_clicked_origins(raw_parts, metas)
     if source_mode(raw_parts) != "columns":
         raw_parts = _align_auto_frames(raw_parts, metas)
     raw_parts = _align_pixel_frames(raw_parts, metas)

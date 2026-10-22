@@ -447,3 +447,21 @@ def test_two_identical_substantial_lines_in_a_row_are_questioned_but_never_chang
     out = summarize(code, {l: "verified" for l in rows})
     assert [f["line"] for f in out["flags"]] == [2, 3] and "neighbour" in out["flags"][0]["reason"]
     assert code == "\n".join(rows)                                                                                # nothing was rewritten
+
+
+def test_screenshots_whose_click_calibration_rounded_to_another_character_are_moved_back_only_with_the_lines_to_prove_it():
+    from core.analysis import _align_clicked_origins
+    lines = [f"X{n:02d}R     DFHMDF POS=({n},12),LENGTH=12,ATTRB=(UNPROT,IC)" for n in range(20)]
+    def meta(x):
+        return {"spacing": {"calibrated": True, "calibration": {"source_x": x, "pitch": 12.7}}}
+    good = "\n".join(lines[:12])
+    shifted = "\n".join(" " + l for l in lines[5:15])                         # read one column to the right
+    parts = [good, good, good, good, shifted]
+    metas = [meta(67.1)] * 4 + [meta(54.4)]
+    out = _align_clicked_origins(parts, metas)
+    assert out[:4] == parts[:4] and out[4] == "\n".join(lines[5:15])
+    # the odd screenshot shares too few lines with the majority to be sure: it is left as it was read
+    lonely = "\n".join(" " + l for l in lines[12:20])
+    assert _align_clicked_origins([good] * 4 + [lonely], [meta(67.1)] * 4 + [meta(54.4)])[4] == lonely
+    # too few screenshots to call any of them the odd one: nothing changes
+    assert _align_clicked_origins(parts[:2] + [shifted], [meta(67.1)] * 2 + [meta(54.4)]) == parts[:2] + [shifted]

@@ -274,7 +274,7 @@ def brief(text, limit):
     text = (text or "").strip()
     cites = _CITE.findall(text)
     body = _CITE.sub("", text)
-    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z<])", body)
+    parts = re.split(r"(?<!e\.g\.)(?<!i\.e\.)(?<!etc\.)(?<!vs\.)(?<=[.!?])\s+(?=[A-Z<])", body)
     out, words = [], 0
     for sent in parts:
         n = len(sent.split())
@@ -286,7 +286,10 @@ def brief(text, limit):
     if len(res.split()) > limit * 1.6:
         cut = " ".join(res.split()[:limit])
         k = max(cut.rfind(","), cut.rfind(";"))
-        res = (cut[:k] if k > len(cut) // 2 else cut).rstrip(" ,;:") + "."
+        res = (cut[:k] if k > len(cut) // 2 else cut).rstrip(" ,;:")
+        while res.count("(") > res.count(")"):              # never leave a bracket open
+            res = res[:res.rfind("(")].rstrip(" ,;:")
+        res += "." if k > len(cut) // 2 else "\u2026"       # cut mid-sentence: say so
     res = re.sub(r"\s+([.,;])", r"\1", res)
     kept = " ".join(f"[{n.strip()}:{ids.replace(' ', '')}]" for n, ids in cites) if cites else ""
     return (res + " " + kept).strip() if kept else res
@@ -463,5 +466,10 @@ def evidence_rows(s: dict, index: dict) -> list:
     for text in paragraphs(s):
         cited |= set(cited_ids(text))
     keep = sorted(cited & set(index), key=lambda k: (k.rsplit(":F", 1)[0], int(k.rsplit(":F", 1)[1])))
-    return [[k.rsplit(":F", 1)[0], f"{index[k]['lines'][0]}-{index[k]['lines'][-1]}",
-             index[k].get("severity") or index[k].get("category") or "", brief(index[k].get("statement") or "", 26)] for k in keep]
+    def span(lines):
+        a, b = lines[0], lines[-1]
+        return f"{a}" if a == b else f"{a}-{b}"
+    def kind(f):                                    # the kind of finding in words; a severity word is not a kind
+        c = str(f.get("category") or "")
+        return "Finding" if c.lower() in ("", "high", "medium", "low", "critical") else c.replace("_", " ").capitalize()
+    return [[k.rsplit(":F", 1)[0], span(index[k]["lines"]), kind(index[k]), brief(index[k].get("statement") or "", 26)] for k in keep]

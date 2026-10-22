@@ -28,10 +28,14 @@ def profile(data, region, origin):
     crop = image.crop((l,t,r,b))
     with tempfile.TemporaryDirectory() as directory:
         p = Path(directory)/'source.png'; crop.save(p)
-        fit,pitch,_ = colfix._grid(colfix._rows(colfix._ink(p)))
+        fit,pitch,phase = colfix._grid(colfix._rows(colfix._ink(p)))
     if pitch is None or fit < colfix.MIN_GRID_FIT:
         raise ValueError('Spacing cannot be measured here. Drag the box around only the code text (leave out line numbers, the minimap, scrollbars and side panels) and use a fixed-width font.')
-    return {'reviewed':True, 'origin':float(origin), 'size':list(crop.size), 'pitch':pitch,
+    # Which character cell the click names is decided once, here, on the reference screenshot. Deciding it again on every frame from
+    # that frame's own grid phase flips by a whole character whenever the click sits near the middle of a cell, and every line of
+    # those frames then reads one space too far right.
+    cell = round(float(origin) * crop.size[0] / pitch - phase)
+    return {'reviewed':True, 'origin':float(origin), 'size':list(crop.size), 'pitch':pitch, 'cell':int(cell),
             'reference_sha256':hashlib.sha256(data).hexdigest()}
 
 
@@ -44,7 +48,10 @@ def validate_profile(value):
             or not isinstance(size,list) or len(size)!=2 or any(type(n) is not int or n<=0 for n in size)
             or not isinstance(value.get('reference_sha256'),str) or len(value['reference_sha256'])!=64):
         raise ValueError('The saved source margin is invalid. Select the code area again.')
-    return {k:value[k] for k in ('reviewed','origin','size','pitch','reference_sha256')}
+    out = {k:value[k] for k in ('reviewed','origin','size','pitch','reference_sha256')}
+    if type(value.get('cell')) is int:
+        out['cell'] = value['cell']
+    return out
 
 
 def bind(path, calibration):
@@ -61,8 +68,8 @@ def bind(path, calibration):
                 raise ValueError('The capture size or font changed. Set the source margin again.')
             source_x=calibration['origin']*w
             # a click lands anywhere inside a character cell; the column edge is the nearest grid line
-            cell=source_x/pitch-phase
-            source_x=(round(cell)+phase)*pitch
+            cell=calibration['cell'] if 'cell' in calibration else round(source_x/pitch-phase)
+            source_x=(cell+phase)*pitch
             record.update(confirmed=True,size=[w,h],source_x=source_x,box=[0,0,w,h],pitch=pitch,
                           reference_sha256=calibration['reference_sha256'])
         except (ValueError,KeyError,TypeError) as exc:
