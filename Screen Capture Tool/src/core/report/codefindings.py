@@ -58,9 +58,14 @@ def _same(a, b):
 
 
 def select(store, code_arts, review_facts, total=20, minimum=2):
+    from core import deepdive as DDV
     cands = []
     for art in code_arts:
         seen = set()
+        try:
+            zones = DDV.gap_zones(store, art)
+        except Exception:  # noqa: BLE001 - the tag is an extra; the finding stands without it
+            zones = []
         for f in review_facts.get(art["id"], []):
             if f.get("category") not in CATEGORIES or SUSPECT.search(f["statement"]) or not _defect_like(f):
                 continue
@@ -70,9 +75,10 @@ def select(store, code_arts, review_facts, total=20, minimum=2):
             sc = _score(f)
             if sc >= minimum and key not in seen:
                 seen.add(key)
-                cands.append({"file": art["name"], "text": f["statement"], "lines": f.get("lines"),
+                gap = DDV.in_gap(zones, f.get("lines")) if zones else None
+                cands.append({"file": art["name"], "text": f["statement"] + (GAP_TAG if gap else ""), "gap": gap, "lines": f.get("lines"),
                               "severity": f.get("severity"), "category": f["category"], "score": sc})
-    cands.sort(key=lambda r: (-(r["severity"] == "high"), -r["score"]))
+    cands.sort(key=lambda r: (-(r["severity"] == "high"), bool(r.get("gap")), -r["score"]))
     picked = []
     for c in cands:
         if any(p["file"] == c["file"] and _same(p["text"], c["text"]) for p in picked):
@@ -80,7 +86,7 @@ def select(store, code_arts, review_facts, total=20, minimum=2):
         if c["severity"] != "high" and len(picked) >= total:
             continue
         picked.append(c)
-    picked.sort(key=lambda r: (-(r["severity"] == "high"), -r["score"]))
+    picked.sort(key=lambda r: (-(r["severity"] == "high"), bool(r.get("gap")), -r["score"]))
     return picked
 
 
@@ -99,7 +105,12 @@ def rate(cf):
     return likelihood, impact, why_l, why_i
 
 
+GAP_TAG = " (check against the source: the captured copy has a gap or cut-off here)"
+
+
 def short(text, limit=230):
+    if text.endswith(GAP_TAG):                      # the tag always survives shortening
+        return short(text[:-len(GAP_TAG)], limit) + GAP_TAG
     first = re.split(r"(?<!e\.g\.)(?<!i\.e\.)(?<=[.!?])\s+(?=[A-Z])", text.strip())[0].rstrip(".")
     if re.match(r"(because|since|if|when|although)\b", first, re.I):
         limit = int(limit * 1.8)

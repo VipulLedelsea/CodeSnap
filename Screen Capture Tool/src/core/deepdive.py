@@ -479,6 +479,36 @@ def is_capture_artifact(statement) -> bool:
     return bool(CAPTURE_ARTIFACT.search(statement or ""))
 
 
+GAP_KINDS = ("break", "cut", "rows", "twin")
+
+
+def gap_zones(store, art, pad=3) -> list:
+    """[(first, last)] line ranges of a file where the captured copy is doubtful (a gap between screens, a line cut off, a row count that
+    differs, two identical rows in a row), widened by `pad` lines each side. A review finding about those lines may describe the
+    capture, not the code, so the report marks it. Lines the person has confirmed are not doubtful and are not listed."""
+    from core.verify import REASONS
+    kind_of = {v: k for k, v in REASONS.items()}
+    ver = store.verification(art["id"]) or {}
+    marked = sorted({f["line"] for f in ver.get("flags") or [] if kind_of.get(f.get("reason")) in GAP_KINDS and isinstance(f.get("line"), int)})
+    zones = []
+    for n in marked:
+        a, b = max(1, n - pad), n + pad
+        if zones and a <= zones[-1][1] + 1:
+            zones[-1] = (zones[-1][0], max(zones[-1][1], b))
+        else:
+            zones.append((a, b))
+    return zones
+
+
+def in_gap(zones, lines) -> tuple | None:
+    """The zone a finding's line range touches, or None."""
+    try:
+        a, b = int(lines[0]), int(lines[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    return next((z for z in zones if a <= z[1] and b >= z[0]), None)
+
+
 def review_facts(store) -> dict:
     """{artifact_id: facts} from the line-by-line review, for files whose text has not changed since the review."""
     dd = store.get_meta("deepdive") or {}

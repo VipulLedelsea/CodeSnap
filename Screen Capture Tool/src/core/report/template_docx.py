@@ -520,7 +520,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                    "mit": "Confirm the intended behavior with the business owner, correct the files together, and add a test that runs them as one chain"})
     for cf_ in CF:
         L_, I_, why_l_, why_i_ = CFM.rate(cf_)
-        BR.append({"title": CFM.short(cf_["text"]), "brief": CFM.short(cf_["text"], 120), "cat": "Code finding", "L": L_, "I": I_,
+        BR.append({"title": CFM.short(cf_["text"]), "brief": CFM.short(cf_["text"], 120), "gap": bool(cf_.get("gap")), "cat": "Code finding", "L": L_, "I": I_,
                    "score": L_ * I_,
                    "why_L": why_l_,
                    "why_I": why_i_,
@@ -655,9 +655,10 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     poor_fc = [r_ for r_ in FCR if r_[3] and r_[3] >= 4]
     reviewed = [x for x in code_arts if str(x["id"]) in DD]
     n_facts = sum(len((DD.get(str(x["id"])) or {}).get("facts") or []) for x in reviewed)
-    lead = P.sentence([f"{_lc(r_.get('brief') or r_['title'])}" for r_ in BR[:3]])
+    headline_rows = ([r_ for r_ in BR if not r_.get("gap")] or BR)[:3]       # a finding beside a capture gap does not head the report
+    lead = P.sentence([f"{_lc(r_.get('brief') or r_['title'])}" for r_ in headline_rows])
     findings_txt = [
-        ({1: "One problem stands out: ", 2: "Two problems stand out: "}.get(len(BR[:3]), "Three problems stand out: ")
+        ({1: "One problem stands out: ", 2: "Two problems stand out: "}.get(len(headline_rows), "Three problems stand out: ")
          + lead + ". " if BR else "")
         + (DA.fragmentation_sentence(DM) + " " if DA.fragmentation_sentence(DM) else "")
         + f"Provisional overall condition is {RT.words(health_c)} (1 is best, 5 is worst)"
@@ -693,7 +694,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
          f"receives security fixes, so its known weaknesses stay open until it is upgraded or replaced.")
         if eol else "Supportability (Section 6.2). No end-of-support technology was identified; support for unconfirmed versions remains to confirm.",
         (f"Risk (Section 9). {sum(1 for r_ in BR if r_['rating'] == 'High')} of {len(BR)} risks are rated High. The highest: "
-         + P.sentence([f"{_lc(r_.get('brief') or r_['title'])} ({r_['score']} of 25)" for r_ in BR[:3]]) + ".") if top else "",
+         + P.sentence([f"{_lc(r_.get('brief') or r_['title'])} ({r_['score']} of 25)" for r_ in headline_rows]) + ".") if top else "",
         f"Effort (Section 12.4). The unvalidated planning scenario is {EST['low']}–{EST['high']} person-weeks across "
         f"{len(EST['lines'])} skill set(s); {elapsed}" + (f", because the order of work and the {cyc}, not the effort, set "
         f"the pace" if phased else "") + ". "

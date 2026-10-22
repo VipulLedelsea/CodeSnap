@@ -11,6 +11,31 @@ from datetime import datetime
 DRAFT_NOTE = "DRAFT: first-pass review, not yet checked line by line."
 
 
+def _confidence(level, words, zones):
+    """The confidence line, corrected when files have gaps: "no reading concerns" cannot stand beside a copy with missing lines."""
+    if not zones:
+        return level, words
+    words = re.sub(r"\s*,?\s*with no (?:reading|capture) concerns,?", "", words, flags=re.I)
+    files = ", ".join(sorted(zones)[:4]) + (" and more" if len(zones) > 4 else "")
+    note = f"The copy of {len(zones)} file{'s' if len(zones) != 1 else ''} has gaps or cut-off lines ({files}), so findings near them are unconfirmed. "
+    return ("low" if level == "high" and len(zones) > 2 else "medium" if level == "high" else level), note + words
+
+
+def _gap_items(store, redact):
+    """One line per file whose captured copy has a gap or cut-off: what the summary says about those lines is unconfirmed."""
+    from core import deepdive
+    out = []
+    for art in store.artifacts():
+        try:
+            zones = deepdive.gap_zones(store, art)
+        except Exception:  # noqa: BLE001
+            continue
+        if zones:
+            spans = ", ".join(f"{a}\u2013{b}" for a, b in zones[:4]) + (" and more" if len(zones) > 4 else "")
+            out.append(redact(f"Capture {art['name']} again around lines {spans}: the copy has a gap or cut-off there, so findings near those lines are unconfirmed"))
+    return out
+
+
 def content(store):
     """The summary as plain, finished text ready to lay out, or None when there is no current summary."""
     from core import deepdive
@@ -30,6 +55,27 @@ def content(store):
         value = ES.plain_refs(value or "", index, limit=3)
         return one_line(redact(clean(ES.clean_style(value), verbatim=verbatim)).strip())
 
+    # a statement that rests on lines beside a gap or cut-off in the copy may describe the capture, not the code: say so
+    zones = {}
+    for art in store.artifacts():
+        try:
+            z = deepdive.gap_zones(store, art)
+        except Exception:  # noqa: BLE001
+            z = []
+        if z:
+            zones[art["name"]] = z
+    cite = re.compile(r"([\w.\-]+\.\w{2,6}) lines? (\d+)(?:\s*[-\u2013]\s*(\d+))?")
+
+    def beside_gap(*texts):
+        for t in texts:
+            for m in cite.finditer(t or ""):
+                a = int(m.group(2)); b = int(m.group(3) or a)
+                if any(a <= hi and b >= lo for lo, hi in zones.get(m.group(1), [])):
+                    return True
+        return False
+    UNCONFIRMED = " (unconfirmed: the copy has a gap or cut-off beside these lines)"
+    mark = lambda t, *also: t + UNCONFIRMED if beside_gap(t, *also) else t
+
     order = {k: i for i, k in enumerate(ES.SEVERITIES)}
     risks = sorted(summary.get("risks") or [], key=lambda r: order.get(r.get("severity"), 9))
     where = lambda r: one_line(redact(ES._where(r.get("facts") or [], index, limit=3).strip(" ()")))
@@ -46,13 +92,13 @@ def content(store):
         "draft": DRAFT_NOTE if deepdive.report_stage(store) == "draft" else "",
         "verdict": summary["verdict"],
         "provisional": bool(summary.get("provisional")),
-        "needed": [text(x).rstrip(" .") for x in (summary.get("needed_to_finalize") or []) if str(x).strip()],
-        "what": text(summary.get("what_it_does")),
-        "reasons": [text(r) for r in summary.get("reasons") or [] if str(r).strip()],
-        "risks": [(r.get("severity") or "Medium", text(r.get("text")), where(r)) for r in risks],
+        "needed": [text(x).rstrip(" .") for x in (summary.get("needed_to_finalize") or []) if str(x).strip()] + _gap_items(store, redact),
+        "what": mark(text(summary.get("what_it_does"))),
+        "reasons": [mark(text(r)) for r in summary.get("reasons") or [] if str(r).strip()],
+        "risks": [(r.get("severity") or "Medium", mark(text(r.get("text")), where(r)), where(r)) for r in risks],
         "lifecycle": (bool(summary.get("lifecycle_verified")), text(summary.get("lifecycle"))),
         "decision": text(summary.get("decision")),
-        "confidence": (summary.get("confidence") or "low", text(summary.get("confidence_and_coverage"))),
+        "confidence": _confidence(summary.get("confidence") or "low", text(summary.get("confidence_and_coverage")), zones),
         "evidence": [[redact(c) if isinstance(c, str) else c for c in row] for row in ES.evidence_rows(summary, index)],
         "report_file": f"{slug}_assessment_report.docx",
     }

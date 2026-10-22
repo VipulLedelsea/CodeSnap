@@ -191,3 +191,42 @@ def test_a_shortened_cell_never_ends_inside_an_abbreviation_and_says_when_it_was
     assert out.count("(") == out.count(")") and "e.g. 301" not in out
     assert out.endswith("\u2026") or out.endswith(".")
     assert _short("one two three four five six seven eight nine ten", 4).endswith("\u2026")        # cut mid-sentence: says so
+
+
+def test_a_finding_beside_a_capture_gap_is_tagged_and_does_not_head_the_report(tmp_path, monkeypatch):
+    from core import deepdive
+    from core.report import codefindings as CFM
+    from core.verify import REASONS
+
+    class Store:
+        def verification(self, art_id):
+            return {"flags": [{"line": 478, "reason": REASONS["break"]}, {"line": 900, "reason": REASONS["glyph"]}]}
+    art = {"id": 1, "name": "12_MUNINQ.bms"}
+    zones = deepdive.gap_zones(Store(), art)
+    assert zones == [(475, 481)]                                                  # a dash glyph doubt is not a gap
+    assert deepdive.in_gap(zones, [478, 478]) and deepdive.in_gap(zones, [470, 476]) and not deepdive.in_gap(zones, [100, 120])
+    tagged = CFM.short("Line 478 holds a standalone clause. It has no field name" + CFM.GAP_TAG, 40)
+    assert tagged.endswith(CFM.GAP_TAG)
+
+    monkeypatch.setattr(deepdive, "gap_zones", lambda store, art, pad=3: zones if art["name"] == "12_MUNINQ.bms" else [])
+    facts = {1: [{"category": "defect", "severity": "high", "statement": "Line 478 holds a standalone clause with no field name.",
+                  "lines": [478, 478], "basis": "observed"}],
+             2: [{"category": "defect", "severity": "high", "statement": "Amounts are ABS-ed before the overrides, so a reversal is lost.",
+                  "lines": [40, 41], "basis": "observed"}]}
+    picked = CFM.select(None, [art, {"id": 2, "name": "MUNPAY.cbl"}], facts)
+    assert picked[0]["file"] == "MUNPAY.cbl" and not picked[0].get("gap")           # the clean finding ranks first
+    gap = next(c for c in picked if c["file"] == "12_MUNINQ.bms")
+    assert gap["text"].endswith(CFM.GAP_TAG) and gap["gap"] == (475, 481)
+
+
+def test_the_medium_report_points_at_what_it_cut_without_touching_scores():
+    import docx as _docx
+    from core.report.medium import _point_to_full_report
+    d = _docx.Document()
+    d.add_paragraph("The other 15 are listed in Appendix H.")
+    d.add_paragraph("every item in 7.3 can be fixed; register in 8.3; see 12.2 and (4.20 against 2.70 in 12.2)")
+    _point_to_full_report(d, keep_numbers={"12.2", "1.1"})
+    t = [p.text for p in d.paragraphs]
+    assert t[0] == "The other 15 are listed in Appendix H of the full report."
+    assert "7.3 of the full report" in t[1] and "8.3 of the full report" in t[1] and "12.2 of the full report" not in t[1]
+    assert "(4.20 against 2.70 in 12.2)" in t[1]

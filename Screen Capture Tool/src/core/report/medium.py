@@ -35,6 +35,25 @@ def _number(text):
     return m.group(1) if m else ""
 
 
+_APPENDIX = re.compile(r"\bAppendix ([A-I])\b(?! of the full report)")
+_SECTION_REF = re.compile(r"(?<![\d.\w-])((?:Sections? |in |see |\()(\d{1,2}\.[1-9]))(?![\d]|\.\d|\w)")
+
+
+def _point_to_full_report(doc, keep_numbers):
+    """What the medium report cut away is still in the full report: a reference to it says so instead of pointing at nothing."""
+    def fix(text):
+        text = _APPENDIX.sub(r"Appendix \1 of the full report", text)
+        def section(m):
+            return m.group(0) if m.group(2) in keep_numbers else m.group(0) + (" of the full report" if not m.group(1).startswith("(") else " (full report)")
+        return _SECTION_REF.sub(section, text)
+    paragraphs = list(doc.paragraphs) + [p for t in doc.tables for r in t.rows for c in r.cells for p in c.paragraphs]
+    for para in paragraphs:
+        for run in para.runs:
+            new = fix(run.text)
+            if new != run.text:
+                run.text = new
+
+
 def cut(full: bytes) -> bytes:
     doc = Document(io.BytesIO(full))
     body = doc.element.body
@@ -83,6 +102,7 @@ def cut(full: bytes) -> bytes:
                     first = next(more.iter(qn("w:t")))
                     first.text = f"{len(rows) - MAX_ROWS} more rows are in the full report."
                     el.addnext(more)
+    _point_to_full_report(doc, keep_numbers=KEEP_H2 | KEEP_H1)
     for el in list(body):                              # contents lines that name a section that is gone
         if el.tag == qn("w:p") and _text(el).strip() in dropped_titles and _style(el) not in ("Heading1", "Heading2"):
             body.remove(el)

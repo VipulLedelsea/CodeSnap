@@ -215,3 +215,11 @@ def test_a_bare_insert_is_named_by_its_column_and_row():
     assert "<insert" in t.cell(1, 1).text and "information here>" in t.cell(1, 1).text
     assert "<insert information here>" not in t.cell(1, 1).text and "retention requirement" in t.cell(1, 1).text.lower()
     assert t.cell(1, 2).text == "Public"
+
+
+def test_the_summary_marks_statements_beside_a_gap_and_does_not_claim_there_were_no_reading_concerns():
+    from core.report.summary_doc import _confidence
+    level, text = _confidence("high", "All 12 submitted files were reviewed with no reading concerns, giving high coverage.",
+                              {"07_MUNREV.cbl": [(919, 925)], "12_MUNINQ.bms": [(475, 481)]})
+    assert level == "medium" and "no reading concerns" not in text and text.startswith("The copy of 2 files has gaps")
+    assert _confidence("high", "All good.", {}) == ("high", "All good.")
