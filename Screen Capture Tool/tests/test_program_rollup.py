@@ -25,10 +25,11 @@ def test_observations_are_sorted_into_flow_risk_debt_and_nothing():
 
 def test_single_file_findings_inside_a_program_finding_are_absorbed():
     out = CF.program_items(OBS)
-    single = [{"file": "07_R.cbl", "lines": [13, 14], "text": "x"},        # inside REV's cited lines
+    single = [{"file": "07_R.cbl", "lines": [13, 14], "text": "REV expects the district first in the record layout"},   # inside REV's lines, same point
+              {"file": "07_R.cbl", "lines": [13, 14], "text": "The waiver is subtracted even when no fee applied"},       # same lines, a different defect
               {"file": "07_R.cbl", "lines": [200, 210], "text": "y"},      # elsewhere in the same file
               {"file": "06_P.cbl", "lines": [], "text": "z"}]
-    assert [f["text"] for f in CF.absorb(single, out)] == ["y", "z"]
+    assert [f["text"] for f in CF.absorb(single, out)] == ["The waiver is subtracted even when no fee applied", "y", "z"]
 
 
 def test_program_rating_grows_with_files_and_severity():

@@ -524,6 +524,11 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     from . import codefindings as CFM
     CF = CFM.select(store, code_arts, DDV.review_facts(store))
     PI = CFM.program_items((DPROG or {}).get("observations"))
+    from core import report_review as RRV0
+    _verdict0 = RRV0.verdicts(store)
+    if _verdict0:     # an observation the code check judged unsupported is not reported, so it must not absorb findings either
+        PI["risks"] = [it_ for it_ in PI["risks"] if (_verdict0.get(RRV0.claim_key(RRV0.risk_text(
+            CFM.short(it_["title"] + ": " + it_["text"], 170), list(it_["files"])))) or {}).get("verdict") != "unsupported"]
     CF = CFM.absorb(CF, PI)           # a finding the whole-program review already covers is stated once, for the program
     for it_ in PI["risks"]:
         L_, I_, why_l_, why_i_ = CFM.program_rating(it_)

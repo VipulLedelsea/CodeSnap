@@ -170,7 +170,8 @@ def program_items(observations):
         text = f"{o.get('title', '')}. {o.get('statement', '')}"
         files = list(o.get("files") or _spans(o.get("cites")))
         item = {"title": o.get("title", "").rstrip("."), "text": o.get("statement", ""), "files": files,
-                "spans": _spans(o.get("cites")), "basis": o.get("basis"),
+                "spans": {} if o.get("source") else _spans(o.get("cites")),     # a structural check names its own lines and covers no other finding
+                "basis": o.get("basis"),
                 "severity": "high" if SERIOUS.search(text) else "medium", "weight": len(files), "cites": o.get("cites") or []}
         if FLOW.search(o.get("title", "")):
             flow = item
@@ -182,15 +183,18 @@ def program_items(observations):
 
 
 def absorb(single, program):
-    """Single-file findings whose lines fall inside a program-level observation are covered by it; the rest remain."""
-    spans = [it["spans"] for it in program["risks"] + program["debt"]]
+    """Single-file findings whose lines fall inside a program-level observation that also says the same thing are covered by
+    it; the rest remain. Overlapping lines alone are not enough: an observation about one rule must not hide a different
+    defect that happens to sit in the same stretch of code."""
+    items = program["risks"] + program["debt"]
 
     def covered(f):
         lines = f.get("lines") or []
         if not lines:
             return False
         a, b = lines[0], lines[-1]
-        return any(a <= hi and b >= lo for s in spans for lo, hi in s.get(f["file"], []))
+        return any(a <= hi and b >= lo and _same(it["title"] + " " + it["text"], f["text"])
+                   for it in items for lo, hi in it["spans"].get(f["file"], []))
     return [f for f in single if not covered(f)]
 
 
