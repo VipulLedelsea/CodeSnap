@@ -60,7 +60,7 @@ def _same(a, b):
     return bool(ids) or len(ta & tb) / min(len(ta), len(tb)) >= 0.5
 
 
-PER_FILE = 4
+PER_FILE = 5
 _RANK = {"high": 2, "medium": 1}      # within a file a medium finding is chosen before a low or unrated one of a higher score
 
 

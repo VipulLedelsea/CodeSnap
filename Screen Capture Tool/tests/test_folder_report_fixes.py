@@ -111,3 +111,29 @@ def test_a_long_aside_does_not_hide_the_defect_when_a_finding_is_shortened():
     assert "SUNSET" in CFM.short(text, 120)
     assert "SUNSET" in editorial._short(text, 22)
     assert "(and repeated" in editorial._short(text, 60)            # nothing is dropped when the whole text fits
+
+
+def _cobol(limits):
+    paras = "".join(f"       {2000 + i * 10}-{n}.\n           IF WS-AMOUNT < {lo}\n               MOVE \"REVIEW\" TO WS-RESULT\n           END-IF\n           IF WS-AMOUNT > {hi}\n               MOVE \"HOLD\" TO WS-RESULT\n           END-IF.\n"
+                    for i, (n, lo, hi) in enumerate(limits))
+    return ("       IDENTIFICATION DIVISION.\n       PROGRAM-ID. X.\n       PROCEDURE DIVISION.\n       1000-MAIN.\n"
+            "           COMPUTE WS-AMOUNT = WS-AMOUNT * -1\n           STRING IN-RECEIPT WS-RESULT INTO OUTPUT-RECORD\n           END-STRING\n           WRITE OUTPUT-RECORD.\n" + paras)
+
+
+def test_same_named_paragraphs_with_different_thresholds_are_reported():
+    from core import ruledrift
+    names = ["ASHFORD", "BRIARWOOD", "CEDARVALE", "DUNWICH"]
+    a = _cobol([(n, 100 + 25 * i, 10000 + 2500 * i) for i, n in enumerate(names)])
+    b = _cobol([(n, 125 + 25 * i, 12500 + 2500 * i) for i, n in enumerate(names)])
+    obs = [o for o in ruledrift.threshold_drift(_Texts(**{"A.cbl": a, "B.cbl": b}))]
+    assert len(obs) == 1 and "A.cbl" in obs[0]["title"] and "ASHFORD: below 100 and above 10000 in A.cbl" in obs[0]["statement"]
+    same = ruledrift.threshold_drift(_Texts(**{"A.cbl": a, "C.cbl": a}))
+    assert same == []
+
+
+def test_an_amount_calculated_but_not_in_the_written_record_is_reported():
+    from core import ruledrift
+    obs = ruledrift.unwritten_amounts(_Texts(**{"A.cbl": _cobol([("ASHFORD", 1, 2)])}))
+    assert len(obs) == 1 and "WS-AMOUNT" in obs[0]["title"] and "IN-RECEIPT" in obs[0]["statement"]
+    kept = _cobol([("ASHFORD", 1, 2)]).replace("IN-RECEIPT WS-RESULT", "IN-RECEIPT WS-RESULT WS-AMOUNT")
+    assert ruledrift.unwritten_amounts(_Texts(**{"A.cbl": kept})) == []
