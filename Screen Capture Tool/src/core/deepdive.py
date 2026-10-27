@@ -43,7 +43,15 @@ capture_concerns.
 WORKING ORDER
 1. Read every line once to identify structure: sections, paragraphs, functions, files, screens, calls, etc.
 2. Re-read section by section, recording facts.
-3. Do a cross-cutting pass for security weaknesses, data loss or corruption paths, and defects.
+3. Do a cross-cutting pass for security weaknesses, data loss or corruption paths, and defects. For each of these, decide whether this file shows it and record a fact only when the code does (cite the lines; do not assume):
+   - Commit scope: a commit, rollback or audit write that also commits or undoes work the caller or an earlier step did, or two updates that belong together committed separately.
+   - Output completeness: a screen, message, log line, report or export record that leaves out a key value the code has in hand (an amount, an identifier, a status), or one that is written even when the step failed.
+   - Width and truncation: a field, parameter, screen or record layout narrower than the value it carries (CHAR(n), substring, pad, a fixed-length map field). State both widths when the file shows them. Also money cut to whole units, and a sign or rounding step that runs before or after a limit check it should precede or follow.
+   - Sensitive values: account numbers, personal identifiers or amounts written to logs, spool, job output or messages.
+   - Reruns and restarts: output opened in append or always-new mode so a rerun duplicates or fails, a replay or retry that is not safe to repeat, and every route or branch re-reading the whole input.
+   - Failure paths: an error, a bad return code or a failed write that still ends with success, or a job step that continues after a failed one.
+   - Validity and authority: an eligibility, relief or policy record with no end date or expiry check, and operator, override or user fields accepted without a visible authorization check.
+   - Duplicated rules: the same rule coded separately for each district, route or channel where the copies differ in a value (a threshold, a rate, a flag).
 4. Complete the rollup fields (technology_signals through maintainability_signals).
 5. Run the VERIFICATION checklist, then call record_analysis exactly once.
 OUTPUT: call record_analysis once with these fields.
