@@ -203,7 +203,7 @@ def inputs(store) -> dict:
     given = {k: s[k] for k in BUSINESS_FIELDS if (s.get(k) or "").strip()}
     arts = [a for a in store.artifacts() if (a.get("transcription") or "").strip()]
     reviewed = set(D.current_reviews(store))
-    prog = store.get_meta("deepdive_program") or {}
+    prog = D.program_view(store)
     return {
         "coverage": {"files_received": len(arts), "files_reviewed": sum(1 for a in arts if str(a["id"]) in reviewed),
                      "files_not_reviewed": sorted(a["name"] for a in arts if str(a["id"]) not in reviewed),

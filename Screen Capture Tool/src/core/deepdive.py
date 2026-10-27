@@ -1108,6 +1108,18 @@ def synthesize(store, client, model=None) -> dict:
     return {"observations": obs, "ran_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "model": model}
 
 
+def program_view(store, stored=None) -> dict:
+    """The cross-file observations: the model's, if they are current, plus the field-width conflicts read from the structure."""
+    from core import widths
+    base = dict(stored if stored is not None else (store.get_meta("deepdive_program") or {}))
+    try:
+        extra = widths.conflicts(store)
+    except Exception:  # noqa: BLE001 - an extra check must never break the report
+        extra = []
+    base["observations"] = list(base.get("observations") or []) + extra
+    return base
+
+
 def program_basis(store) -> str:
     """What the cross-file observations were drawn from: every file's current analysis."""
     dd = current_reviews(store)

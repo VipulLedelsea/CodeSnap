@@ -568,7 +568,7 @@ def api_program_deepdive_status(slug: str):
         job = _DEEP.get(slug) or {"running": False}
         return {"job": {k: v for k, v in job.items() if k != "started"},
                 "pending": [a["name"] for a in deepdive.pending(store)],
-                "files": store.get_meta("deepdive") or {}, "program": store.get_meta("deepdive_program") or {},
+                "files": store.get_meta("deepdive") or {}, "program": deepdive.program_view(store),
                 "rescan": deepdive.rescan_requests(store)}
 
 

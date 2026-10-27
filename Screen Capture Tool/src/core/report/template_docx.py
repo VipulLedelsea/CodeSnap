@@ -461,7 +461,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     from . import dataarch as DA
     from core import deepdive as DDV
     DD = DDV.current_reviews(store)
-    DPROG = {} if DDV.program_stale(store) else (store.get_meta("deepdive_program") or {})
+    DPROG = DDV.program_view(store, {} if DDV.program_stale(store) else None)
     RQ = DDV.rescan_requests(store)
     DM = DA.model(store, AM)
     HP = DA.hosting_platforms(AM, DM)
