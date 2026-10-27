@@ -864,6 +864,9 @@ def analyse_file(store, client, art, model=None, review=True, review_model=None,
             return read_window(a, mid, step, only) + read_window(mid + 1, b, step, only)
         d_ = _tool(msg_, ANALYSIS_TOOL["name"])
         if d_ is None or not isinstance(d_.get("facts"), list):
+            if b - a + 1 > MIN_SPLIT:       # a smaller window often succeeds where the whole one returned nothing usable
+                mid = (a + b) // 2
+                return read_window(a, mid, step, only) + read_window(mid + 1, b, step, only)
             raise ValueError('Detailed source analysis did not return its required result; review remains incomplete.')
         if (a, b) != (1, n_lines):     # a fact belongs to the window its first line is in
             d_["facts"] = [f for f in d_["facts"] if isinstance(f, dict) and isinstance(f.get("lines"), list) and f["lines"]

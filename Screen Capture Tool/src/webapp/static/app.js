@@ -1176,6 +1176,7 @@ function _fileRow(a, pendingFor) {
   else if (rc && rc.result === "fixed") note = `<div class="pf-note ok">✓ Fixed by the recapture (now v${rc.version})${rc.fixed.length ? " — no more " + [...new Set(rc.fixed.filter(i => !(i.kind === "partial" && rc.fixed.some(j => j.kind === "cut"))).map(i => FIXED[i.kind] || "problems"))].join(" or ") : ""}.</div>`;
   else if (rc && rc.result === "still") note = `<div class="pf-note attn">Updated to v${rc.version}; a few lines still need attention: ${_issues(rc.remaining).toLowerCase()}. <button class="btn-link" data-act="review-lines" type="button">Review with screenshots</button> <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
   else if (st === "needs_recapture") note = `<div class="pf-note attn">${_issues(a.quality.issues)}. <button class="btn-link" data-act="review-lines" type="button">Review with screenshots</button> <button class="btn-link" data-act="add" type="button">Capture those lines</button></div>`;
+  else if (st === "done" && a.deep_error) note = `<div class="pf-note bad">The detailed review of this file did not finish, so its findings are incomplete. <button class="btn-link" data-act="rerun-deep" type="button">Run the review again</button></div>`;
   else if (st === "done" && _toConfirm(a)) note = `<div class="pf-note soft">${_toConfirm(a)} <button class="btn-link" data-act="review-lines" type="button">Confirm in the review</button></div>`;
   else if (st === "failed" && a.pending && a.pending.error) note = `<div class="pf-note bad">${escapeHtml(a.pending.error)} <button class="btn-link" data-act="retry" type="button">Retry</button></div>`;
   const reading = st === "reading" && a.pending && a.pending.frames ? ` · ${a.pending.read || 0}/${a.pending.frames}` : "";
@@ -1461,6 +1462,9 @@ async function fileAction(el, act, targetId) {
     } else if (act === "finish") {
       const r = await _json(`${actionBase}/artifacts/${id}/finish`, { method: "POST" });
       toast(r.note || "Analysing what was captured.");
+    } else if (act === "rerun-deep") {
+      await _json(`${actionBase}/deepdive?artifact_id=${id}`, { method: "POST" });
+      toast("Running the detailed review again.");
     } else if (act === "retry") {
       const r = await _json(`${actionBase}/artifacts/${id}/retry`, { method: "POST" });
       toast(r.note || "Queued.");

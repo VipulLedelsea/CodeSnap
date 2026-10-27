@@ -356,6 +356,11 @@ def _artifact_summary(store, artifact: dict) -> dict:
             out["deep"] = {"facts": len(dd.get("facts") or []), "current": dd.get("hash") == deepdive._hash(artifact.get("transcription"))}
         out["recapture"] = deepdive.recapture_outcome(store, artifact, q)
     out["state"] = deepdive.file_state(store, artifact, q)
+    failed = store._one("SELECT error FROM run WHERE artifact_id = ? AND step = 'deepdive' AND ok = 0 AND error LIKE '%remains incomplete%' "
+                        "AND id > COALESCE((SELECT MAX(id) FROM run WHERE artifact_id = ? AND ok = 1 AND step LIKE 'deepdive%'), 0) "
+                        "ORDER BY id DESC LIMIT 1", (artifact["id"], artifact["id"]))
+    if failed:
+        out["deep_error"] = failed["error"]
     if out["state"] == "done" and _review_in_progress(store, artifact):
         out["state"] = "reviewing"
     rebuilding = _REBUILDS.get(store.info["slug"])

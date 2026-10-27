@@ -37,6 +37,19 @@ UNKNOWN = "Unknown"
 PLACEHOLDER = "<insert {} information here>"
 
 
+def _review_security_sentence(store, code_arts) -> str:
+    """The line-by-line review records security observations the rule-based scan does not (data written to logs or spool,
+    unchecked input, unhandled read failures). Say how many, so "no security issues" is never read as covering them."""
+    from core import deepdive as DDV
+    facts = [f for x in code_arts for f in DDV.review_facts(store).get(x["id"], []) if f.get("category") == "security"]
+    if not facts:
+        return ""
+    by = {k: sum(1 for f in facts if f.get("severity") == k) for k in ("critical", "high", "medium", "low")}
+    counts = ", ".join(f"{n} {k}" for k, n in by.items() if n) or f"{len(facts)}"
+    return (f"The line-by-line review also recorded {len(facts)} security observation{'s' if len(facts) != 1 else ''} in the source ({counts}), "
+            f"such as data written to logs or messages and input fields without visible validation; they are not part of the counts above. ")
+
+
 def _specific(label):
     t = re.sub(r"\s*\([^)]*\d[^)]*\)", "", " ".join((label or "").split())).strip(" :-")
     t = t[:70].rstrip()
@@ -687,6 +700,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
             ("high", sec.get("high", 0)), ("medium", sec.get("medium", 0))) if n] or ["no critical, high or medium"]) + " security issues"
         + (", none of them critical" if not sec.get("critical") and (sec.get("high") or sec.get("medium")) else "")
         + (f". The most serious: {P.sentence([P.tagged(w, sv) for w, sv in worst3])}" if worst3 else "") + ". "
+        + _review_security_sentence(store, code_arts)
         + ("Personal data is referenced in the supplied source. The findings describe where that data may be exposed. " if pii else "")
         + "This does not establish that the application is secure. Calculation and control defects found by the line-by-line review are recorded in 3.6 and 8.6. "
         + f"Security posture is rated {RT.words(sec_c)}, derived from the control ratings in 8.1.",

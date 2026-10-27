@@ -81,7 +81,9 @@ def summary(store):
     blockers += [a['name'] + ': current technical review pending' for a in source if str(a['id']) not in reviewed]
     blockers += [name + ': transcription benchmark needs refresh' for name in benchmark['stale']]
     source_names = {a['name'] for a in source}
-    unmeasured = [name for name in benchmark['unmeasured'] if name in source_names]
+    from core.model.folder_import import is_exact
+    exact_names = {a['name'] for a in arts if is_exact(store, a)}     # read straight from a folder: the text is the file
+    unmeasured = [name for name in benchmark['unmeasured'] if name in source_names and name not in exact_names]
     if unmeasured:
         blockers.append(f"{len(unmeasured)} source file{'s' if len(unmeasured) != 1 else ''} ({', '.join(unmeasured[:3])}{f', and {len(unmeasured) - 3} more' if len(unmeasured) > 3 else ''}): source completeness remains unconfirmed "
                         "(no current original-file benchmark)")
@@ -103,6 +105,8 @@ def summary(store):
 
 
 def blocks(store):
+    from core.model.folder_import import is_exact
+    by_name_all = {a['name']: a for a in store.artifacts()}
     q = summary(store)
     b = q['benchmark']
     result = [{'type': 'p', 'text': QUALIFICATION}, {'type': 'h', 'text': 'Transcription validation'},
@@ -114,9 +118,11 @@ def blocks(store):
                     'rows': [[r['artifact'], str(r['expected']), str(r['actual']), str(r['matched'])] for r in b['files']]}]
         exact = sum(r['exact_layout'] for r in b['files']); all_lines = sum(r['expected_layout'] for r in b['files'])
         result.append({'type': 'p', 'text': f'Exact layout: {exact:,} of {all_lines:,} source rows match ({100*exact/max(1,all_lines):.4f}%). Differences include spacing and are not all syntax defects. Fixed-column acceptance remains a separate reviewer decision.'})
+    elif b['unmeasured'] and all(is_exact(store, by_name_all.get(n)) for n in b['unmeasured']):
+        result.append({'type': 'p', 'text': 'The source files were read directly from the supplied folder, not from screenshots, so the text is the original file and no transcription benchmark is needed.'})
     else:
         result.append({'type': 'p', 'text': 'No current original-file benchmark was supplied. Source completeness is unconfirmed; capture checks and compilation do not establish it.'})
-    if b['stale'] or b['unmeasured']:
+    if b['stale'] or [n for n in b['unmeasured'] if not is_exact(store, by_name_all.get(n))]:
         result.append({'type': 'p', 'text': 'Benchmark coverage remains incomplete. Stale or unmeasured results are excluded from the totals.'})
     if q['blockers']:
         result += [{'type': 'h', 'text': 'Open source validation items'}, {'type': 'bullets', 'items': q['blockers']}]
