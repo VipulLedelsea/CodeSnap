@@ -75,3 +75,29 @@ def test_receipt_width_differing_between_files_is_reported():
     assert obs[0]["files"][:2] == ["B.pli", "SCR.bms"] and "16 characters" in obs[0]["statement"]
     same = [dict(e) for e in ents if e["id"] in (1,)] + [dict(ents[0], id=9, artifact_id=2, name="IN-RECEIPT")]
     assert widths.conflicts(_Stub(same)) == []
+
+
+class _Texts:
+    def __init__(self, **files):
+        self._f = files
+
+    def artifacts(self):
+        return [{"id": i, "name": n, "transcription": t} for i, (n, t) in enumerate(self._f.items(), 1)]
+
+
+def test_many_steps_rereading_the_same_input_are_reported():
+    from core import jclreads
+    steps = "".join(f"//X{i:02d} EXEC PGM=MUNREV\n//PAYIN DD DSN=SYNTH.POST.OUT,DISP=SHR\n//PAYOUT DD DSN=SYNTH.D{i}.REVIEW,DISP=(MOD,CATLG)\n" for i in range(6))
+    obs = jclreads.conflicts(_Texts(**{"job.jcl": "//JOB1 JOB\n" + steps}))
+    assert len(obs) == 1 and "6 steps" in obs[0]["title"] and "SYNTH.POST.OUT" in obs[0]["title"]
+    few = "//JOB1 JOB\n" + "".join(f"//X{i} EXEC PGM=A\n//IN DD DSN=SAME,DISP=SHR\n" for i in range(3))
+    assert jclreads.conflicts(_Texts(**{"few.jcl": few})) == []
+
+
+def test_commit_inside_a_called_routine_is_reported():
+    from core import commitscope
+    src = "SVC: PROC(REQUEST, RESULT);\n  EXEC SQL INSERT INTO AUD VALUES (1);\n  EXEC SQL COMMIT;\n  RETURN;\n"
+    obs = commitscope.conflicts(_Texts(**{"svc.pli": src}))
+    assert len(obs) == 1 and "caller" in obs[0]["title"] and "line 3" in obs[0]["statement"]
+    top = "MAIN: PROC;\n  EXEC SQL COMMIT;\n"
+    assert commitscope.conflicts(_Texts(**{"main.pli": top})) == []

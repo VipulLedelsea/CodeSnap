@@ -43,7 +43,7 @@ def _defect_like(f):
         return False
     if f.get("severity") in ("high", "medium"):
         return True
-    if THEMES.search(f["statement"]) and f.get("category") in ("defect", "data_integrity", "error_handling", "control_flow", "calculation"):
+    if THEMES.search(f["statement"]) and f.get("category") in ("defect", "data_integrity", "error_handling", "control_flow", "calculation", "data_write"):
         return True     # a known defect pattern (waiver, truncation, a return code that does not stop the job) needs no severity
     return sum(1 for p in SIGNALS if p.search(f["statement"])) >= 2
 
@@ -147,7 +147,7 @@ FLOW = re.compile(r"end[- ]to[- ]end|overall flow|how the (program|application|s
 AGREE = re.compile(r"\b(agree|agrees|are the same|is the same|same (values?|thresholds?|precision|baselines?)|match(es)?)\b", re.I)
 CONFLICT = re.compile(r"\b(differ|differs|different|differently|shifted|mismatch|misaligned|disagree|would read|never|bypass|"
                       r"ignores?|not (managed|defined|tested|checked|handled|applied)|undefined|truncat\w*|only the first|"
-                      r"first \d+ characters|although|no way|would be triggered)\b", re.I)
+                      r"first \d+ characters|although|no way|would be triggered|re-?reads?|caller'?s work)\b", re.I)
 SERIOUS = re.compile(r"different record layout|would read|bypass|never|no way|ignores|would be triggered|first \d+ characters|"
                      r"differ\w* from file to file", re.I)
 _CITE_LINES = re.compile(r"^(?P<file>.+?) lines (?P<a>\d+)\D+(?P<b>\d+)$")
