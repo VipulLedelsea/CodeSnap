@@ -90,6 +90,9 @@ def flags(store, art) -> list:
     lines = (art.get("transcription") or "").splitlines()
     if not lines:
         return []
+    from .folder_import import is_exact
+    if is_exact(store, art):           # read from disk: the whole file is there, there is no screen edge to ask about
+        return []
     out = []
     ver = store.verification(art["id"]) or {}
     start_known = (bool(ver.get("numbers") and ver.get("first_line") == 1) or start_evidence(art) or _confirmed(store, art, 1)
@@ -114,6 +117,9 @@ def settle(store, art, result):
     if not result.get("partial"):
         return result
     from .completeness import drop_end_reasons, drop_start_reasons
+    from .folder_import import is_exact
+    if is_exact(store, art):
+        return drop_end_reasons(drop_start_reasons(result))
     lines = (art.get("transcription") or "").splitlines()
     ver = store.verification(art["id"]) or {}
     # The scroll-to-top proof is not used here: it shows the editor was at the top, not that the first screenshot shows the top (the

@@ -1309,7 +1309,7 @@ let _progPoll = null;
 function scheduleProgramPoll(d) {
   if (_progPoll) clearTimeout(_progPoll);
   const busy = d.progress && (d.progress.to_go > 0) || d.session_running || d.worker_running || d.recapture_target;
-  _progPoll = setTimeout(() => { _progPoll = null; if (_view === "review" && _program && !document.hidden) loadProgram(true); else scheduleProgramPoll(d); }, busy ? 3000 : 10000);
+  _progPoll = setTimeout(() => { _progPoll = null; if (_view !== "codesnap" && _program && !document.hidden) loadProgram(true); else scheduleProgramPoll(d); }, busy ? 3000 : 10000);
 }
 let _display = "", _shotDisplay = "";
 async function loadDisplays() {
@@ -2033,26 +2033,62 @@ function _viewStore(v) {
   return v || "codesnap";
 }
 function setView(v) {
-  _view = v === "review" ? "review" : "codesnap";
+  _view = v === "review" || v === "folder" ? v : "codesnap";
   _viewStore(_view);
+  const program = _view !== "codesnap";           // the folder review is the program review with files read from disk
   document.querySelectorAll(".sidebar .nav-item[data-view]").forEach(n => n.classList.toggle("active", n.dataset.view === _view));
-  $("viewReview").style.display = _view === "review" ? "" : "none";
-  $("viewCodesnap").style.display = _view === "codesnap" ? "" : "none";
-  $(_view === "review" ? "startSlotReview" : "startSlotCodesnap").after($("captureBlock"));
-  document.querySelector(".kind-row").style.display = _view === "review" ? "" : "none";
+  $("viewReview").style.display = program ? "" : "none";
+  $("viewCodesnap").style.display = program ? "none" : "";
+  $("folderCard").style.display = _view === "folder" ? "" : "none";
+  $("captureBlock").style.display = _view === "folder" ? "none" : "";
+  $("reviewTitle").textContent = _view === "folder" ? "Code Folder Review" : "Platform Holistic Review";
+  $("reviewSub").textContent = _view === "folder"
+    ? "Point CodeSnap at a program's code folder, then download the assessment report."
+    : "Capture a program's code and screens, then download the assessment report.";
+  $(program ? "startSlotReview" : "startSlotCodesnap").after($("captureBlock"));
+  document.querySelector(".kind-row").style.display = program ? "" : "none";
   if (_view === "codesnap" && _captureKind !== "code") document.querySelector('#kindSeg .seg-opt[data-kind="code"]').click();
   if (_view === "review" && !_kindManual && _captureKind !== "auto") document.querySelector('#kindSeg .seg-opt[data-kind="auto"]').click();
-  $("startSub").textContent = _view === "review"
+  $("startSub").textContent = program
     ? (_program ? "Each capture is added to the selected program." : "Pick or create a program above, then capture its files and screens.")
     : "Capture, scroll for more, and it builds the report.";
-  document.title = _view === "review" ? "Ledelsea — Platform Holistic Review" : "Ledelsea — CodeSnap";
+  document.title = _view === "review" ? "Ledelsea — Platform Holistic Review" : _view === "folder" ? "Ledelsea — Code Folder Review" : "Ledelsea — CodeSnap";
 }
 document.querySelectorAll(".sidebar .nav-item[data-view]").forEach(n => n.addEventListener("click", e => {
   e.preventDefault();
   setView(n.dataset.view);
 }));
-$("progSelect").addEventListener("change", () => { if (_view === "review") setView("review"); });
-setView(location.hash === "#review" ? "review" : location.hash === "#codesnap" ? "codesnap" : _viewStore());
+$("progSelect").addEventListener("change", () => { if (_view !== "codesnap") setView(_view); });
+setView(location.hash === "#review" ? "review" : location.hash === "#folder" ? "folder" : location.hash === "#codesnap" ? "codesnap" : _viewStore());
+
+let _folderPoll = null;
+async function folderStatus() {
+  clearTimeout(_folderPoll);
+  if (!_program) return;
+  let j; try { j = await _json(`/api/programs/${encodeURIComponent(_program)}/import-folder`); } catch (e) { return; }
+  const el = $("folderStatus");
+  if (j.running) {
+    el.textContent = `${j.stage}… ${j.done || 0} of ${j.total || 0}`;
+    _folderPoll = setTimeout(folderStatus, 1500);
+  } else if (j.error) {
+    el.textContent = "Could not finish: " + j.error;
+  } else if (j.added !== undefined) {
+    const skipped = Object.entries(j.skipped || {}).map(([k, n]) => `${n} ${k}`).join(", ");
+    el.textContent = `Added ${j.added} files` + (skipped ? ` (left out: ${skipped})` : "") + (j.unreadable && j.unreadable.length ? `; could not read ${j.unreadable.length}` : "") + ". Review is running.";
+    loadProgram();
+  }
+}
+$("folderPick").addEventListener("click", async () => {
+  try { const r = await _json("/api/pick-folder", { method: "POST" }); if (r.path) $("folderPath").value = r.path; }
+  catch (e) { toast(e.message); }
+});
+$("folderAdd").addEventListener("click", async () => {
+  if (!_program) { toast("Pick or create a program first."); return; }
+  try {
+    await _json(`/api/programs/${encodeURIComponent(_program)}/import-folder`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: $("folderPath").value.trim() }) });
+    folderStatus();
+  } catch (e) { toast(e.message); }
+});
 
 
 function _lineEditLabel(original, replacement) {
@@ -2199,6 +2235,6 @@ async function openLineReview(base, artifactId, queue) {
 
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && _view === "review" && _program) loadProgram(true);
+  if (!document.hidden && _view !== "codesnap" && _program) loadProgram(true);
 });
 

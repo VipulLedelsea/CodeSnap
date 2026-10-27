@@ -14,6 +14,7 @@
       <div class="nav-label">Modules</div>
       <a class="nav-item active" data-view="codesnap" href="#codesnap"><span class="l">CodeSnap</span></a>
       <a class="nav-item" data-view="review" href="#review"><span class="l">Platform Holistic Review</span></a>
+      <a class="nav-item" data-view="folder" href="#folder"><span class="l">Code Folder Review</span></a>
       <div class="nav-item disabled"><span class="l">Documents</span><span class="pill-soon">soon</span></div>
       <div class="nav-item disabled"><span class="l">Data extract</span><span class="pill-soon">soon</span></div>
       <div class="spacer"></div>
@@ -41,8 +42,8 @@
       </div>
 
       <section class="view" id="viewReview" style="display:none">
-      <h1>Platform Holistic Review</h1>
-      <p class="sub">Capture a program's code and screens, then download the assessment report.</p>
+      <h1 id="reviewTitle">Platform Holistic Review</h1>
+      <p class="sub" id="reviewSub">Capture a program's code and screens, then download the assessment report.</p>
       <div class="card program-card">
         <div class="project-head">
           <div>
@@ -60,6 +61,15 @@
           <button class="btn-link" id="progNewCancel" type="button">Cancel</button>
         </div>
         <div id="startSlotReview"></div>
+        <div class="folder-card" id="folderCard" style="display:none">
+          <p style="font-size:13px;color:var(--muted);margin:12px 0 8px">Give CodeSnap the folder that holds the code. It reads the files directly, so nothing is captured from the screen and nothing needs checking against screenshots. The rest of the review is the same.</p>
+          <div class="prog-new" style="display:flex">
+            <input type="text" id="folderPath" placeholder="/path/to/the/code/folder" spellcheck="false">
+            <button class="btn-secondary" id="folderPick" type="button">Choose folder…</button>
+            <button class="btn-primary" id="folderAdd" type="button">Add files</button>
+          </div>
+          <div class="project-hint" id="folderStatus" style="margin-top:8px"></div>
+        </div>
         <div class="prog-body" id="progBody" style="display:none">
           <div class="prog-progress" id="progProgress"></div>
           <div class="prog-capbar" id="progCapBar"></div>

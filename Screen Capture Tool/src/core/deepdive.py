@@ -253,6 +253,9 @@ _STYLE_ONLY = {"glyph", "banner", "debris", "prose"}
 def capture_quality(store, art, concerns=None) -> dict:
     """{status: good | rescan | unchecked, issues: [{kind, lines, reason, advice}], bad_lines: set}"""
     from core.model.completeness import check
+    from core.model.folder_import import is_exact
+    if is_exact(store, art):          # read from a folder, not screenshots: nothing to misread, cut off or recapture
+        return {"status": "good", "issues": [], "bad_lines": set()}
     text = art.get("transcription") or ""
     lines = text.split("\n")
     issues, bad = [], set()
@@ -1079,6 +1082,8 @@ def synthesize(store, client, model=None) -> dict:
     _log(store, "deepdive_program", None, model, msg, ms)
     obs = []
     for o in (_tool(msg, PROGRAM_TOOL["name"]) or {}).get("observations") or []:
+        if not isinstance(o, dict):        # the model sometimes answers an observation as a bare string
+            continue
         ids = [x for x in (o.get("facts") or []) if x in index]
         if not ids or not o.get("statement"):
             continue

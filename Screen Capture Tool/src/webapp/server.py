@@ -1424,6 +1424,69 @@ def api_program_import(slug: str, extract: bool = True):
         return {"ok": True, "imported": imported}
 
 
+_FOLDER_JOBS = {}
+
+
+@app.post("/api/pick-folder")
+def api_pick_folder():
+    """Ask macOS for a folder with its own chooser. {path: ""} when the person cancels."""
+    import subprocess
+    try:
+        out = subprocess.run(["osascript", "-e", 'POSIX path of (choose folder with prompt "Choose the program\'s code folder")'],
+                             capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.TimeoutExpired):
+        raise HTTPException(status_code=500, detail="The folder chooser is not available. Type the folder path instead.")
+    return {"path": out.stdout.strip() if out.returncode == 0 else ""}
+
+
+@app.get("/api/programs/{slug}/import-folder")
+def api_program_folder_status(slug: str):
+    if not _program_exists(slug):
+        raise HTTPException(status_code=404, detail=f"Unknown program: {slug}")
+    return _FOLDER_JOBS.get(slug) or {"running": False}
+
+
+@app.post("/api/programs/{slug}/import-folder")
+def api_program_import_folder(slug: str, payload: dict = Body(...)):
+    """Add a folder's source files to the program as they are (no screenshots), then read their structure and review them."""
+    from core.model.folder_import import add_folder_files, scan_folder, structure_files
+    folder = str((payload or {}).get("path") or "").strip()
+    if not folder:
+        return JSONResponse({"error": "Choose the folder that holds the code."}, status_code=400)
+    try:
+        found = scan_folder(folder)
+    except (ValueError, OSError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if not found["files"]:
+        return JSONResponse({"error": "No source files were found in that folder."}, status_code=400)
+    with _JOB_LOCK:
+        if (_FOLDER_JOBS.get(slug) or {}).get("running"):
+            return JSONResponse({"error": "A folder is already being added to this program."}, status_code=409)
+        job = _FOLDER_JOBS[slug] = {"running": True, "stage": "Adding files", "done": 0, "total": len(found["files"]),
+                                    "skipped": found["skipped"], "folder": folder}
+    client = _program_client(slug)
+
+    def work():
+        try:
+            def tick(stage):
+                def inner(done, total):
+                    job.update(stage=stage, done=done, total=total)
+                return inner
+            with _open_program(slug) as store:
+                added = add_folder_files(store, folder, tick("Adding files"))
+                job.update(added=added["added"], unreadable=added["unreadable"])
+                failed = structure_files(store, client, added["names"], tick("Reading structure"))
+                job["structure_failed"] = failed
+            _deep_when_ready(slug)
+        except Exception as exc:  # noqa: BLE001
+            job["error"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            job.update(running=False, stage="Done")
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"ok": True, "files": len(found["files"]), "skipped": found["skipped"]}
+
+
 @app.post("/api/programs/{slug}/artifacts/{artifact_id}/accept-all")
 def api_accept_all_file(slug: str, artifact_id: int):
     """Accept every flag on one file, of whatever kind, as it is."""
