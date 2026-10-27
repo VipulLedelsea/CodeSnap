@@ -90,8 +90,8 @@ def select(store, code_arts, review_facts, total=24, minimum=2):
     # ones is still represented; the rest is filled by rank up to the total.
     per_file, guaranteed = {}, []
     for c in cands:
-        if per_file.get(c["file"], 0) < PER_FILE:
-            per_file[c["file"]] = per_file.get(c["file"], 0) + 1
+        if per_file.get(c["file"], 0) < PER_FILE and not any(g["file"] == c["file"] and _same(g["text"], c["text"]) for g in guaranteed):
+            per_file[c["file"]] = per_file.get(c["file"], 0) + 1       # a near copy of one already chosen does not use a slot
             guaranteed.append(c)
     ordered = guaranteed + [c for c in cands if c not in guaranteed]
     for c in ordered:
