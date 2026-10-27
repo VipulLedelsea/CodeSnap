@@ -11,7 +11,7 @@ SIGNALS = [re.compile(p, re.I) for p in (
     r"\bCOMMIT\b|not atomic|committed separately|rollback|referential integrity|foreign key",
     r"truncat|first 12|CHAR\(12\)|short receipt|12-character|cents|whole.unit|precision",
     r"DSPLY|job log|spool|account number|sensitive",
-    r"DISP=MOD|appends? to|rerun|re-run|idempot|duplicate (output|record)|return code 0|RC LE 8|continue",
+    r"DISP=MOD|appends? to|rerun|re-run|idempot|duplicate (output|record)|return code 0|RC LE 8|continue|\bCOND\b|return.?code",
     r"redefine|overlay|override|expir|sunset|no end date|threshold.*differ|differ.*threshold",
     r"not provided|unhandled|no (check|test|validation|authorization)|without (any )?(check|validation|authorization)",
 )]
@@ -43,6 +43,8 @@ def _defect_like(f):
         return False
     if f.get("severity") in ("high", "medium"):
         return True
+    if THEMES.search(f["statement"]) and f.get("category") in ("defect", "data_integrity", "error_handling", "control_flow", "calculation"):
+        return True     # a known defect pattern (waiver, truncation, a return code that does not stop the job) needs no severity
     return sum(1 for p in SIGNALS if p.search(f["statement"])) >= 2
 
 
@@ -57,7 +59,7 @@ def _same(a, b):
     return bool(ids) or len(ta & tb) / min(len(ta), len(tb)) >= 0.5
 
 
-def select(store, code_arts, review_facts, total=20, minimum=2):
+def select(store, code_arts, review_facts, total=24, minimum=2):
     from core import deepdive as DDV
     cands = []
     for art in code_arts:
@@ -67,7 +69,7 @@ def select(store, code_arts, review_facts, total=20, minimum=2):
         except Exception:  # noqa: BLE001 - the tag is an extra; the finding stands without it
             zones = []
         for f in review_facts.get(art["id"], []):
-            if f.get("category") not in CATEGORIES or SUSPECT.search(f["statement"]) or not _defect_like(f):
+            if f.get("category") not in CATEGORIES or (SUSPECT.search(f["statement"]) and not THEMES.search(f["statement"])) or not _defect_like(f):
                 continue
             if f.get("review") not in (None, "supported", "partly_supported", "corrected"):
                 continue
@@ -80,7 +82,13 @@ def select(store, code_arts, review_facts, total=20, minimum=2):
                               "severity": f.get("severity"), "category": f["category"], "score": sc})
     cands.sort(key=lambda r: (-(r["severity"] == "high"), bool(r.get("gap")), -r["score"]))
     picked = []
+    # Every file with a candidate gets its best one first, so a file whose defects score lower than another's repeated
+    # ones is still represented; the rest is filled by rank.
+    first = {}
     for c in cands:
+        first.setdefault(c["file"], c)
+    ordered = list(first.values()) + [c for c in cands if c not in first.values()]
+    for c in ordered:
         if any(p["file"] == c["file"] and _same(p["text"], c["text"]) for p in picked):
             continue
         if c["severity"] != "high" and len(picked) >= total:

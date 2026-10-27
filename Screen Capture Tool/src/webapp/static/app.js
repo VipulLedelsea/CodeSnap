@@ -1280,6 +1280,10 @@ async function loadProgram(poll) {
   if ($("progMapBox").open) loadProgramMap();
   if ($("progSecBox").open) loadProgramFindings();
   if ($("progAssessBox").open) loadAssessment();
+  const dgBase = `/api/programs/${encodeURIComponent(_program)}/diagrams/export`;   // always on the main row, not only when the section is open
+  $("progDiagVsdxTop").href = `${dgBase}/vsdx`;
+  $("progDiagDrawioTop").href = `${dgBase}/drawio`;
+  $("progDiagZipTop").href = `${dgBase}/zip`;
   if ($("progDiagBox").open) loadDiagrams();
   if ($("progUiBox").open) loadUiReview();
   if ($("progFixBox").open) loadCorrections();
@@ -1898,6 +1902,9 @@ async function loadDiagrams() {
   $("progDiagVsdx").href = `${base}/export/vsdx`;
   $("progDiagDrawio").href = `${base}/export/drawio`;
   $("progDiagZip").href = `${base}/export/zip`;
+  $("progDiagVsdxTop").href = `${base}/export/vsdx`;
+  $("progDiagDrawioTop").href = `${base}/export/drawio`;
+  $("progDiagZipTop").href = `${base}/export/zip`;
   try {
     const d = await _json(base);
     if (program !== _program || request !== loadDiagrams.sequence) return;

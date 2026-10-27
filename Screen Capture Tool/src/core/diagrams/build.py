@@ -1,3 +1,4 @@
+import re
 from core.model.linker import trace_flows
 from core.model.store import classify_placeholder
 
@@ -22,6 +23,7 @@ class _Model:
         self.store = store
         self.ents = {e["id"]: e for e in store.entities()}
         self.rels = store.relations()
+        self._collapse_numbered_datasets()
         self.arts = {a["id"]: a for a in store.artifacts()}
         self.children = {}
         for e in self.ents.values():
@@ -34,6 +36,34 @@ class _Model:
                 self.sources.setdefault(row["entity_id"], set()).add(row["artifact_id"])
         for eid, aid in self.owner_art.items():
             self.sources.setdefault(eid, set()).add(aid)
+
+    def _collapse_numbered_datasets(self, minimum=4):
+        """A job that touches SYNTH.RESTART.P00.WORK ... P29.WORK has thirty look-alike datasets; drawing each one makes the
+        context and architecture diagrams several times taller than they are informative. Show one node per family."""
+        families = {}
+        for e in self.ents.values():
+            if e["kind"] == "data_store" and re.search(r"\d", e["name"] or ""):
+                families.setdefault((re.sub(r"\d+", "nn", e["name"]), e["origin"] == "placeholder"), []).append(e)
+        remap = {}
+        for (pattern, _), members in families.items():
+            if len(members) < minimum:
+                continue
+            members.sort(key=lambda e: e["id"])
+            rep = members[0]
+            self.ents[rep["id"]] = rep = {**rep, "name": f"{pattern} (x{len(members)})"}
+            for e in members[1:]:
+                remap[e["id"]] = rep["id"]
+                del self.ents[e["id"]]
+        if not remap:
+            return
+        seen, rels = set(), []
+        for r in self.rels:
+            r = {**r, "from_id": remap.get(r["from_id"], r["from_id"]), "to_id": remap.get(r["to_id"], r["to_id"])}
+            key = (r["from_id"], r["to_id"], r["kind"])
+            if key not in seen:
+                seen.add(key)
+                rels.append(r)
+        self.rels = rels
 
     def in_file(self, eid, aid):
         return aid in self.sources.get(eid, ())
