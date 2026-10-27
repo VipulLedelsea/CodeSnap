@@ -19,7 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-PROMPT_VERSION = "deepdive-v4-rollups"
+PROMPT_VERSION = "deepdive-v5-checks"
 MAX_TOKENS = 20000   # the SDK refuses non-streamed calls much above this
 THINKING = 8000
 DEFAULT_DEEP_MODEL = "claude-sonnet-5"
