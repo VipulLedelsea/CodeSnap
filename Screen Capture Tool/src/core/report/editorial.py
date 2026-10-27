@@ -259,10 +259,17 @@ REGISTER_CAPS = (("9.1 ", 6, (0, 1, 6), "Risk register"), ("7.3 ", 6, (0, 1, 7),
 SUMMARY_WORDS = 22
 
 
+ASIDE = re.compile(r"\s*\((?:e\.g\.|i\.e\.|and |such as|including|for example|repeated)[^()]*\)", re.I)
+APPENDIX_WORDS = 40        # the further entries are the only place their text appears, so they keep more of it
+
+
 def _short(text, words=SUMMARY_WORDS):
     parts = text.split()
     if len(parts) <= words:
         return text
+    squeezed = ASIDE.sub("", text)          # a long aside ("(and repeated identically before every ... e.g. 152, 169)") hides the point
+    if squeezed != text:
+        return _short(squeezed, words)
     cut = " ".join(parts[:words])
     # a full stop after e.g., i.e., etc. or vs. is not the end of a sentence
     stops = [m.start() for m in re.finditer(r"(?<!e\.g)(?<!i\.e)(?<!etc)(?<!vs)\. ", cut)]
@@ -315,7 +322,7 @@ def _cap_registers(document):
                 if len(body) <= keep + 3:      # moving a few rows saves nothing
                     break
                 extra = body[keep:]
-                rows = [[_short(r.cells[min(c, len(r.cells) - 1)].text) for c in columns] for r in extra]
+                rows = [[_short(r.cells[min(c, len(r.cells) - 1)].text, APPENDIX_WORDS if c == columns[0] else SUMMARY_WORDS) for c in columns] for r in extra]
                 head = [table.rows[0].cells[min(c, len(table.rows[0].cells) - 1)].text for c in columns]
                 if name == "Data inventory":      # the other columns are all open items; list the names only
                     rows, head = [[r[0]] for r in rows], [head[0]]

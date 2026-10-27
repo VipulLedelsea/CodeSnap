@@ -126,6 +126,8 @@ def short(text, limit=230):
     if text.endswith(GAP_TAG):                      # the tag always survives shortening
         return short(text[:-len(GAP_TAG)], limit) + GAP_TAG
     first = re.split(r"(?<!e\.g\.)(?<!i\.e\.)(?<=[.!?])\s+(?=[A-Z])", text.strip())[0].rstrip(".")
+    if len(first) > limit:      # a long aside in brackets pushes the defect past the limit; the point matters more than the aside
+        first = re.sub(r"\s*\((?:e\.g\.|i\.e\.|and |such as|including|for example|repeated)[^()]*\)", "", first, flags=re.I)
     if re.match(r"(because|since|if|when|although)\b", first, re.I):
         limit = int(limit * 1.8)
     if len(first) <= limit:

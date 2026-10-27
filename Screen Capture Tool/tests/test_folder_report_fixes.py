@@ -101,3 +101,13 @@ def test_commit_inside_a_called_routine_is_reported():
     assert len(obs) == 1 and "caller" in obs[0]["title"] and "line 3" in obs[0]["statement"]
     top = "MAIN: PROC;\n  EXEC SQL COMMIT;\n"
     assert commitscope.conflicts(_Texts(**{"main.pli": top})) == []
+
+
+def test_a_long_aside_does_not_hide_the_defect_when_a_finding_is_shortened():
+    from core.report import codefindings as CFM
+    from core.report import editorial
+    text = ("Comment at line 135 (and repeated identically before every relief IF, e.g. 152, 169, 186, 203, 220, 237...) states "
+            "'EMERGENCY OVERRIDE HAS NO SUNSET CHECK', confirming that the emergency override relief has no expiry date check in the code.")
+    assert "SUNSET" in CFM.short(text, 120)
+    assert "SUNSET" in editorial._short(text, 22)
+    assert "(and repeated" in editorial._short(text, 60)            # nothing is dropped when the whole text fits
