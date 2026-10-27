@@ -60,7 +60,8 @@ def _same(a, b):
     return bool(ids) or len(ta & tb) / min(len(ta), len(tb)) >= 0.5
 
 
-PER_FILE = 3
+PER_FILE = 4
+_RANK = {"high": 2, "medium": 1}      # within a file a medium finding is chosen before a low or unrated one of a higher score
 
 
 def select(store, code_arts, review_facts, total=24, minimum=2):
@@ -84,7 +85,7 @@ def select(store, code_arts, review_facts, total=24, minimum=2):
                 gap = DDV.in_gap(zones, f.get("lines")) if zones else None
                 cands.append({"file": art["name"], "text": f["statement"] + (GAP_TAG if gap else ""), "gap": gap, "lines": f.get("lines"),
                               "severity": f.get("severity"), "category": f["category"], "score": sc})
-    cands.sort(key=lambda r: (-(r["severity"] == "high"), bool(r.get("gap")), -r["score"]))
+    cands.sort(key=lambda r: (-_RANK.get(r["severity"], 0), bool(r.get("gap")), -r["score"]))
     picked = []
     # Every file with candidates gets its best PER_FILE first, so a file whose defects score lower than another's repeated
     # ones is still represented; the rest is filled by rank up to the total.
