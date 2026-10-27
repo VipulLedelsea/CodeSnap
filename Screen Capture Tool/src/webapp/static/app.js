@@ -732,8 +732,10 @@ async function openInNewWindow(href) {
       if (r.ok) return;
     } catch (e) { /* fall through */ }
   }
-  const w = window.open(href, "_blank", "noopener");
-  if (!w && !inApp) window.location.assign(href);
+  // "noopener" makes window.open return null even when the tab opened, which used to send this tab to the same page too.
+  const w = window.open(href, "_blank");
+  if (w) { try { w.opener = null; } catch (e) { /* cross-origin already */ } }
+  else if (!inApp) window.location.assign(href);      // the browser really blocked the new tab
 }
 document.addEventListener("click", (ev) => {
   const a = ev.target.closest && ev.target.closest('a[target="_blank"][href]');
@@ -752,8 +754,13 @@ document.addEventListener("click", (ev) => {
     const base = href.replace(/\.(html|docx|pdf|zip)$/, "");
     if (el.classList.contains("disabled") || !base || base === href) return;
     ev.preventDefault();
+    const newTab = el.getAttribute("target") === "_blank";
+    // Open the tab now, on the click, so the browser does not block it after the wait; point it at the report when ready.
+    const early = newTab && !window.pywebview ? window.open("about:blank", "_blank") : null;
     try { await fetch(`${base}/prepare`, { method: "POST" }); } catch (e) {}
-    if (el.getAttribute("target") === "_blank") openInNewWindow(href); else window.location.assign(href);
+    if (early) { try { early.opener = null; } catch (e) {} early.location.href = href; }
+    else if (newTab) openInNewWindow(href);
+    else window.location.assign(href);
   });
 });
 
@@ -1309,7 +1316,7 @@ let _progPoll = null;
 function scheduleProgramPoll(d) {
   if (_progPoll) clearTimeout(_progPoll);
   const busy = d.progress && (d.progress.to_go > 0) || d.session_running || d.worker_running || d.recapture_target;
-  _progPoll = setTimeout(() => { _progPoll = null; if (_view !== "codesnap" && _program && !document.hidden) loadProgram(true); else scheduleProgramPoll(d); }, busy ? 3000 : 10000);
+  _progPoll = setTimeout(() => { _progPoll = null; if ((_view === "review" || _view === "folder") && _program && !document.hidden) loadProgram(true); else scheduleProgramPoll(d); }, busy ? 3000 : 10000);
 }
 let _display = "", _shotDisplay = "";
 async function loadDisplays() {
@@ -2033,8 +2040,16 @@ function _viewStore(v) {
   return v || "codesnap";
 }
 function setView(v) {
-  _view = v === "review" || v === "folder" ? v : "codesnap";
+  _view = v === "review" || v === "folder" || v === "optics" ? v : "codesnap";
   _viewStore(_view);
+  const optics = _view === "optics";
+  $("viewOptics").style.display = optics ? "" : "none";
+  if (optics) {
+    $("viewReview").style.display = "none"; $("viewCodesnap").style.display = "none";
+    document.querySelectorAll(".sidebar .nav-item[data-view]").forEach(n => n.classList.toggle("active", n.dataset.view === _view));
+    document.title = "Ledelsea — Optics";
+    return;
+  }
   const program = _view !== "codesnap";           // the folder review is the program review with files read from disk
   document.querySelectorAll(".sidebar .nav-item[data-view]").forEach(n => n.classList.toggle("active", n.dataset.view === _view));
   $("viewReview").style.display = program ? "" : "none";
@@ -2058,8 +2073,8 @@ document.querySelectorAll(".sidebar .nav-item[data-view]").forEach(n => n.addEve
   e.preventDefault();
   setView(n.dataset.view);
 }));
-$("progSelect").addEventListener("change", () => { if (_view !== "codesnap") setView(_view); });
-setView(location.hash === "#review" ? "review" : location.hash === "#folder" ? "folder" : location.hash === "#codesnap" ? "codesnap" : _viewStore());
+$("progSelect").addEventListener("change", () => { if (_view === "review" || _view === "folder") setView(_view); });
+setView(location.hash === "#review" ? "review" : location.hash === "#folder" ? "folder" : location.hash === "#optics" ? "optics" : location.hash === "#codesnap" ? "codesnap" : _viewStore());
 
 let _folderPoll = null;
 async function folderStatus() {
@@ -2235,6 +2250,6 @@ async function openLineReview(base, artifactId, queue) {
 
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && _view !== "codesnap" && _program) loadProgram(true);
+  if (!document.hidden && (_view === "review" || _view === "folder") && _program) loadProgram(true);
 });
 

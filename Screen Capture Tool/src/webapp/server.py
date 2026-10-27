@@ -356,11 +356,29 @@ def _artifact_summary(store, artifact: dict) -> dict:
             out["deep"] = {"facts": len(dd.get("facts") or []), "current": dd.get("hash") == deepdive._hash(artifact.get("transcription"))}
         out["recapture"] = deepdive.recapture_outcome(store, artifact, q)
     out["state"] = deepdive.file_state(store, artifact, q)
+    if out["state"] == "done" and _review_in_progress(store, artifact):
+        out["state"] = "reviewing"
     rebuilding = _REBUILDS.get(store.info["slug"])
     if rebuilding and rebuilding["name"] == artifact["name"]:
         out["state"] = "reading"
         out["rebuild"] = dict(rebuilding)
     return out
+
+
+def _review_in_progress(store, artifact) -> bool:
+    """A file is not done while the program's analysis is still running and it has not been through it: a folder being
+    added, a deep review or batch pipeline that has not reached this file, or the cross-file stage that follows the last
+    file. Between model calls no file is marked active, so without this every file reads done during those gaps."""
+    from core import deepdive
+    slug = store.info["slug"]
+    running = bool((_DEEP.get(slug) or {}).get("running") or (_FOLDER_JOBS.get(slug) or {}).get("running")
+                   or (store.get_meta("pipeline_job") or {}).get("state") == "running")
+    if not running:
+        return False
+    dd = (store.get_meta("deepdive") or {}).get(str(artifact["id"])) or {}
+    if dd.get("hash") != deepdive._hash(artifact.get("transcription")):
+        return True
+    return deepdive.program_stale(store) or not store.get_meta("deepdive_program")
 
 
 def _progress(arts: list) -> dict:
