@@ -17,7 +17,8 @@ SIGNALS = [re.compile(p, re.I) for p in (
 )]
 THEMES = re.compile(r"waiver|DSPLY|job log|DISP=MOD|short receipt|12-character|redefine|CHAR\(12\)|return code 0|INTAKE\.RC|"
                     r"\bCOMMIT\b|foreign key|referential|BELOW-MINIMUM|\bABS\(|cents|whole.unit|omit(s|ted)? .*amount|"
-                    r"not (written|output)|file status|AT END", re.I)
+                    r"not (written|output)|file status|AT END|DISP=\(MOD|no sunset|sunset check|no (expiry|end date)|never expires?|"
+                    r"first \d+ characters|substr|multiple active rows|does not (include|show|write)[^.]*amount", re.I)
 POSITIVE = re.compile(r"has file status monitoring|standard EXEC SQL host-variable binding|not dynamic SQL|so no (sql )?injection|"
                       r"is assigned to \w+ and has|properly (handled|checked)|correctly (handled|checked)", re.I)
 UNCONDITIONAL = re.compile(r"\bevery\b|unconditional|\balways\b|\ball \d+\b|never (checks|checked|enforced)|silently ignor|"
@@ -59,6 +60,9 @@ def _same(a, b):
     return bool(ids) or len(ta & tb) / min(len(ta), len(tb)) >= 0.5
 
 
+PER_FILE = 3
+
+
 def select(store, code_arts, review_facts, total=24, minimum=2):
     from core import deepdive as DDV
     cands = []
@@ -82,16 +86,18 @@ def select(store, code_arts, review_facts, total=24, minimum=2):
                               "severity": f.get("severity"), "category": f["category"], "score": sc})
     cands.sort(key=lambda r: (-(r["severity"] == "high"), bool(r.get("gap")), -r["score"]))
     picked = []
-    # Every file with a candidate gets its best one first, so a file whose defects score lower than another's repeated
-    # ones is still represented; the rest is filled by rank.
-    first = {}
+    # Every file with candidates gets its best PER_FILE first, so a file whose defects score lower than another's repeated
+    # ones is still represented; the rest is filled by rank up to the total.
+    per_file, guaranteed = {}, []
     for c in cands:
-        first.setdefault(c["file"], c)
-    ordered = list(first.values()) + [c for c in cands if c not in first.values()]
+        if per_file.get(c["file"], 0) < PER_FILE:
+            per_file[c["file"]] = per_file.get(c["file"], 0) + 1
+            guaranteed.append(c)
+    ordered = guaranteed + [c for c in cands if c not in guaranteed]
     for c in ordered:
         if any(p["file"] == c["file"] and _same(p["text"], c["text"]) for p in picked):
             continue
-        if c["severity"] != "high" and len(picked) >= total:
+        if c["severity"] != "high" and c not in guaranteed and len(picked) >= total:
             continue
         picked.append(c)
     picked.sort(key=lambda r: (-(r["severity"] == "high"), bool(r.get("gap")), -r["score"]))
