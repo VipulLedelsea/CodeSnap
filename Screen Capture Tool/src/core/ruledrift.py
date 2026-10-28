@@ -92,7 +92,7 @@ def unused_copybooks(store):
         used = any(re.search(rf"\bCOPY\s+{re.escape(stem)}\b", b.get("transcription") or "", re.I) for b in arts if b["id"] != a["id"])
         if not used and len(programs) >= 2:
             out.append({
-                "title": f"{a['name']} is a shared copybook that no program uses",
+                "title": f"{a['name']} is never copied in by any program",
                 "statement": (f"No program copies in {stem}: the {len(programs)} COBOL programs each define their own record layouts, so {a['name']} and the "
                               f"layouts the programs actually use can drift apart without anyone noticing."),
                 "facts": [], "basis": "observed", "files": [a["name"]] + [b["name"] for b in programs][:4], "source": "rule drift", "severity": "medium",
