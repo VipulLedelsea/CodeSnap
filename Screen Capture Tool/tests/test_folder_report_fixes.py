@@ -200,3 +200,21 @@ def test_coverage_chips_say_read_from_the_folder_for_a_folder_review(tmp_path, m
     titles = [n["title"] for n in build.architecture(s)["nodes"]]
     assert "1 files read from the folder" in titles and not any("captured" in t for t in titles)
     s.close()
+
+
+def test_a_copybook_that_no_program_copies_is_reported():
+    from core import ruledrift
+    prog = "       IDENTIFICATION DIVISION.\n       PROCEDURE DIVISION.\n           STOP RUN.\n"
+    used = prog.replace("PROCEDURE", "       COPY PAYREC.\n       PROCEDURE")
+    files = {"09_PAYREC.cpy": "       01 PAY-RECORD.\n", "A.cbl": prog, "B.cbl": prog}
+    obs = ruledrift.unused_copybooks(_Texts(**files))
+    assert len(obs) == 1 and "09_PAYREC.cpy" in obs[0]["title"]
+    files["A.cbl"] = used
+    assert ruledrift.unused_copybooks(_Texts(**files)) == []
+
+
+def test_a_value_stored_as_its_first_characters_counts_as_a_narrower_copy():
+    from core import widths
+    rexx = "route_00:\n  key = substr(receipt, 1, 12)\n  return 0\n"
+    found = widths.truncations(_Texts(**{"r.rexx": rexx}))
+    assert found and found[0][0] == "RECEIPT" and found[0][1] == 12

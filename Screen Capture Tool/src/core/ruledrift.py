@@ -81,5 +81,24 @@ def unwritten_amounts(store):
     return out
 
 
+def unused_copybooks(store):
+    arts = list(store.artifacts())
+    programs = [a for a in arts if re.search(r"PROCEDURE\s+DIVISION", a.get("transcription") or "", re.I)]
+    out = []
+    for a in arts:
+        if not re.search(r"\.(cpy|copy|cbl\.inc)$", a["name"], re.I):
+            continue
+        stem = re.sub(r"^\d+[_-]", "", a["name"].rsplit(".", 1)[0])
+        used = any(re.search(rf"\bCOPY\s+{re.escape(stem)}\b", b.get("transcription") or "", re.I) for b in arts if b["id"] != a["id"])
+        if not used and len(programs) >= 2:
+            out.append({
+                "title": f"{a['name']} is a shared copybook that no program uses",
+                "statement": (f"No program copies in {stem}: the {len(programs)} COBOL programs each define their own record layouts, so {a['name']} and the "
+                              f"layouts the programs actually use can drift apart without anyone noticing."),
+                "facts": [], "basis": "observed", "files": [a["name"]] + [b["name"] for b in programs][:4], "source": "rule drift", "severity": "medium",
+                "cites": [f"{a['name']} lines 1\u20131"]})
+    return out
+
+
 def conflicts(store):
-    return threshold_drift(store) + unwritten_amounts(store)
+    return threshold_drift(store) + unwritten_amounts(store) + unused_copybooks(store)

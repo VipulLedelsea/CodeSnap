@@ -18,7 +18,9 @@ SIGNALS = [re.compile(p, re.I) for p in (
 THEMES = re.compile(r"waiver|DSPLY|job log|DISP=MOD|short receipt|12-character|redefine|CHAR\(12\)|return code 0|INTAKE\.RC|"
                     r"\bCOMMIT\b|foreign key|referential|BELOW-MINIMUM|\bABS\(|cents|whole.unit|omit(s|ted)? .*amount|"
                     r"not (written|output)|file status|AT END|DISP=\(MOD|no sunset|sunset check|no (expiry|end date)|never expires?|"
-                    r"first \d+ characters|substr|multiple active rows|does not (include|show|write)[^.]*amount", re.I)
+                    r"first \d+ characters|substr|multiple active rows|does not (include|show|write)[^.]*amount|"
+                    r"separate commits|committed separately|regardless of|(forces?|overrides?|overridden to) '?ACCEPT|overriding any|"
+                    r"never check(s|ed)? or propagate|silently (skip|ignor|return)|masking the failure|returns 0 (immediately|regardless)", re.I)
 POSITIVE = re.compile(r"has file status monitoring|standard EXEC SQL host-variable binding|not dynamic SQL|so no (sql )?injection|"
                       r"is assigned to \w+ and has|properly (handled|checked)|correctly (handled|checked)", re.I)
 UNCONDITIONAL = re.compile(r"\bevery\b|unconditional|\balways\b|\ball \d+\b|never (checks|checked|enforced)|silently ignor|"
@@ -57,10 +59,10 @@ def _same(a, b):
     if not ta or not tb:
         return False
     ids = {w.lower() for w in IDENT.findall(a)} & {w.lower() for w in IDENT.findall(b)}
-    return bool(ids) or len(ta & tb) / min(len(ta), len(tb)) >= 0.5
+    return len(ids) >= 2 or len(ta & tb) / min(len(ta), len(tb)) >= 0.5      # one shared name is not enough: two defects can touch the same view
 
 
-PER_FILE = 5
+PER_FILE = 6
 _RANK = {"high": 2, "medium": 1}      # within a file a medium finding is chosen before a low or unrated one of a higher score
 
 

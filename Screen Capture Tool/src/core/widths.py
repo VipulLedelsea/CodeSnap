@@ -36,6 +36,24 @@ def _width(e):
     return int(m.group(1)) if m else None
 
 
+_TRUNCATE = re.compile(r"^\s*(\w+)\s*=\s*(?:substr|left)\(\s*([A-Za-z_][\w-]*)\s*,\s*(?:1\s*,\s*)?(\d+)\s*\)", re.I | re.M)
+
+
+def truncations(store):
+    """A value stored with only its first N characters (key = substr(receipt, 1, 12)) is a narrower copy of it."""
+    out = []
+    for a in store.artifacts():
+        text = a.get("transcription") or ""
+        if not re.search(r"^\s*\w+\s*=\s*(?:substr|left)\(", text, re.I | re.M):
+            continue
+        for m in _TRUNCATE.finditer(text):
+            c = _concept(m.group(2))
+            if c:
+                out.append((c, int(m.group(3)), a["name"], f"{m.group(1)} = first {m.group(3)} of {m.group(2)}", text.count("\n", 0, m.start()) + 1))
+                break              # one place per file is enough
+    return out
+
+
 def declarations(store):
     """[(concept, width, file, name, line)] for character fields and columns, and for screen fields next to their label."""
     arts = {a["id"]: a["name"] for a in store.artifacts()}
@@ -69,7 +87,7 @@ def declarations(store):
 def conflicts(store, minimum_files=2):
     """One observation per concept whose character width differs between files, shaped like the program observations."""
     groups = {}
-    for c, w, f, name, line in declarations(store):
+    for c, w, f, name, line in declarations(store) + truncations(store):
         groups.setdefault(c, {}).setdefault(w, []).append((f, name, line))
     obs = []
     for c, by_w in sorted(groups.items()):
