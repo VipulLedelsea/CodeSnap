@@ -96,6 +96,11 @@ def select(store, code_arts, review_facts, total=24, minimum=2):
         if per_file.get(c["file"], 0) < PER_FILE and not any(g["file"] == c["file"] and _same(g["text"], c["text"]) for g in guaranteed):
             per_file[c["file"]] = per_file.get(c["file"], 0) + 1       # a near copy of one already chosen does not use a slot
             guaranteed.append(c)
+    for c in cands:           # up to two more per file when the finding matches a known defect pattern (separate commits, MOD, silent failure ...)
+        if c not in guaranteed and THEMES.search(c["text"]) and per_file.get(c["file"], 0) < PER_FILE + 2 \
+                and not any(g["file"] == c["file"] and _same(g["text"], c["text"]) for g in guaranteed):
+            per_file[c["file"]] = per_file.get(c["file"], 0) + 1
+            guaranteed.append(c)
     ordered = guaranteed + [c for c in cands if c not in guaranteed]
     for c in ordered:
         if any(p["file"] == c["file"] and _same(p["text"], c["text"]) for p in picked):

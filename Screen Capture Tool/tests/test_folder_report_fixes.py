@@ -88,10 +88,10 @@ class _Texts:
 def test_many_steps_rereading_the_same_input_are_reported():
     from core import jclreads
     steps = "".join(f"//X{i:02d} EXEC PGM=MUNREV\n//PAYIN DD DSN=SYNTH.POST.OUT,DISP=SHR\n//PAYOUT DD DSN=SYNTH.D{i}.REVIEW,DISP=(MOD,CATLG)\n" for i in range(6))
-    obs = jclreads.conflicts(_Texts(**{"job.jcl": "//JOB1 JOB\n" + steps}))
+    obs = [o for o in jclreads.conflicts(_Texts(**{"job.jcl": "//JOB1 JOB\n" + steps})) if "re-reads" in o["title"]]
     assert len(obs) == 1 and "6 steps" in obs[0]["title"] and "SYNTH.POST.OUT" in obs[0]["title"]
     few = "//JOB1 JOB\n" + "".join(f"//X{i} EXEC PGM=A\n//IN DD DSN=SAME,DISP=SHR\n" for i in range(3))
-    assert jclreads.conflicts(_Texts(**{"few.jcl": few})) == []
+    assert [o for o in jclreads.conflicts(_Texts(**{"few.jcl": few})) if "re-reads" in o["title"]] == []
 
 
 def test_commit_inside_a_called_routine_is_reported():
@@ -218,3 +218,27 @@ def test_a_value_stored_as_its_first_characters_counts_as_a_narrower_copy():
     rexx = "route_00:\n  key = substr(receipt, 1, 12)\n  return 0\n"
     found = widths.truncations(_Texts(**{"r.rexx": rexx}))
     assert found and found[0][0] == "RECEIPT" and found[0][1] == 12
+
+
+def test_a_gate_that_still_runs_at_return_code_8_is_reported():
+    from core import jclreads
+    blocks = "".join(f"//R{i:02d} IF (INTAKE.RC LE 8) THEN\n//X{i:02d} EXEC PGM=MUNREV\n//PAYIN DD DSN=SYNTH.POST.OUT,DISP=SHR\n// ENDIF\n" for i in range(5))
+    obs = jclreads._rc_gates({"name": "job.jcl"}, blocks)
+    assert len(obs) == 1 and "return code 8" in obs[0]["title"] and "5 blocks" in obs[0]["statement"]
+    assert jclreads._rc_gates({"name": "job.jcl"}, blocks.replace("LE 8", "LE 4")) == []
+
+
+def test_steps_that_append_with_disp_mod_are_reported():
+    from core import jclreads
+    steps = "".join(f"//X{i:02d} EXEC PGM=MUNREV\n//PAYOUT DD DSN=SYNTH.D{i}.REVIEW,\n// DISP=(MOD,CATLG,KEEP),SPACE=(TRK,(1,1))\n" for i in range(5))
+    obs = jclreads._mod_outputs({"name": "job.jcl"}, steps)
+    assert len(obs) == 1 and "5 steps" in obs[0]["title"]
+
+
+def test_a_procedure_that_returns_zero_on_failure_is_reported_and_a_table_repeated_many_times():
+    from core import ruledrift
+    rexx = "".join(f"p{i}:\n  \"ALLOC FI(X) DA('A{i}')\"\n  open_rc = rc\n  if open_rc <> 0 then return 0\n" for i in range(4))
+    obs = ruledrift.swallowed_failures(_Texts(**{"r.rexx": rexx}))
+    assert len(obs) == 1 and "4 procedures" in obs[0]["statement"]
+    cpy = "".join(f"          05 PA-{i:02d}-DETAIL OCCURS 12 TIMES.\n" for i in range(11))
+    assert len(ruledrift.repeated_tables(_Texts(**{"c.cpy": cpy}))) == 1

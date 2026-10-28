@@ -100,5 +100,44 @@ def unused_copybooks(store):
     return out
 
 
+_SWALLOW = re.compile(r"^\s*if\s+(\w*rc)\s*(?:<>|\\=|\^=|>)\s*0\s+then\s+(?:do\s*;?\s*)?return\s+0\b", re.I | re.M)
+
+
+def swallowed_failures(store):
+    """A procedure that gives up on an allocation, read or write failure and still returns 0 (success) to its caller."""
+    out = []
+    for a in store.artifacts():
+        text = a.get("transcription") or ""
+        found = [(text.count("\n", 0, m.start()) + 1, m.group(1)) for m in _SWALLOW.finditer(text)]
+        if len(found) >= 3:
+            out.append({
+                "title": f"A failed allocation or write never reaches the caller in {a['name']}",
+                "statement": (f"{len(found)} procedures in {a['name']} (for example line {found[0][0]}: if {found[0][1]} is not 0 then return 0) give up when the "
+                              f"allocation, read or write fails and still return 0, so the caller sees success and the failure is lost."),
+                "facts": [], "basis": "observed", "files": [a["name"]], "source": "rule drift", "severity": "medium",
+                "cites": [f"{a['name']} lines {found[0][0]}\u2013{found[0][0]}", f"{a['name']} lines {found[-1][0]}\u2013{found[-1][0]}"]})
+    return out
+
+
+def repeated_tables(store):
+    """The same OCCURS table declared many times: a change to its size has to be made in every copy."""
+    out = []
+    for a in store.artifacts():
+        text = a.get("transcription") or ""
+        counts = {}
+        for m in re.finditer(r"OCCURS\s+(\d+)\s+TIMES", text, re.I):
+            counts.setdefault(m.group(1), []).append(text.count("\n", 0, m.start()) + 1)
+        for n, lines in counts.items():
+            if len(lines) >= 10:
+                out.append({
+                    "title": f"The {n}-period table in {a['name']} is repeated {len(lines)} times, so a change never lands in one place",
+                    "statement": (f"{a['name']} declares OCCURS {n} TIMES in {len(lines)} separate record areas (lines {lines[0]} to {lines[-1]}), so changing the "
+                                  f"number of periods means editing every copy and any copy that is missed keeps the old layout."),
+                    "facts": [], "basis": "observed", "files": [a["name"]], "source": "rule drift", "severity": "medium",
+                    "cites": [f"{a['name']} lines {lines[0]}\u2013{lines[0]}", f"{a['name']} lines {lines[-1]}\u2013{lines[-1]}"]})
+    return out
+
+
 def conflicts(store):
-    return threshold_drift(store) + unwritten_amounts(store) + unused_copybooks(store)
+    return (threshold_drift(store) + unwritten_amounts(store) + unused_copybooks(store) + swallowed_failures(store)
+            + repeated_tables(store))
