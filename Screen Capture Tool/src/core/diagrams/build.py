@@ -732,6 +732,18 @@ def architecture(store) -> dict:
                   "supported": "supported", "unknown": "version ?"}.get(t.get("status"), "")
         techs.append({"id": f"t{len(techs)}", "title": f"{_short(label, 34)} · {status}", "fill": fill, "stroke": stroke,
                       "kind": "chip"})
+    covered = " ".join(t["title"].lower() for t in techs)
+    by_lang = {}
+    for a in m.arts.values():
+        lang = (a.get("language") or "").strip()
+        if lang and a.get("artifact_type") not in ("ui_screen", "document"):
+            by_lang[lang] = by_lang.get(lang, 0) + 1
+    for lang, n in sorted(by_lang.items()):            # every language in the files, not only the ones with a support record
+        if lang.lower() in covered or any(w in covered for w in re.findall(r"[a-z/]{3,}", lang.lower()) if w not in ("code", "the")):
+            continue
+        fill, stroke = STATUS_CHIP["unknown"]
+        techs.append({"id": f"t{len(techs)}", "title": f"{_short(lang, 28)} \u00b7 {n} file{'s' if n != 1 else ''} \u00b7 version ?",
+                      "fill": fill, "stroke": stroke, "kind": "chip"})
     if techs:
         bars.append({"id": "bar-platform", "title": "Platform & runtime", "chips": techs})
     cfg = [a for a in m.arts.values() if family(a["name"], a.get("language") or "") in ("config", "props", "json")
@@ -745,10 +757,21 @@ def architecture(store) -> dict:
             {"id": f"cfg{a['id']}", "title": a["name"] + (f" · {secrets[a['id']]} secret(s)" if secrets.get(a["id"]) else ""),
              "kind": "chip", **({"fill": "#FDE2E1", "stroke": "#B3261E"} if secrets.get(a["id"]) else {})} for a in cfg]})
     sec = sec_summary(store)
-    if sec["total"]:
-        bars.append({"id": "bar-security", "title": "Security findings", "chips": [
-            {"id": f"sev-{k}", "title": f"{v} {k}", "kind": "chip", "fill": SEV_CHIP[k][0], "stroke": SEV_CHIP[k][1],
-             "ink": "#FFFFFF" if k == "critical" else None} for k, v in sec["by_severity"].items() if v]})
+    chips = [{"id": f"sev-{k}", "title": f"{v} {k}", "kind": "chip", "fill": SEV_CHIP[k][0], "stroke": SEV_CHIP[k][1],
+              "ink": "#FFFFFF" if k == "critical" else None} for k, v in sec["by_severity"].items() if v] if sec["total"] else []
+    try:        # the line-by-line review records security observations the rule-based scan does not
+        from core import deepdive as _DD
+        reviewed = {k: 0 for k in ("critical", "high", "medium", "low")}
+        for facts in _DD.review_facts(store).values():
+            for f in facts:
+                if f.get("category") == "security" and f.get("severity") in reviewed:
+                    reviewed[f["severity"]] += 1
+    except Exception:  # noqa: BLE001 - the chip is an extra
+        reviewed = {}
+    chips += [{"id": f"rev-{k}", "title": f"{v} {k} (code review)", "kind": "chip", "fill": SEV_CHIP[k][0], "stroke": SEV_CHIP[k][1],
+               "ink": "#FFFFFF" if k == "critical" else None} for k, v in reviewed.items() if v]
+    if chips:
+        bars.append({"id": "bar-security", "title": "Security findings", "chips": chips})
     cov = store.coverage()
     mc = cov.get("missing_counts") or {}
     bars.append({"id": "bar-coverage", "title": "Coverage", "chips": [
