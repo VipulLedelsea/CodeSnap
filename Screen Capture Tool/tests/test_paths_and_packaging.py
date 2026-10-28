@@ -42,7 +42,8 @@ def test_no_module_builds_a_write_path_from_its_own_location():
 def test_the_spec_bundles_every_data_file_the_code_reads():
     spec = (ROOT / "packaging" / "CodeSnap.spec").read_text()
     data_files = [p for p in (ROOT / "src").rglob("*") if p.is_file() and p.suffix not in (".py", ".pyc")
-                  and "__pycache__" not in p.parts and "static" not in p.parts]
+                  and "__pycache__" not in p.parts and "static" not in p.parts
+                  and not any(part.startswith(".") for part in p.relative_to(ROOT / "src").parts)]     # caches such as .pytest_cache are not data
     missing = [str(p.relative_to(ROOT / "src")) for p in data_files
                if p.name not in spec and p.parent.name not in spec]
     assert not missing, f"not bundled by packaging/CodeSnap.spec: {missing}"

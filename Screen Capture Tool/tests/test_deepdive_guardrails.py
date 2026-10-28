@@ -289,8 +289,9 @@ def test_report_section_cites_every_statement_and_lists_the_rescan_once(store):
     d = docx.Document(io.BytesIO(docx_bytes(store, rescan=True)))
     paras = [p.text for p in d.paragraphs]
     cells = "\n".join(c.text for t in d.tables for r in t.rows for c in r.cells)
-    # The report follows the template, so the per-component review section is not part of it.
-    assert not any(p.startswith(("3.6 ", "Notes for ", "Appendix H", "Appendix I")) for p in paras)
+    # The report follows the template, so the per-component review section is not part of it. (Appendices H and I are the
+    # register overflow and the continued open items; they are part of the report and are not checked here.)
+    assert not any(p.startswith(("3.6 ", "Notes for ")) for p in paras)
     assert not re.search(r"\b(rescan|screenshots?|captur\w*|scann\w*)\b", "\n".join(paras), re.I)
     assert cells.count("Re-obtain a complete copy of AIDPAYRN.cbl") == 1
 

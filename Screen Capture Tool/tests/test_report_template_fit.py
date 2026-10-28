@@ -11,7 +11,10 @@ from core.model import ProgramStore
 from core.report import docx_bytes, template_fit
 
 DEMO = Path(__file__).resolve().parent / "fixtures" / "demo930"
-EXTRA_OK = {"rating scales and definitions", "appendix g. glossary"}
+EXTRA_OK = {"rating scales and definitions", "appendix g. glossary",
+            # the register overflow appendices: rows cut from a long register go here and the body says so
+            "appendix h. further register entries", "technical debt register", "risk register",
+            "appendix i: open items, continued", "appendix j: technical debt register, continued", "appendix k: risk register, continued"}
 
 
 @pytest.mark.skipif(not DEMO.exists(), reason="the demo930 fixture program is git-ignored and only exists on the original machine")
