@@ -155,3 +155,16 @@ def test_a_structural_check_can_set_its_own_severity():
     from core.report import codefindings as CFM
     o = {"title": "X is calculated but never written", "statement": "never written", "files": ["a"], "cites": [], "severity": "medium", "source": "rule drift"}
     assert CFM.program_items([o])["risks"][0]["severity"] == "medium"
+
+
+def test_datasets_that_differ_in_one_name_segment_become_one_diagram_node():
+    from core.diagrams import build
+    names = [f"SYNTH.{d}.REVIEW" for d in ("ASHFORD", "BRIARWOO", "CEDARVAL", "DUNWICH", "ELMBRIDG", "FAIRHAVE", "GLENMOOR")] + ["SYNTH.POST.OUT", "SYNTH.BANK.INPUT"]
+    model = build._Model.__new__(build._Model)
+    model.ents = {i: {"id": i, "name": n, "kind": "data_store", "origin": "placeholder", "parent_id": None, "artifact_id": None, "attrs": {}}
+                  for i, n in enumerate(names, 1)}
+    model.rels = [{"from_id": 100, "to_id": i, "kind": "writes"} for i in model.ents]
+    model._collapse_numbered_datasets()
+    titles = sorted(e["name"] for e in model.ents.values())
+    assert "SYNTH.*.REVIEW (x7)" in titles and "SYNTH.POST.OUT" in titles and len(titles) == 3
+    assert len(model.rels) == 3

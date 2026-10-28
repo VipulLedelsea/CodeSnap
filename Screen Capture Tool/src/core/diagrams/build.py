@@ -54,6 +54,27 @@ class _Model:
             for e in members[1:]:
                 remap[e["id"]] = rep["id"]
                 del self.ents[e["id"]]
+        # one dotted segment varies (SYNTH.ASHFORD.REVIEW, SYNTH.BRIARWOO.REVIEW ...): one node for the family
+        seg = {}
+        for e in self.ents.values():
+            parts = (e["name"] or "").split(".")
+            if e["kind"] == "data_store" and len(parts) >= 3:
+                for i in range(len(parts)):
+                    key = (".".join(parts[:i] + ["*"] + parts[i + 1:]), e["origin"] == "placeholder")
+                    seg.setdefault(key, []).append(e)
+        taken = set()
+        for (pattern, _), members in sorted(seg.items(), key=lambda kv: -len(kv[1])):
+            members = [e for e in members if e["id"] not in taken and e["id"] in self.ents]
+            if len(members) < 6:
+                continue
+            members.sort(key=lambda e: e["id"])
+            rep = members[0]
+            self.ents[rep["id"]] = rep = {**rep, "name": f"{pattern} (x{len(members)})"}
+            taken.add(rep["id"])
+            for e in members[1:]:
+                remap[e["id"]] = rep["id"]
+                taken.add(e["id"])
+                del self.ents[e["id"]]
         if not remap:
             return
         seen, rels = set(), []
@@ -114,7 +135,7 @@ def context(store) -> dict:
             attrs = e.get("attrs") or {}
             detail = [v for v in (attrs.get("store_type"), attrs.get("protocol")) if v]
             if e["origin"] == "placeholder":
-                detail.append("not captured")
+                detail.append("referenced only")
             right.append({"id": f"e{e['id']}", "title": _short(e["name"]), "stereotype": stereo, "kind": kind,
                           "sections": [detail] if detail else [], "dashed": e["origin"] == "placeholder"})
             verbs = sorted(access.get(e["id"], {"connects_to"}))
@@ -295,7 +316,9 @@ def _data_stereotype(table):
 
 def data_model(store) -> dict:
     m = _model(store)
-    all_tables = [e for e in m.ents.values() if e["kind"] == "table"]
+    every = [e for e in m.ents.values() if e["kind"] == "table"]
+    views = [e for e in every if (e.get("attrs") or {}).get("view")]
+    all_tables = [e for e in every if not (e.get("attrs") or {}).get("view")]      # a view has no columns of its own to draw
     tables = all_tables
     if len(all_tables) > MAX_TABLES:
         linked = {r[k] for r in m.rels if r["kind"] == "depends_on" for k in ("from_id", "to_id")}
@@ -325,6 +348,8 @@ def data_model(store) -> dict:
                               "style": "solid", "head": "open"})
     scene = layered(nodes, edges, "TB", straight=len(edges) > 12)
     shown = f" (showing {len(tables)} of {len(all_tables)} tables)" if len(all_tables) > len(tables) else ""
+    if views:
+        shown += f" ({len(views)} views not drawn)" if shown else f" ({len(views)} views not drawn)"
     return {"id": "data", "kind": "data", "title": f"Data model — {store.info['name']}{shown}", **scene}
 
 
@@ -513,6 +538,12 @@ def architecture(store) -> dict:
         node_of[f"art:{aid}"] = put("application", gid, gt, {
             "id": f"a{aid}", "title": _short(a["name"], 30), "icon": _icon(ic), "badge": badge(aid),
             "sub": f"{lines} lines" + (f" · {units} unit{'s' if units != 1 else ''}" if units else "")})
+    screen_family = {}
+    for e in m.ents.values():
+        if e["kind"] == "screen" and e["origin"] != "placeholder":
+            screen_family.setdefault(re.sub(r"\d+", "nn", e["name"] or ""), []).append(e)
+    screen_family = {k: sorted(v, key=lambda x: x["name"]) for k, v in screen_family.items() if len(v) >= 6}    # H00..H32 and M00..M35 are one node each
+    screen_node = {}
     for e in sorted(m.ents.values(), key=lambda e: e["name"]):
         k, ph = e["kind"], e["origin"] == "placeholder"
         attrs = e.get("attrs") or {}
@@ -536,6 +567,15 @@ def architecture(store) -> dict:
                 gid, gt = "g-scr-client", "Desktop / client-server screens"
             else:
                 gid, gt = "g-scr-bms", "CICS / BMS screens"
+            fam_key = re.sub(r"\d+", "nn", e["name"] or "")
+            if fam_key in screen_family:
+                if fam_key not in screen_node:
+                    members = screen_family[fam_key]
+                    screen_node[fam_key] = put("presentation", gid, gt, {
+                        "id": nid, "title": f"{members[0]['name']}\u2013{members[-1]['name']}", "icon": _icon("screen"),
+                        "sub": f"{len(members)} screens", "dashed": False, "badge": badge(src_art)})
+                node_of[e["id"]] = screen_node[fam_key]
+                continue
             node_of[e["id"]] = put("presentation", gid, gt, {"id": nid, "title": _short(e["name"], 30), "icon": _icon("screen"),
                                                              "dashed": ph, "badge": badge(src_art)})
         elif k == "api_endpoint" and not ph:
@@ -552,7 +592,10 @@ def architecture(store) -> dict:
             db = st == "database"
             node_of[e["id"]] = put("data", "g-db" if db else "g-files", "Databases" if db else "Files & datasets",
                                    {"id": nid, "title": _short(e["name"], 32), "icon": _icon("database" if db else "file"),
-                                    "sub": ("not captured" if ph else st) or None, "dashed": ph})
+                                    "sub": ("referenced only" if ph else st) or None, "dashed": ph})
+        elif k == "table" and attrs.get("view"):
+            node_of[e["id"]] = put("data", "g-views", "Views", {"id": nid, "title": _short(e["name"], 32), "icon": _icon("table"),
+                                                               "dashed": ph, "sub": "view"})
         elif k == "table":
             cols = sum(1 for c in m.children.get(e["id"], []) if c["kind"] == "column")
             node_of[e["id"]] = put("data", "g-tables", "Tables", {"id": nid, "title": _short(e["name"], 32),
