@@ -187,3 +187,16 @@ def test_views_are_not_counted_as_database_tables_in_the_context_diagram(tmp_pat
     box = next(n for n in build.context(s)["nodes"] if n["id"] == "tables")
     assert "(2)" in box["title"] and any("1 views" in line for line in box["sections"][0])
     s.close()
+
+
+def test_coverage_chips_say_read_from_the_folder_for_a_folder_review(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODESNAP_PROGRAMS", str(tmp_path / "p"))
+    from core.diagrams import build
+    folder = tmp_path / "src"
+    folder.mkdir()
+    (folder / "A.cbl").write_text("       IDENTIFICATION DIVISION.\n       PROGRAM-ID. A.\n       PROCEDURE DIVISION.\n           STOP RUN.\n")
+    s = ProgramStore.create("Folder chips")
+    add_folder_files(s, str(folder))
+    titles = [n["title"] for n in build.architecture(s)["nodes"]]
+    assert "1 files read from the folder" in titles and not any("captured" in t for t in titles)
+    s.close()

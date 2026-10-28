@@ -542,7 +542,10 @@ def _icon(key):
 def architecture(store) -> dict:
     from core.security.rules import family
     from core.security.scan import summary as sec_summary, technologies
+    from core.model.folder_import import is_exact
     m = _model(store)
+    from_folder = bool(m.arts) and all(is_exact(store, a) for a in m.arts.values())      # read from disk: nothing was captured
+    not_there = "not in the folder" if from_folder else "not captured"
     name = store.info["name"]
     assessment = store.get_meta("assessment") or {}
     risk = {c["artifact_id"]: c["risk"]["level"] for c in assessment.get("components") or []}
@@ -617,7 +620,7 @@ def architecture(store) -> dict:
             fam = family(src.get("name", ""), src.get("language") or "")
             bms = src.get("name", "").lower().endswith(".bms") or "bms" in (src.get("language") or "").lower()
             if ph:
-                gid, gt = "g-scr-miss", "Screens referenced, not captured"
+                gid, gt = "g-scr-miss", f"Screens referenced, {not_there}"
             elif bms:
                 gid, gt = "g-scr-bms", "CICS / BMS screens"
             elif src.get("artifact_type") == "ui_screen":
@@ -669,7 +672,7 @@ def architecture(store) -> dict:
                                                                             "icon": _icon("external"), "dashed": ph,
                                                                             "sub": attrs.get("protocol")})
         elif ph and k in ("program", "class", "copybook") and classify_placeholder(e) == "missing_code":
-            node_of[e["id"]] = put("application", "g-missing", "Referenced, not captured",
+            node_of[e["id"]] = put("application", "g-missing", f"Referenced, {not_there}",
                                    {"id": nid, "title": _short(e["name"], 30), "icon": _icon("missing"), "dashed": True,
                                     "sub": k})
     if lanes_["presentation"] or any(g for g in lanes_["integration"] if g in ("g-api", "g-tx")):
@@ -774,11 +777,13 @@ def architecture(store) -> dict:
         bars.append({"id": "bar-security", "title": "Security findings", "chips": chips})
     cov = store.coverage()
     mc = cov.get("missing_counts") or {}
+    word_files, word_missing, word_ratio = (("files read from the folder", "code references not in the folder", "of referenced code supplied")
+                                            if from_folder else ("files captured", "code references not captured", "of referenced code captured"))
     bars.append({"id": "bar-coverage", "title": "Coverage", "chips": [
-        {"id": "cov-files", "title": f"{len(m.arts)} files captured", "kind": "chip"},
-        {"id": "cov-missing", "title": f"{mc.get('missing_code', 0)} code references not captured", "kind": "chip"},
+        {"id": "cov-files", "title": f"{len(m.arts)} {word_files}", "kind": "chip"},
+        {"id": "cov-missing", "title": f"{mc.get('missing_code', 0)} {word_missing}", "kind": "chip"},
         {"id": "cov-ext", "title": f"{mc.get('external', 0)} external resources", "kind": "chip"},
-        {"id": "cov-ratio", "title": f"{round((cov.get('resolved_ratio') or 0) * 100)}% of referenced code captured",
+        {"id": "cov-ratio", "title": f"{round((cov.get('resolved_ratio') or 0) * 100)}% {word_ratio}",
          "kind": "chip"}]})
     verdict = (assessment.get("verdict") or {}).get("label")
     scene = lanes(lane_specs, edges, bars)
