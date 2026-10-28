@@ -403,6 +403,12 @@ def _family_labels(names, minimum=4, segment_minimum=6) -> dict:
 def interactions(store, limit=40) -> list:
     flows = trace_flows(store)
     labels = _family_labels([x for f in flows for st in f["steps"] for x in (st["from"], st["to"])])
+    names = {e["id"]: e["name"] for e in store.entities()}
+    step_program = {}          # (job, dataset, kind, line) -> the program the JCL step runs
+    for r in store.relations():
+        pgm = (r.get("attrs") or {}).get("program")
+        if pgm and r["from_id"] in names and r["to_id"] in names:
+            step_program[(names[r["from_id"]], names[r["to_id"]], r["kind"], r.get("line"))] = str(pgm)
     by_entry = {}
     for f in flows:
         by_entry.setdefault((f["entry_kind"], f["entry"]), []).append(f)
@@ -415,7 +421,15 @@ def interactions(store, limit=40) -> list:
         msgs.append({"from": "p0", "to": "p1", "label": "runs" if ekind == "job" else "opens / submits"})
         for f in sorted(fl, key=lambda x: x["length"]):
             for s in f["steps"]:
+                pgm = step_program.get((s["from"], s["to"], s["kind"], s.get("line"))) if ekind == "job" else None
                 s = {**s, "from": labels.get(s["from"], s["from"]), "to": labels.get(s["to"], s["to"])}
+                if pgm:        # the step runs a program, and the program is what reads or writes the dataset
+                    run_key = (s["from"], "runs", pgm)
+                    if run_key not in seen:
+                        seen.add(run_key)
+                        parts.setdefault(pgm, {"id": f"p{len(parts)}", "title": _short(pgm, 36), "kind": "participant"})
+                        msgs.append({"from": parts[s["from"]]["id"], "to": parts[pgm]["id"], "label": "runs", "style": "solid"})
+                    s = {**s, "from": pgm}
                 key = (s["from"], s["kind"], s["to"])
                 if key in seen:
                     continue
