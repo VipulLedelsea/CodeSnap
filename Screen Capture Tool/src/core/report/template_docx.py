@@ -673,7 +673,17 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     poor_fc = [r_ for r_ in FCR if r_[3] and r_[3] >= 4]
     reviewed = [x for x in code_arts if str(x["id"]) in DD]
     n_facts = sum(len((DD.get(str(x["id"])) or {}).get("facts") or []) for x in reviewed)
-    headline_rows = ([r_ for r_ in BR if not r_.get("gap")] or BR)[:3]       # a finding beside a capture gap does not head the report
+    _pool = [r_ for r_ in BR if not r_.get("gap")] or BR                    # a finding beside a capture gap does not head the report
+    headline_rows, _topics = [], set()
+    for r_ in _pool:                                                       # three different problems, not one problem stated three ways
+        _ids = set(re.findall(r"\b[A-Z][A-Z0-9]+(?:-[A-Z0-9]+)+\b", r_.get("brief") or r_["title"]))
+        if _ids & _topics:
+            continue
+        headline_rows.append(r_)
+        _topics |= _ids
+        if len(headline_rows) == 3:
+            break
+    headline_rows = headline_rows or _pool[:3]
     lead = P.sentence([f"{_lc(r_.get('brief') or r_['title'])}" for r_ in headline_rows])
     findings_txt = [
         ({1: "One problem stands out: ", 2: "Two problems stand out: "}.get(len(headline_rows), "Three problems stand out: ")
@@ -791,7 +801,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         proc._p.getparent().remove(proc._p)
     _flow = (CFM.program_items((DPROG or {}).get("observations")) or {}).get("flow")
     doc.replace("Document each business process the application supports",
-                ([f"How the program runs, start to finish: {_flow['text'].rstrip('.')}."] if _flow else []) +
+                ([f"How the program runs, start to finish: {CFM.short(_flow['text'], 300).rstrip('.')}."] if _flow else []) +
                 ["The process below is drawn from what each component reads, calculates and writes, from the arrival of inputs "
                  "to the outputs and look-ups. Manual steps, approval points outside the application and handoffs are to be "
                  "mapped with stakeholders (open item)."])

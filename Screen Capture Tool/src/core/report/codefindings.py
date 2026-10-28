@@ -183,7 +183,7 @@ def program_items(observations):
                 "basis": o.get("basis"),
                 "severity": o.get("severity") or ("high" if SERIOUS.search(text) else "medium"), "weight": len(files), "cites": o.get("cites") or []}
         if FLOW.search(o.get("title", "")):
-            flow = item
+            flow = flow or item            # the first end-to-end flow is the main one; later ones (restart, recovery) are secondary
         elif CONFLICT.search(o.get("title", "")) and len(files) >= 1:      # the headline says files disagree or break each other
             risks.append(item)
         elif AGREE.search(o.get("title", "")) and len(files) >= 3 and re.search(r"hard.?code", text, re.I):
