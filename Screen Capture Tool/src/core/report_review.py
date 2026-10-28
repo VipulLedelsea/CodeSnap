@@ -318,7 +318,10 @@ _CONFIRMS = re.compile(r"^(?:(?:the )?(?:findings?|code|source)\s+)?(?:also\s+)?
 def note_for(correction):
     """The correction as a short note for the reader: no internal finding numbers, and nothing when the 'correction' only
     confirms the statement."""
-    text = _FINDING_REF.sub(" ", (correction or "").strip()).strip(" ;,")
+    text = re.sub(r"\b(?:per|see|from|in)\s+(?=(?:findings?|F)\s*[\d#])", "", (correction or "").strip(), flags=re.I)     # "per finding 170"
+    text = _FINDING_REF.sub(" ", text)
+    text = re.sub(r"\(\s*\)", "", text)                  # brackets left empty by the removal
+    text = re.sub(r"\s+([,;.)])", r"\1", text).strip(" ;,")
     if not text or _CONFIRMS.match(text) and " but " not in text.lower() and " not " not in text.lower():
         return ""
     if re.match(r"(?i)shows?\b", text):
@@ -327,7 +330,10 @@ def note_for(correction):
     if len(words) > 18:
         cut = " ".join(words[:18])
         text = cut[:max(cut.rfind(";"), cut.rfind(". "), cut.rfind(", "))] if max(cut.rfind(";"), cut.rfind(". "), cut.rfind(", ")) > 60 else cut
-    return text[:1].upper() + text[1:].rstrip(" ;,.") + "."
+    text = text.rstrip(" ;,.")
+    while text.count("(") > text.count(")"):                # never end inside a bracket
+        text = text[:text.rfind("(")].rstrip(" ;,.")
+    return text[:1].upper() + text[1:] + "."
 
 
 REMOVED = "Removed after the code check: not shown by the code."

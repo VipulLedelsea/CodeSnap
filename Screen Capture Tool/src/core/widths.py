@@ -93,5 +93,5 @@ def conflicts(store, minimum_files=2):
         cites = [f"{f} lines {line}\u2013{line}" if line else f for w in sorted(narrow) for f, _, line in by_w[w][:2]]
         narrow_files = sorted({f for w in narrow for f, _, _ in by_w[w]})
         obs.append({"title": f"{c.title()} width differs between files", "statement": stmt, "facts": [], "basis": "observed",
-                    "cites": cites, "files": narrow_files + [f for f in sorted(files) if f not in narrow_files], "source": "field widths"})
+                    "cites": cites, "files": narrow_files + [f for f in sorted(files) if f not in narrow_files], "source": "field widths", "severity": "medium"})
     return obs

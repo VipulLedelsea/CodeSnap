@@ -137,3 +137,21 @@ def test_an_amount_calculated_but_not_in_the_written_record_is_reported():
     assert len(obs) == 1 and "WS-AMOUNT" in obs[0]["title"] and "IN-RECEIPT" in obs[0]["statement"]
     kept = _cobol([("ASHFORD", 1, 2)]).replace("IN-RECEIPT WS-RESULT", "IN-RECEIPT WS-RESULT WS-AMOUNT")
     assert ruledrift.unwritten_amounts(_Texts(**{"A.cbl": kept})) == []
+
+
+def test_sentence_split_does_not_break_after_an_abbreviation():
+    from core.report import editorial
+    text = "It writes to the same datasets (e.g. SYNTH.SOUTHGAT.REVIEW), showing one flow. A second sentence follows."
+    assert editorial._sentences(text) == ["It writes to the same datasets (e.g. SYNTH.SOUTHGAT.REVIEW), showing one flow.", "A second sentence follows."]
+
+
+def test_code_check_note_has_no_dangling_reference():
+    from core.report_review import note_for
+    out = note_for("INPUT-FILE is used in 06_MUNPAY.cbl (and similarly in 07_MUNREV.cbl per finding 170), but findings do not show them shared at runtime.")
+    assert "per." not in out and out.count("(") == out.count(")") and "finding" not in out
+
+
+def test_a_structural_check_can_set_its_own_severity():
+    from core.report import codefindings as CFM
+    o = {"title": "X is calculated but never written", "statement": "never written", "files": ["a"], "cites": [], "severity": "medium", "source": "rule drift"}
+    assert CFM.program_items([o])["risks"][0]["severity"] == "medium"

@@ -44,5 +44,5 @@ def conflicts(store):
                               f"every record once: the work grows with the number of steps instead of the data being read once and split."),
                 "facts": [], "basis": "observed", "files": [a["name"]],
                 "cites": [f"{a['name']} lines {lines[0]}–{lines[0]}", f"{a['name']} lines {lines[-1]}–{lines[-1]}"],
-                "source": "job steps"})
+                "source": "job steps", "severity": "medium"})
     return out

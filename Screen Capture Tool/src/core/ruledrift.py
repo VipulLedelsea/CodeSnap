@@ -41,7 +41,7 @@ def threshold_drift(store):
                 "title": f"Thresholds differ between {x} and {y}",
                 "statement": (f"{len(differ)} of the {len(same_shape)} paragraphs that exist in both {x} and {y} test the same conditions against different numbers, "
                               f"for example {n0}: {fmt(paras[x][n0][0])} in {x}, {fmt(paras[y][n0][0])} in {y}. The two programs can decide the same payment differently."),
-                "facts": [], "basis": "observed", "files": [x, y], "source": "rule drift",
+                "facts": [], "basis": "observed", "files": [x, y], "source": "rule drift", "severity": "high",
                 "cites": [f"{x} lines {paras[x][n0][1]}–{paras[x][n0][1]}", f"{y} lines {paras[y][n0][1]}–{paras[y][n0][1]}"]})
     return out
 
@@ -51,7 +51,7 @@ _AMOUNT = re.compile(r"\b[\w-]*(?:AMOUNT|AMT)[\w-]*\b", re.I)
 
 
 def unwritten_amounts(store):
-    out = []
+    found = {}
     for a in store.artifacts():
         text = a.get("transcription") or ""
         if not re.search(r"PROCEDURE\s+DIVISION", text, re.I):
@@ -67,13 +67,17 @@ def unwritten_amounts(store):
                           and not re.search(rf"\b(?:WRITE|DISPLAY)\b[^\n]*\b{re.escape(c)}\b", text, re.I))
             if lost:
                 line = text.count("\n", 0, m.start()) + 1
-                out.append({
-                    "title": f"{a['name']} calculates {lost[0]} but never writes it",
-                    "statement": (f"{lost[0]} is calculated in {a['name']} (including its sign and limit checks), but the record written to {out_rec} is built from "
-                                  f"{', '.join(sorted(sources))} only, so the amount the checks used is not in the output."),
-                    "facts": [], "basis": "observed", "files": [a["name"]], "source": "rule drift",
-                    "cites": [f"{a['name']} lines {line}–{line}"]})
+                found.setdefault((lost[0], out_rec, tuple(sorted(sources))), []).append((a["name"], line))
                 break
+    out = []
+    for (field, out_rec, sources), where in found.items():
+        names = [n for n, _ in where]
+        out.append({
+            "title": f"{field} is calculated but never written in {' and '.join(names)}",
+            "statement": (f"{field} is calculated in {' and '.join(names)} (including its sign and limit checks), but the record written to {out_rec} is built from "
+                          f"{', '.join(sources)} only, so the amount the checks used is not in the output."),
+            "facts": [], "basis": "observed", "files": names, "source": "rule drift", "severity": "medium",
+            "cites": [f"{n} lines {ln}\u2013{ln}" for n, ln in where]})
     return out
 
 

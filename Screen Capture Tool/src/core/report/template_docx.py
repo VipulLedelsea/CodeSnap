@@ -905,8 +905,11 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         {"title": f"path {m_.group(1)} in {x['name']}"} for x in code_arts
         for m_ in re.finditer(r"[\"']([A-Za-z]:\\[^\"'\n]{2,60})[\"']", x.get("transcription") or "")] + [
         {"title": fct["text"]} for c in comps for fct in c["scores"]["coupling"]["factors"] if "hard" in fct["text"].lower()]
+    not_a_value = re.compile(r"header comment|file header|comment (dates|states|indicates|says)|\b(created|amended|extended) (in )?(19|20)\d\d|"
+                             r"\bSPACE=|cylinders?|tracks?\b|\bCLASS=|MSGCLASS|LRECL|RECFM|\bDCB\b|job card", re.I)
     cfg_ = [CFM.short(f_["statement"], 120) for fs_ in DDV.review_facts(store).values() for f_ in fs_
-            if f_.get("category") == "configuration" and f_.get("review") in (None, "supported", "partly_supported", "corrected")]
+            if f_.get("category") == "configuration" and f_.get("review") in (None, "supported", "partly_supported", "corrected")
+            and not not_a_value.search(f_["statement"])]       # dates in comments and dataset sizes are not business values
     hard += [{"title": t_} for t_ in cfg_[:6]]
     doc.replace("Describe hard-coded business rules", [
         (f"Business rates and run parameters held in the code rather than in a maintained table: {'; '.join(rates[:4])}.")

@@ -35,5 +35,5 @@ def conflicts(store):
                           f"{f' (and {len(ends) - 1} more place(s))' if len(ends) > 1 else ''}. Work the caller has not yet committed is "
                           f"{'committed' if what == 'COMMIT' else 'undone'} with it, so the caller cannot decide the outcome of its own unit of work."),
             "facts": [], "basis": "observed", "files": [a["name"]],
-            "cites": [f"{a['name']} lines {called[0]}–{called[0]}", f"{a['name']} lines {n}–{n}"], "source": "commit scope"})
+            "cites": [f"{a['name']} lines {called[0]}–{called[0]}", f"{a['name']} lines {n}–{n}"], "source": "commit scope", "severity": "medium"})
     return out

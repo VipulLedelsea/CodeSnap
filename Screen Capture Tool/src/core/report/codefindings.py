@@ -181,7 +181,7 @@ def program_items(observations):
         item = {"title": o.get("title", "").rstrip("."), "text": o.get("statement", ""), "files": files,
                 "spans": {} if o.get("source") else _spans(o.get("cites")),     # a structural check names its own lines and covers no other finding
                 "basis": o.get("basis"),
-                "severity": "high" if SERIOUS.search(text) else "medium", "weight": len(files), "cites": o.get("cites") or []}
+                "severity": o.get("severity") or ("high" if SERIOUS.search(text) else "medium"), "weight": len(files), "cites": o.get("cites") or []}
         if FLOW.search(o.get("title", "")):
             flow = item
         elif CONFLICT.search(o.get("title", "")) and len(files) >= 1:      # the headline says files disagree or break each other

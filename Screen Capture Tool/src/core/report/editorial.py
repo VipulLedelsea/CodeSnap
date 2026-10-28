@@ -56,6 +56,14 @@ def decision(assessment, evidence):
     return "Green", "Keep the application and continue routine maintenance.", "176B3A"
 
 
+SENTENCE_END = re.compile(r"(?<!e\.g\.)(?<!i\.e\.)(?<!etc\.)(?<!vs\.)(?<!cf\.)(?<=[.!?])\s+(?=[A-Z])")
+
+
+def _sentences(text):
+    """Split into sentences without breaking after e.g., i.e., etc., vs. or cf. (a capital letter often follows them)."""
+    return SENTENCE_END.split(text)
+
+
 def _paragraph(document, text, style=None):
     p = document.add_paragraph(text, style)
     p.paragraph_format.space_after = Pt(6)
@@ -150,7 +158,7 @@ def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts
         for source_el, text in candidates:
             chosen = []
             # Complete sentences only; never cut a finding or its qualification halfway through.
-            for sentence in ([text] if re.match(r"^\d+\.", text) else re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)):
+            for sentence in ([text] if re.match(r"^\d+\.", text) else _sentences(text)):
                 n = len(lines(sentence))
                 if used + n <= PROSE_LINES:
                     selected.append(sentence); chosen.append(sentence); used += n
@@ -178,7 +186,7 @@ def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts
                     if cell._tc in seen: continue
                     seen.add(cell._tc)
                     if (len(cell.text.split()) > 32 or len(cell.text) > 240) and not cell.text.startswith("Blocks issue:"):
-                        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z])", cell.text)
+                        parts = _sentences(cell.text)
                         sentence = " ".join([parts[0]] + [x for x in parts[1:] if KEEP_SENTENCE.search(x)])
                         if len(sentence) < len(cell.text):
                             cell.text = plain(sentence)
@@ -209,7 +217,7 @@ def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts
             text = plain(template_fit.strip_references(para.text, numbers))
             if gone.search(text) or para.text.startswith("Code review"):
                 continue
-            sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
+            sentences = _sentences(text)
             if i == 0 and text.startswith("This assessment describes"):
                 text = ("This report covers only the source code that was reviewed. "
                         "Ratings are temporary until the open items are closed.")
