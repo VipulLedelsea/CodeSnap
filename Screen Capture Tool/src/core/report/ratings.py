@@ -307,6 +307,13 @@ def scorecard(comps, AM, sec_rating, sec_text, facts) -> dict:
     out["Stability and reliability"] = from_code(["health"], "stability", [
         (1 if facts.get("silent_errors") else 0,
          f"Errors are swallowed in {', '.join(facts.get('silent_errors') or [])}, so a failure can look like success.")])
+    n_rev = facts.get("review_findings") or 0
+    cq_r, cq_t = out["Code quality"]
+    if cq_r and n_rev >= 15:      # many recorded defects cannot sit beside a good code-quality rating
+        floor = 4 if n_rev >= 40 else 3
+        if floor > cq_r:
+            cq_t += f" The line-by-line review recorded {n_rev} defects across the files. Rating moved from {cq_r} to {floor}."
+            out["Code quality"] = (floor, cq_t)
     hi = facts.get("review_high") or []
     st, st_txt = out["Stability and reliability"]
     if hi and st:

@@ -76,7 +76,7 @@ def risk_text(title, comps):
     return title + (f" ({', '.join(comps[:3])})" if comps else "")
 
 
-SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(])")
+SENT = re.compile(r"(?<!e\.g\.)(?<!i\.e\.)(?<!etc\.)(?<!vs\.)(?<=[.!?])\s+(?=[A-Z0-9(])")
 SKIP = re.compile(r"^(?:DRAFT:|Figure |Table |The draft report's|Source:|Note:)")
 MAX_TEXT = 500
 

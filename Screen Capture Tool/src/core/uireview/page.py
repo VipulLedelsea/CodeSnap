@@ -96,7 +96,8 @@ class _Scan(HTMLParser):
             self.meta_viewport = (line, a.get("content", ""))
         elif tag == "form":
             self.forms.append({"line": line, "method": (a.get("method") or "GET").upper(), "action": a.get("action", ""),
-                               "runat": a.get("runat"), "inputs": [], "hidden": []})
+                               "runat": a.get("runat"), "inputs": [], "hidden": [],
+                               "scripted": bool(re.search(r"return\s+false|preventDefault", a.get("onsubmit", "") or "", re.I))})
         elif tag == "table":
             self.tables.append({"line": line, "rows": 0, "th": 0, "role": a.get("role", "")})
         elif tag == "tr" and self.tables:
@@ -231,10 +232,10 @@ def check_page(text: str) -> list:
     for f in s.forms:
         names = [(r["a"].get("name") or r["a"].get("id") or "") for r in f["inputs"]]
         sensitive = [n for n in names if re.search(r"pass|pwd", n, re.I) or pii_class(n)]
-        if f["method"] == "GET" and sensitive and not f["runat"]:
+        if f["method"] == "GET" and sensitive and not f["runat"] and not f.get("scripted"):      # a script sends it, the form is never submitted as a GET
             add("UIS-GET", "ui_security", "high", f["line"], "form sends sensitive fields in the URL (GET): " + ", ".join(sensitive[:4]),
                 f"<form method=get action={f['action']}>", cwe="CWE-598", nist=["SC-8", "SI-10"])
-        if f["method"] == "POST" and not f["runat"] and not any(CSRF.search((h["a"].get("name") or "") + (h["a"].get("id") or ""))
+        if f["method"] == "POST" and not f["runat"] and not f.get("scripted") and not any(CSRF.search((h["a"].get("name") or "") + (h["a"].get("id") or ""))
                                                                   for h in f["hidden"]):
             add("UIS-CSRF", "ui_security", "medium", f["line"], "POST form has no anti-forgery token",
                 f"<form method=post action={f['action']}>", cwe="CWE-352", nist=["SC-23"])

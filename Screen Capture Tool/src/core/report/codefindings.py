@@ -25,6 +25,25 @@ POSITIVE = re.compile(r"has file status monitoring|standard EXEC SQL host-variab
                       r"is assigned to \w+ and has|properly (handled|checked)|correctly (handled|checked)", re.I)
 UNCONDITIONAL = re.compile(r"\bevery\b|unconditional|\balways\b|\ball \d+\b|never (checks|checked|enforced)|silently ignor|"
                            r"syntax error|duplicated|no expiry|cannot (ever|actually)|can never", re.I)
+# Plain-English defect wording the model uses when it leaves the severity blank: an unbounded retry, an unguarded input, a value that
+# is rounded or truncated, markup written without escaping, a write that is not checked. A finding that says this is a defect whatever
+# severity it carries; it is ranked as medium.
+DEFECT_WORDS = re.compile(
+    r"loops? forever|no (visible )?(maximum|max(imum)? retry|bounds?|upper bound|guard|try/except|check|validation|uniqueness|CHECK constraint|error handling)|"
+    r"without (any )?(escaping|sanitiz|encoding|encodeURI|checking|validat|a (check|lock|transaction)|bounds)|not (validated|bounded|checked|escaped|encoded)|"
+    r"(will|would|can|could) (raise|fail|throw|crash)|raises? an? (unhandled|error|KeyError|ZeroDivision)|unhandled|"
+    r"\bXSS\b|cross-site|stored XSS|innerHTML|localStorage|\bNaN\b|ZeroDivision|negative (OFFSET|value|fee)|"
+    r"truncat|discard(s|ing)? (any )?fraction|(sum|total) of the .* can differ|rounded .* repeated|"
+    r"floating.point|\bREAL\b|precision|"
+    r"is (lost|never (closed|called|reached|applied|read))|original booking|(lost|erased|deleted) (if|when)|"
+    r"commits? .*before|before .*commit|not atomic|race|concurren|two (requests|reviewers)|"
+    r"(plain ?text|unencrypted|in clear)|world-(writable|readable)|no encodeURIComponent|without encodeURIComponent|"
+    r"never expir|no (expiry|timeout)|every keystroke|never reset|stale|"
+    r"does not (check|validate|handle|guard|close|verify)|"
+    r"never (checks?|validates?|handles?|closes?|verif)|"
+    r"no (visible )?(role|authorization|authorisation) check|exactly equal", re.I)
+NOT_A_DEFECT = re.compile(r"\b(is|are) (not supported|functionally fine|incorrect)\b|claim .* (is incorrect|not supported)|is consistent|uses parameteri[sz]ed|"
+                          r"requires authentication|reuses the existing|is declared once|redundant database", re.I)
 WORD = re.compile(r"[a-z0-9_]{4,}")
 GENERIC = re.compile(r"identical structure|^(the )?(file|program|copybook|jcl|rexx)\b.*\b(defines|is a|is an|contains|declares)\b|synthetic", re.I)
 
@@ -42,15 +61,20 @@ def _score(f):
 
 
 def _defect_like(f):
-    if POSITIVE.search(f["statement"]):
+    if POSITIVE.search(f["statement"]) or NOT_A_DEFECT.search(f["statement"]):
         return False
     if f.get("severity") in ("high", "medium"):
         return True
+    if DEFECT_WORDS.search(f["statement"]) and f.get("category") in CATEGORIES:
+        return True
+    if f.get("category") == "defect":
+        return True           # the model itself filed it as a defect, whatever severity it gave
     if THEMES.search(f["statement"]) and f.get("category") in ("defect", "data_integrity", "error_handling", "control_flow", "calculation", "data_write"):
         return True     # a known defect pattern (waiver, truncation, a return code that does not stop the job) needs no severity
     return sum(1 for p in SIGNALS if p.search(f["statement"])) >= 2
 
 
+CAPS = re.compile(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b|\b[A-Z]{4,}\b")
 IDENT = re.compile(r"\b\w*_\w*\b|\b[A-Za-z]*[a-z][A-Z][A-Za-z]*\b")
 
 
@@ -59,10 +83,14 @@ def _same(a, b):
     if not ta or not tb:
         return False
     ids = {w.lower() for w in IDENT.findall(a)} & {w.lower() for w in IDENT.findall(b)}
-    return len(ids) >= 2 or len(ta & tb) / min(len(ta), len(tb)) >= 0.5      # one shared name is not enough: two defects can touch the same view
+    caps_a, caps_b = set(CAPS.findall(a)), set(CAPS.findall(b))
+    if caps_a and caps_b and not caps_a & caps_b:
+        return False          # each names a different constant (SMS_KEY, SMTP_PASSWORD): two findings, not one said twice
+    long_shared = {w for w in ta & tb if len(w) >= 7}
+    return len(ids) >= 2 or len(ta & tb) / min(len(ta), len(tb)) >= 0.5 or len(long_shared) >= 5      # one shared name is not enough: two defects can touch the same view
 
 
-PER_FILE = 6
+PER_FILE = 8
 _RANK = {"high": 2, "medium": 1}      # within a file a medium finding is chosen before a low or unrated one of a higher score
 
 
@@ -82,19 +110,23 @@ def select(store, code_arts, review_facts, total=24, minimum=2):
                 continue
             key = f["statement"][:50]
             sc = _score(f)
+            sev = f.get("severity")
+            if sev not in ("high", "medium") and DEFECT_WORDS.search(f["statement"]):
+                sev, sc = "medium", sc + 2       # a defect the model left unrated ranks and is rated as medium, not dropped
             if sc >= minimum and key not in seen:
                 seen.add(key)
                 gap = DDV.in_gap(zones, f.get("lines")) if zones else None
                 cands.append({"file": art["name"], "text": f["statement"] + (GAP_TAG if gap else ""), "gap": gap, "lines": f.get("lines"),
-                              "severity": f.get("severity"), "category": f["category"], "score": sc})
-    cands.sort(key=lambda r: (-_RANK.get(r["severity"], 0), bool(r.get("gap")), -r["score"]))
+                              "severity": sev, "category": f["category"], "score": sc})
+    cands.sort(key=lambda r: (-_RANK.get(r["severity"], 0), bool(r.get("gap")), not THEMES.search(r["text"]), -r["score"]))      # a known defect pattern before an inferred one
     picked = []
     # Every file with candidates gets its best PER_FILE first, so a file whose defects score lower than another's repeated
     # ones is still represented; the rest is filled by rank up to the total.
     per_file, guaranteed = {}, []
     for c in cands:
-        if per_file.get(c["file"], 0) < PER_FILE and not any(g["file"] == c["file"] and _same(g["text"], c["text"]) for g in guaranteed):
-            per_file[c["file"]] = per_file.get(c["file"], 0) + 1       # a near copy of one already chosen does not use a slot
+        if (c["severity"] == "high" or per_file.get(c["file"], 0) < PER_FILE) and not any(g["file"] == c["file"] and _same(g["text"], c["text"]) for g in guaranteed):
+            if c["severity"] != "high":                                # a high finding never uses up the slots meant for the rest of its file
+                per_file[c["file"]] = per_file.get(c["file"], 0) + 1       # a near copy of one already chosen does not use a slot
             guaranteed.append(c)
     for c in cands:           # up to two more per file when the finding matches a known defect pattern (separate commits, MOD, silent failure ...)
         if c not in guaranteed and THEMES.search(c["text"]) and per_file.get(c["file"], 0) < PER_FILE + 2 \
@@ -191,7 +223,7 @@ def program_items(observations):
                 "severity": o.get("severity") or ("high" if SERIOUS.search(text) else "medium"), "weight": len(files), "cites": o.get("cites") or []}
         if FLOW.search(o.get("title", "")):
             flow = flow or item            # the first end-to-end flow is the main one; later ones (restart, recovery) are secondary
-        elif CONFLICT.search(o.get("title", "")) and len(files) >= 1:      # the headline says files disagree or break each other
+        elif (o.get("source") or CONFLICT.search(o.get("title", ""))) and len(files) >= 1:      # the headline says files disagree or break each other
             risks.append(item)
         elif AGREE.search(o.get("title", "")) and len(files) >= 3 and re.search(r"hard.?code", text, re.I):
             debt.append(item)

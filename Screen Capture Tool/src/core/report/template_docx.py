@@ -37,6 +37,17 @@ UNKNOWN = "Unknown"
 PLACEHOLDER = "<insert {} information here>"
 
 
+IMMEDIATE_MAX = 14      # rows in 1.3; the rest of the High risks are in the register
+
+
+def _maint_text(a, n_review) -> str:
+    """The maintainability measure alone; it must not say 'no problems' when the line-by-line review recorded defects."""
+    text = R.explain_program(a, "tech_debt")
+    if n_review:
+        text = text.replace(" No problems were found.", "") + f" The line-by-line review recorded {n_review} defects that these measures do not count (7.3, 9.1)."
+    return text
+
+
 def _review_security_sentence(store, code_arts) -> str:
     """The line-by-line review records security observations the rule-based scan does not (data written to logs or spool,
     unchecked input, unhandled read failures). Say how many, so "no security issues" is never read as covering them."""
@@ -476,7 +487,9 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
              if f_.get("severity") == "high" and f_["category"] in ("defect", "data_integrity", "error_handling")]
     review_high = [f"{x['name']}: {P.lower_first(f_['statement'].rstrip('.'))} ({EV.cite(f_['lines'])})"
                    for x, f_ in _high if not _suspect.search(f_["statement"])]
-    SCF.update({"shared": bool(shared_stores), "review_high": review_high,
+    from . import codefindings as CFM0
+    _n_review = len(CFM0.select(store, code_arts, DDV.review_facts(store)))
+    SCF.update({"review_findings": _n_review, "shared": bool(shared_stores), "review_high": review_high,
                 "capture_suspect": sorted({x["name"] for x, f_ in _high if _suspect.search(f_["statement"])})})
     SC = RT.scorecard(comps, AM, sec_c, sec_txt, SCF)
     conf_level = a["confidence"]["level"]
@@ -643,7 +656,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
             "Criticality tier": tier or doc.unknown("Criticality tier", "1.1"),
             "Overall health rating": RT.overall_text(SC, conf_level),
             "Technical debt level": f"{debt_level}: code quality is rated {RT.words(cq)} in 6.1, which includes "
-                                    f"unconfirmed calculation test coverage. Maintainability alone: {R.explain_program(a, 'tech_debt')}",
+                                    f"unconfirmed calculation test coverage. Maintainability alone: {_maint_text(a, _n_review)}",
             "Open critical or high vulnerabilities": f"{crit_high} ({sum(1 for f in sec_f if f['severity'] == 'critical')} critical, "
                                                      f"{sum(1 for f in sec_f if f['severity'] == 'high')} high); register in 8.3",
             "Highest risk score": (f"{top['score']} of 25, {top['rating']} ({top['id']}: {top.get('brief') or top['title']}); "
@@ -761,10 +774,14 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         if rule == "CREDS":
             act = "Change the exposed passwords and keys now, then move them to a secrets store and remove them from the code."
         imm.append([str(len(imm) + 1), cond, act, owner_it, f"Within {min(_due_days(f) for f in fs)} days"])
-    for r_ in BR:
-        if r_["rating"] == "High" or (r_["cat"] == "Financial control" and r_["score"] >= 12):
-            imm.append([str(len(imm) + 1), r_["title"], r_["mit"].split(". Owner")[0], r_["owner"],
-                        "Within 30 days" if r_["rating"] == "High" else "Within 90 days"])
+    _more = [r_ for r_ in BR if r_["rating"] == "High" or (r_["cat"] == "Financial control" and r_["score"] >= 12)]
+    _room = max(0, IMMEDIATE_MAX - len(imm))
+    for r_ in sorted(_more, key=lambda r_: (r_["cat"] != "Across files", -r_["score"]))[:_room]:     # whole-program risks first, then by score
+        imm.append([str(len(imm) + 1), r_["title"], r_["mit"].split(". Owner")[0], r_["owner"],
+                    "Within 30 days" if r_["rating"] == "High" else "Within 90 days"])
+    if len(_more) > _room:
+        imm.append([str(len(imm) + 1), f"{len(_more) - _room} more risks rated High are in the risk register (9.1 and its appendix).",
+                    "Work through them in the order of the register, highest score first.", owner_it, "Within 30 days"])
     rows(T[6], imm, empty="None")
 
     # 2 business context
@@ -819,6 +836,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         order = [k for k, _ in STAGES]
         job_names_ = {jb["name"].lower() for jb in jobs}
         for c in sorted((c for c in AM["components"] if c["name"] not in COPIES and c["role"] != "Database definition"
+                         and not c["name"].lower().endswith((".yaml", ".yml", ".ini", ".toml", ".json", ".cfg", ".env"))      # settings are not a process step
                          and c["name"].rsplit(".", 1)[0].lower() not in job_names_),
                         key=lambda c: order.index(_stage(c))):
             if jobs and c["role"] not in ("Batch program", "Program"):
@@ -826,9 +844,10 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
             verb, ins, outs = _step(c, DM)
             batch = "Batch" in c["role"] or "procedures" in c["role"]
             job = not batch and bool(c["writes"]) and c["layer"] == "Application"
+            screen = c["layer"] == "Presentation"
             steps.append([str(len(steps) + 1), "Scheduled run (to confirm)" if batch else "Program run (trigger to confirm)" if jobs
-                          else "User-started program" if job else "Business user", f"{c['name']}: {verb}",
-                          "Automated" if batch else "To confirm" if jobs else "Automated, started by a user" if job else "Manual (screen entry)",
+                          else "User-started program" if job else "Business user" if screen else "Application (called by other components)", f"{c['name']}: {verb}",
+                          "Automated" if batch else "To confirm" if jobs else "Automated, started by a user" if job else "Manual (screen entry)" if screen else "Automated, called by another component",
                           ", ".join(ins[:4]) or "–", ", ".join(outs[:4]) or "–", ""])
     rows(T[9], steps, empty="No process steps could be derived from the source; to be mapped with stakeholders.")
     cycles = []
@@ -1200,7 +1219,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     dom = sorted({cats.get(f["rule"], "Code") for f in debt_f}) or ["None"]
     refactor = [i for p in a["roadmap"]["phases"] for i in p["items"] if i.get("kind") in ("debt", "refactor") or "refactor" in i["title"].lower()]
     kv(T[21], {"Overall technical debt level": f"{debt_level}: code quality is rated {RT.words(cq)} in 6.1. Maintainability "
-                                               f"alone: {R.explain_program(a, 'tech_debt')}",
+                                               f"alone: {_maint_text(a, _n_review)}",
                           "Dominant debt categories": ", ".join(dom),
                           "Estimated total remediation effort": f"Part of the {EST['low']}–{EST['high']} person-weeks "
                                                                 f"estimated in 12.4, which covers the fixes and the "
@@ -1929,6 +1948,10 @@ def _infer_stack(stack, arts, DM, AM, store, jobs=()):
         _add_stack(stack, "Operating system", "IBM i (version not confirmed)", "IBM")
 
 
+_STDLIB = set(getattr(__import__("sys"), "stdlib_module_names", ())) | {
+    "fs", "path", "http", "https", "crypto", "os", "util", "events", "stream", "child_process", "url", "zlib", "net", "readline"}      # Python and Node runtime modules
+
+
 def _missing(cov, arts) -> list:
     """Every referenced component that was not provided, once, leaving out routines defined in a provided file."""
     text = "\n".join(x.get("transcription") or "" for x in arts)
@@ -1937,6 +1960,8 @@ def _missing(cov, arts) -> list:
         if m["category"] != "missing_code" or m["name"] in seen:
             continue
         n = re.escape(m["name"])
+        if m["name"].split(".")[0].lower() in _STDLIB:
+            continue  # a standard-library or runtime module ships with the language; it is not missing application source
         if m['name'].upper() in ('IEFBR14', 'IEBGENER'):
             continue  # IBM utilities are runtime dependencies, not missing custom source.
         if any((a.get('name') or '').lower().endswith('.jcl') for a in arts) and not re.search(rf'(?<![\w-]){n}(?![\w-])', text, re.I):
