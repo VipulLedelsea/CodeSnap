@@ -168,3 +168,22 @@ def test_datasets_that_differ_in_one_name_segment_become_one_diagram_node():
     titles = sorted(e["name"] for e in model.ents.values())
     assert "SYNTH.*.REVIEW (x7)" in titles and "SYNTH.POST.OUT" in titles and len(titles) == 3
     assert len(model.rels) == 3
+
+
+def test_family_labels_collapse_numbered_and_one_segment_families():
+    from core.diagrams.build import _family_labels
+    names = [f"SYNTH.{d}.REVIEW" for d in ("A1X", "BRI", "CED", "DUN", "ELM", "FAI")] + [f"SYNTH.RESTART.P{n:02d}.WORK" for n in range(5)] + ["SYNTH.POST.OUT"]
+    out = _family_labels(names)
+    assert out["SYNTH.BRI.REVIEW"] == "SYNTH.*.REVIEW (x6)" and out["SYNTH.RESTART.P03.WORK"] == "SYNTH.RESTART.Pnn.WORK (x5)"
+    assert "SYNTH.POST.OUT" not in out
+
+
+def test_views_are_not_counted_as_database_tables_in_the_context_diagram(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODESNAP_PROGRAMS", str(tmp_path / "p"))
+    from core.diagrams import build
+    s = ProgramStore.create("Views")
+    for n, v in (("T1", False), ("T2", False), ("V1", True)):
+        s.upsert_entity("table", n, attrs={"view": True} if v else {}, origin="extracted")
+    box = next(n for n in build.context(s)["nodes"] if n["id"] == "tables")
+    assert "(2)" in box["title"] and any("1 views" in line for line in box["sections"][0])
+    s.close()

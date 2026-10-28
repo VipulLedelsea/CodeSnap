@@ -141,12 +141,16 @@ def context(store) -> dict:
             verbs = sorted(access.get(e["id"], {"connects_to"}))
             edges.append({"from": "program", "to": f"e{e['id']}", "label": "/".join(v.replace("connects_to", "connects")
                                                                                  for v in verbs), "style": "solid", "head": "arrow"})
-    tables = [e for e in m.ents.values() if e["kind"] == "table"]
-    if tables:
+    every_table = [e for e in m.ents.values() if e["kind"] == "table"]
+    views = [e for e in every_table if (e.get("attrs") or {}).get("view")]
+    tables = [e for e in every_table if not (e.get("attrs") or {}).get("view")]       # a view is not a table; count them apart
+    if tables or views:
         names = sorted(tables, key=lambda t: t["name"])
         lines = [_short(t["name"], 40) + (" (no DDL)" if t["origin"] == "placeholder" else "") for t in names[:16]]
         if len(names) > 16:
             lines.append(f"+{len(names) - 16} more")
+        if views:
+            lines.append(f"+ {len(views)} views")
         right.append({"id": "tables", "title": f"Database tables ({len(tables)})", "stereotype": "data", "kind": "data_store",
                       "sections": [lines]})
         verbs = sorted({v for t in tables for v in access.get(t["id"], set())} or {"reads"})
@@ -161,6 +165,10 @@ def components(store) -> dict:
     for aid, a in m.arts.items():
         nodes[f"a{aid}"] = {"id": f"a{aid}", "title": a["name"], "stereotype": a.get("language") or a.get("artifact_type"),
                             "kind": "component"}
+    program_art = {}
+    for e in m.ents.values():
+        if e["kind"] in ("program", "class") and e["origin"] != "placeholder" and e["artifact_id"] in m.arts:
+            program_art.setdefault((e["name"] or "").upper(), e["artifact_id"])
     for r in m.rels:
         if r["kind"] not in CODE_REL + DATA_REL:
             continue
@@ -168,6 +176,17 @@ def components(store) -> dict:
         if tt and tt["origin"] == "placeholder" and (tt["kind"] == "module" or classify_placeholder(tt) == "library"):
             continue
         src_art = r["artifact_id"] if r["artifact_id"] in m.arts else m.owner_art.get(r["from_id"])
+        ff = m.ents.get(r["from_id"])
+        if ff and tt and ff["kind"] == "data_store" and tt["kind"] == "data_store":
+            continue        # a logical file (PAYIN) matched to a dataset: a mapping, not a component using it; shared names would be credited to one program
+        step_pgm = program_art.get(str((r.get("attrs") or {}).get("program") or "").upper())
+        if step_pgm and ff and ff["kind"] == "job" and tt and tt["kind"] in ("table", "data_store", "external_system"):
+            # the JCL step names the program that runs against this dataset, so that program is the one that reads or writes it
+            tid2 = f"e{tt['id']}"
+            if tid2 not in nodes:
+                nodes[tid2] = {"id": tid2, "title": _short(tt["name"]), "stereotype": tt["kind"].replace("_", " "),
+                               "kind": tt["kind"], "dashed": tt["origin"] == "placeholder"}
+            agg.setdefault((f"a{step_pgm}", tid2), set()).add(r["kind"])
         if src_art is None:
             continue
         t = m.ents.get(r["to_id"])
@@ -238,10 +257,13 @@ def _class_node(m, e, full=False):
     o_lines = [_short(n, 52) for n in (names if full else names[:MAX_OPS])]
     if not full and len(names) > MAX_OPS:
         o_lines.append(f"+{len(names) - MAX_OPS} more")
-    stereo = {"interface": "interface", "program": "COBOL program", "copybook": "copybook"}.get(e["kind"])
     ph = e["origin"] == "placeholder"
+    lang = ((m.arts.get(e.get("artifact_id")) or {}).get("language") or "").strip()
+    stereo = {"interface": "interface", "copybook": "copybook"}.get(e["kind"])
+    if e["kind"] == "program":
+        stereo = f"{lang} script" if lang.upper() == "REXX" else f"{lang} program" if lang else "program"
     if ph:
-        stereo = (stereo + " · " if stereo else "") + "not captured"
+        stereo = "program or utility \u00b7 not in the supplied files" if e["kind"] == "program" else (stereo + " \u00b7 " if stereo else "") + "not captured"
     sections = [x for x in (a_lines, o_lines) if x] if ph else [a_lines, o_lines]
     return {"id": f"c{e['id']}", "title": _short(e["name"].split(".")[-1], 40), "stereotype": stereo,
             "kind": "missing" if ph else "class", "sections": sections, "dashed": ph}
@@ -353,8 +375,34 @@ def data_model(store) -> dict:
     return {"id": "data", "kind": "data", "title": f"Data model — {store.info['name']}{shown}", **scene}
 
 
+def _family_labels(names, minimum=4, segment_minimum=6) -> dict:
+    """name -> 'pattern (xN)' for names that differ only by a number or by one dotted segment, so a family is drawn once."""
+    names = sorted({n for n in names if n})
+    out, fam = {}, {}
+    for n in names:
+        if re.search(r"\d", n):
+            fam.setdefault(re.sub(r"\d+", "nn", n), []).append(n)
+    for pat, mem in fam.items():
+        if len(mem) >= minimum:
+            out.update({n: f"{pat} (x{len(mem)})" for n in mem})
+    seg = {}
+    for n in names:
+        parts = n.split(".")
+        if n not in out and len(parts) >= 3:
+            for i in range(len(parts)):
+                seg.setdefault(".".join(parts[:i] + ["*"] + parts[i + 1:]), []).append(n)
+    taken = set()
+    for pat, mem in sorted(seg.items(), key=lambda kv: -len(kv[1])):
+        mem = [n for n in mem if n not in taken]
+        if len(mem) >= segment_minimum:
+            out.update({n: f"{pat} (x{len(mem)})" for n in mem})
+            taken.update(mem)
+    return out
+
+
 def interactions(store, limit=40) -> list:
     flows = trace_flows(store)
+    labels = _family_labels([x for f in flows for st in f["steps"] for x in (st["from"], st["to"])])
     by_entry = {}
     for f in flows:
         by_entry.setdefault((f["entry_kind"], f["entry"]), []).append(f)
@@ -367,6 +415,7 @@ def interactions(store, limit=40) -> list:
         msgs.append({"from": "p0", "to": "p1", "label": "runs" if ekind == "job" else "opens / submits"})
         for f in sorted(fl, key=lambda x: x["length"]):
             for s in f["steps"]:
+                s = {**s, "from": labels.get(s["from"], s["from"]), "to": labels.get(s["to"], s["to"])}
                 key = (s["from"], s["kind"], s["to"])
                 if key in seen:
                     continue
@@ -416,7 +465,7 @@ def _all_diagrams(store, per_file=True) -> list:
                 except Exception:
                     continue
     uf = user_flow(store)
-    if uf and uf["nodes"]:
+    if uf and uf["nodes"] and uf["edges"]:      # screens with no navigation between them show nothing a list does not
         out.append(uf)
     out += interactions(store)
     return out
