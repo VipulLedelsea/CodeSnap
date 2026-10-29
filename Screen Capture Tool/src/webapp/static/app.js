@@ -1139,6 +1139,7 @@ function renderProgress(d) {
   const box = $("progProgress");
   if (!p.total) { box.innerHTML = `<div class="pp-head"><b>No files yet</b><span>Start a capture — each start/stop becomes one file.</span></div>`; return; }
   const busy = p.reading + p.reviewing + p.waiting + (p.paused || 0);
+  const pipe = d.pipeline && d.pipeline.running ? d.pipeline : null;
   const seg = (n, cls) => n ? `<i class="${cls}" style="flex:${n}"></i>` : "";
   const bits = [];
   if (p.reading) bits.push(`${p.reading} reading`);
@@ -1148,7 +1149,7 @@ function renderProgress(d) {
   const attn = p.needs_recapture, bad = p.failed;
   box.innerHTML = `<div class="pp-head">
       <b>${p.finished} of ${p.total} files processed</b>
-      <span>${busy ? bits.join(" · ") + ` — ${p.to_go} to go` : "Nothing left to process"}${attn ? ` · <em class="attn">${attn} need${attn > 1 ? "" : "s"} attention</em>` : ""}${bad ? ` · <em>${bad} couldn't be read</em>` : ""}</span>
+      <span>${pipe ? `Not finished: ${pipe.stage || "the report is still being built"}. The report is ready only when this line disappears.` : busy ? bits.join(" · ") + ` — ${p.to_go} to go` : "Nothing left to process"}${attn ? ` · <em class="attn">${attn} need${attn > 1 ? "" : "s"} attention</em>` : ""}${bad ? ` · <em>${bad} couldn't be read</em>` : ""}</span>
     </div>
     ${busy ? `<button class="btn-link" data-stop-analysis type="button">Stop analysis</button>` : ""}
     <div class="pp-bar">${seg(p.done, "ok")}${seg(p.needs_recapture, "attn")}${seg(p.failed, "bad")}${seg(p.reviewing + p.reading, "busy")}${seg(p.waiting + (p.paused || 0), "wait")}</div>

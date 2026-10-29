@@ -377,9 +377,11 @@ def _review_in_progress(store, artifact) -> bool:
     from core import deepdive
     slug = store.info["slug"]
     running = bool((_DEEP.get(slug) or {}).get("running") or (_FOLDER_JOBS.get(slug) or {}).get("running")
-                   or (store.get_meta("pipeline_job") or {}).get("state") == "running")
+                   or _job_fresh(store.get_meta("pipeline_job")))
     if not running:
         return False
+    if _job_fresh(store.get_meta("pipeline_job")):
+        return True     # the pipeline still has the cross-file stage, the summary and the report to build: no file is done before the report is
     dd = (store.get_meta("deepdive") or {}).get(str(artifact["id"])) or {}
     if dd.get("hash") != deepdive._hash(artifact.get("transcription")):
         return True
@@ -460,16 +462,23 @@ def _deep_start(slug: str, artifact_ids=None) -> dict:
     return job
 
 
-def _pipeline_running(slug: str) -> bool:
-    """True while the batch pipeline (another process) is analysing this program. A run that has not moved for 12 hours is
-    treated as dead."""
+def _job_fresh(job) -> bool:
+    """A batch pipeline job that says it is running and has moved within the last 12 hours (an older one is treated as dead)."""
     try:
-        with _open_program(slug) as store:
-            job = store.get_meta("pipeline_job") or {}
+        job = job or {}
         if job.get("state") != "running":
             return False
         began = time.mktime(time.strptime(job.get("updated") or job.get("started"), "%Y-%m-%dT%H:%M:%S"))
         return time.time() - began < 12 * 3600
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _pipeline_running(slug: str) -> bool:
+    """True while the batch pipeline (another process) is analysing this program."""
+    try:
+        with _open_program(slug) as store:
+            return _job_fresh(store.get_meta("pipeline_job"))
     except Exception:  # noqa: BLE001
         return False
 
@@ -608,7 +617,8 @@ def api_program(slug: str):
             "progress": _progress(arts),
             "recapture_target": store.get_meta("recapture_target"),
             "report": {"built_at": store.get_meta("report_built_at"),
-                       "current": store.get_meta("report_stamp") == revision},
+                       "current": store.get_meta("report_stamp") == revision and not _job_fresh(store.get_meta("pipeline_job"))},
+            "pipeline": {"running": _job_fresh(store.get_meta("pipeline_job")), "stage": (store.get_meta("pipeline_job") or {}).get("stage")},
             "waiting": sum(1 for a in store.artifacts() if a["status"] == "captured"),
             "session_running": _session.running() and _session.program == slug,
             "worker_running": _session.worker_running(slug),
