@@ -1149,7 +1149,7 @@ function renderProgress(d) {
   const attn = p.needs_recapture, bad = p.failed;
   box.innerHTML = `<div class="pp-head">
       <b>${p.finished} of ${p.total} files processed</b>
-      <span>${pipe ? `Not finished: ${pipe.stage || "the report is still being built"}. The report is ready only when this line disappears.` : busy ? bits.join(" · ") + ` — ${p.to_go} to go` : "Nothing left to process"}${attn ? ` · <em class="attn">${attn} need${attn > 1 ? "" : "s"} attention</em>` : ""}${bad ? ` · <em>${bad} couldn't be read</em>` : ""}</span>
+      <span>${pipe ? `${escapeHtml(pipe.stage || "the report is still being built")}. The report is ready only when this line disappears.` : busy ? bits.join(" · ") + ` — ${p.to_go} to go` : "Nothing left to process"}${attn ? ` · <em class="attn">${attn} need${attn > 1 ? "" : "s"} attention</em>` : ""}${bad ? ` · <em>${bad} couldn't be read</em>` : ""}</span>
     </div>
     ${busy ? `<button class="btn-link" data-stop-analysis type="button">Stop analysis</button>` : ""}
     <div class="pp-bar">${seg(p.done, "ok")}${seg(p.needs_recapture, "attn")}${seg(p.failed, "bad")}${seg(p.reviewing + p.reading, "busy")}${seg(p.waiting + (p.paused || 0), "wait")}</div>
@@ -1168,7 +1168,9 @@ document.addEventListener("click", async (ev) => {
 });
 function _fileRow(a, pendingFor) {
   const st = a.rebuild ? "reading" : pendingFor ? pendingFor.state : a.state;
-  const [label, cls] = a.rebuild ? ["Processing again", "busy"] : STATE[st] || [a.status, ""];
+  let [label, cls] = a.rebuild ? ["Processing again", "busy"] : STATE[st] || [a.status, ""];
+  const stepNo = a.step && /^Step (\d+) of (\d+)/.exec(a.step);
+  if (stepNo && st === "reviewing") label = `Step ${stepNo[1]} of ${stepNo[2]}`;
   const rc = a.recapture;
   let note = "";
   if (a.rebuild) note = `<div class="pf-note busy">${escapeHtml(a.rebuild.stage)}${a.rebuild.total ? ` — ${a.rebuild.done}/${a.rebuild.total} screenshots read` : ""}.</div>`;
@@ -1186,7 +1188,7 @@ function _fileRow(a, pendingFor) {
       <summary>
         <span class="pf-name">${escapeHtml(a.name)}</span>
         <span class="pf-meta">${escapeHtml(a.language || a.artifact_type || "")}${a.version > 1 ? " · v" + a.version : ""}</span>
-        <span class="pf-state ${cls}">${label}${reading}</span>
+        <span class="pf-state ${cls}"${a.step ? ` title="${_attr(a.step)}"` : ""}>${label}${reading}</span>
         <span class="pf-menu" tabindex="0">⋯<span class="pf-acts">
           <button class="btn-link" data-act="rename" type="button">Rename</button>
           ${st === "needs_recapture" || note.includes("pf-note soft") ? `<button class="btn-link" data-act="accept-all" type="button">Accept everything as is</button>` : ""}
@@ -1206,7 +1208,7 @@ let _progSig = "";
 const _localRebuilds = new Map();
 function _programRenderSignature(rows, recaps, d) {
   return JSON.stringify([rows.map(a => [a.id, a.name, a.language, a.artifact_type, a.version, a.state,
-    a.recapture, a.quality, a.rebuild, a.pending]), recaps, d.recapture_target, d.session_running,
+    a.recapture, a.quality, a.rebuild, a.pending, a.step]), recaps, d.recapture_target, d.pipeline, d.session_running,
     d.waiting, d.coverage, d.revision]);
 }
 async function loadProgram(poll) {

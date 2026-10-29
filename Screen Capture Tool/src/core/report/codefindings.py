@@ -52,11 +52,16 @@ NOT_A_DEFECT = re.compile(r"\b(is|are) (not supported|functionally fine|incorrec
 # A sentence that only says what the code does ("the users table defines id, email ...", "apply_discount supports senior, veteran ...") is a fact about
 # the code, not a finding, even when the model rated it. It stays out unless it also says something is wrong.
 DESCRIBES = re.compile(r"^(?:the |this )?[\w.()'\"/ \-,]{0,70}?\b(defines|records|supports|maps|specifies|declares|groups|returns|reads|stores|holds|lists|contains|"
-                       r"is read from|computes|runs|iterates|accepts|builds|loads|takes|selects|uses|calls|provides|configures)\b", re.I)
-PROBLEM = re.compile(r"\b(no|not|never|without|only|silently|unconditional\w*|forever|bypass\w*|instead|can|could|may|might|risk\w*|unsafe|plaintext|plain text|weak|"
-                     r"hard-?coded|truncat\w*|los(e|ing|s)|negative|fail\w*|error|exception|unhandled|uncaught|incorrect|despite|wrong|but|however|although|"
-                     r"REAL|floating|cents|whole|stale|shared|once|every|uppercase|lowercase|substring|raw|unsalted|unencrypted|world|expos\w+|leak\w*|inject\w*|"
-                     r"overwrit\w+|append\w*|rerun|re-run|duplicate\w*|missing|lacks?|ignor\w+|skips?|cannot|can't|undefined|NaN|forever)\b", re.I)
+                       r"is read from|computes|runs|iterates|accepts|builds|loads|takes|selects|uses|calls|provides|configures|includes|posts?|sends?|renders?|shows?|"
+                       r"writes?|performs?|sets?|creates?|inserts?|updates?|executes?|checks?|generates?|logs?|connects?|assigns?|parses|converts|opens|closes|"
+                       r"re-queries|re-reads|is called|are called|has|have)\b", re.I)
+PROBLEM = re.compile(r"\b(no|not|never|without|silently|unconditional\w*|forever|bypass\w*|instead|risk\w*|unsafe|plaintext|plain text|weak|"
+                     r"hard-?coded|truncat\w*|los(e|ing|s)|negative|fail\w*|error|exception|unhandled|uncaught|incorrect|despite|wrong|however|although|"
+                     r"REAL|floating|cents|stale|shared|uppercase|lowercase|substring|unsalted|unencrypted|world|expos\w+|leak\w*|inject\w*|"
+                     r"overwrit\w+|append\w*|rerun|re-run|duplicate\w*|missing|lacks?|ignor\w+|skips?|cannot|can't|undefined|NaN|"
+                     r"only (skips|counts|sums|considers|when|if)|regardless|any (user|caller|client)|before|after (the )?(commit|delete)|"
+                     r"\w*Error|raises?|crash\w*|abort\w*|stops?|leaves?|blocks?|indefinite\w*|exceed\w*|expir\w+|expiry|traversal|secret|password|credential\w*|"
+                     r"token|ssn|personal|sensitive|pii|race|lock|concurren\w*|atomic\w*|transaction|rounding|precision|float\w*)\b", re.I)
 WORD = re.compile(r"[a-z0-9_]{4,}")
 GENERIC = re.compile(r"identical structure|^(the )?(file|program|copybook|jcl|rexx)\b.*\b(defines|is a|is an|contains|declares)\b|synthetic", re.I)
 

@@ -45,8 +45,9 @@ def test_no_file_is_done_while_the_pipeline_is_still_building_the_report(tmp_pat
     a = s.add_pending_capture(_frames(tmp_path, seed=2))
     complete_capture(s, None, a, _report())
     assert _state(server, s, a) == "done"
-    pipeline._job(s, "running", stage="Building the report")
+    pipeline._say(s, 6, "building the final report")
     assert _state(server, s, a) == "reviewing"
+    assert server._artifact_summary(s, s.artifact(a))["step"] == "Step 6 of 7: building the final report"
     assert server._artifact_summary(s, s.artifact(a))["state"] != "done"
     stale = dict(s.get_meta("pipeline_job"), updated=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 13 * 3600)))
     s.set_meta("pipeline_job", stale)

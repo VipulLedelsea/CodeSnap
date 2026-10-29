@@ -1139,7 +1139,7 @@ def program_stale(store) -> bool:
 
 
 def run(store, client, artifact_ids=None, progress=None, force=False, program=True, model=None, review=True,
-        review_model=None, claims=None, stage=None) -> dict:
+        review_model=None, claims=None, stage=None, note=None) -> dict:
     """Analyse every file that has no current deep analysis (or the ones given), then (with program=True, and only when
     a file changed since) the cross-file observations. The capture worker passes program=False: the observations are
     drawn once, when the report needs them, not after every file."""
@@ -1191,6 +1191,8 @@ def run(store, client, artifact_ids=None, progress=None, force=False, program=Tr
     dd = {k: v for k, v in (store.get_meta("deepdive") or {}).items() if k in live}
     store.set_meta("deepdive", dd)
     if program and (program_stale(store) or not store.get_meta("deepdive_program")):
+        if note:
+            note("combining all the files into the cross-file observations")
         try:
             store.set_meta("deepdive_program", {**synthesize(store, client), "basis": program_basis(store)})
         except Exception as exc:  # noqa: BLE001

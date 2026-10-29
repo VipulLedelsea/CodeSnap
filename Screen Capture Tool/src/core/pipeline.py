@@ -49,6 +49,22 @@ def _final_bytes(store):
     return f.read_bytes() if f.exists() else None
 
 
+STEPS = 7
+
+
+def _say(store, n, text):
+    """Tell the app which step the run is on, in words, so the screen shows the step and not just 'reviewing'."""
+    _job(store, "running", stage=f"Step {n} of {STEPS}: {text}", step=n)
+
+
+def _counting(store, n, text, progress):
+    def tick(done, total):
+        _say(store, n, f"{text} ({done} of {total} files done)")
+        if progress:
+            progress(done, total)
+    return tick
+
+
 def _job(store, state, **extra):
     store.set_meta("pipeline_job", {**(store.get_meta("pipeline_job") or {}), "state": state,
                                     "updated": time.strftime("%Y-%m-%dT%H:%M:%S"), **extra})
@@ -87,12 +103,14 @@ def _run_staged(store, client, progress=None, report=True) -> dict:
     """Stage 1: cheap model reads every file, draft report. Stage 2: stronger model re-reads each file against the
     draft's claims, reviews them, decides what needs a rescan, and the final report is built from that."""
     errors = []
-    _job(store, "running", stage="Reading each file")
+    _say(store, 1, "reading each file with the quick draft model")
     store.set_meta("analysis_stage", "draft")
-    first = deepdive.run(store, client, model=DRAFT_MODEL, review=False, program=False, stage="draft", progress=progress)
+    first = deepdive.run(store, client, model=DRAFT_MODEL, review=False, program=False, stage="draft",
+                         progress=_counting(store, 1, "reading each file with the quick draft model", progress))
     errors += first["errors"]
     draft_pkg = None
     if report:
+        _say(store, 2, "building the draft report that the stronger model will check")
         try:
             draft_pkg = _build(store, draft=True)
         except Exception as exc:  # noqa: BLE001
@@ -102,7 +120,7 @@ def _run_staged(store, client, progress=None, report=True) -> dict:
     ids = [a["id"] for a in store.artifacts() if (dd.get(str(a["id"])) or {}).get("stage") == "draft"]
     claims = {i: claims_from(dd.get(str(i))) for i in ids}
     draft_docx = _draft_bytes(store) if draft_pkg else None
-    _job(store, "running", stage="Reviewing each file line by line and drawing the cross-file observations")
+    _say(store, 3, "re-reading every file line by line with the stronger model and checking the draft's claims against the source")
 
     def _rescan():
         if not draft_docx:
@@ -114,7 +132,8 @@ def _run_staged(store, client, progress=None, report=True) -> dict:
         scan = pool.submit(_rescan)
         second = deepdive.run(store, client, artifact_ids=ids, force=True, model=FINAL_MODEL,
                               review_model=deepdive.DEFAULT_REVIEW_MODEL, claims=claims, stage="final", program=True,
-                              progress=progress)
+                              progress=_counting(store, 3, "re-reading every file line by line with the stronger model and checking the draft's claims against the source", progress),
+                              note=lambda text: _say(store, 4, text))
         try:
             scan.result()
         except Exception as exc:  # noqa: BLE001
@@ -124,7 +143,7 @@ def _run_staged(store, client, progress=None, report=True) -> dict:
     complete = bool(ids) and all((dd.get(str(i)) or {}).get("stage") == "final" for i in ids)
     store.set_meta("analysis_stage", "final" if complete else "draft")
     if complete:
-        _job(store, "running", stage="Writing the executive summary")
+        _say(store, 5, "writing the executive summary")
         try:
             from core import exec_summary
             exec_summary.run(store, client, model=FINAL_MODEL)
@@ -132,7 +151,7 @@ def _run_staged(store, client, progress=None, report=True) -> dict:
             errors.append(f"executive summary: {type(exc).__name__}: {exc}"[:240])
     final_pkg = None
     if report:
-        _job(store, "running", stage="Building the report")
+        _say(store, 6, "building the final report")
         try:
             final_pkg = _build(store, draft=not complete)
         except Exception as exc:  # noqa: BLE001
@@ -140,7 +159,7 @@ def _run_staged(store, client, progress=None, report=True) -> dict:
     inconsistencies = []
     final_docx = _final_bytes(store) if final_pkg else None
     if final_docx:
-        _job(store, "running", stage="Checking the report against itself")
+        _say(store, 7, "checking the report against itself and against the source")
         try:
             from core import report_consistency
             inconsistencies = report_consistency.run(store, client, final_docx, model=FINAL_MODEL)["items"]

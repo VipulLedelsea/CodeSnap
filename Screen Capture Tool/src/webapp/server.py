@@ -363,6 +363,9 @@ def _artifact_summary(store, artifact: dict) -> dict:
         out["deep_error"] = failed["error"]
     if out["state"] == "done" and _review_in_progress(store, artifact):
         out["state"] = "reviewing"
+        job = store.get_meta("pipeline_job") or {}
+        if _job_fresh(job) and job.get("stage"):
+            out["step"] = job["stage"]
     rebuilding = _REBUILDS.get(store.info["slug"])
     if rebuilding and rebuilding["name"] == artifact["name"]:
         out["state"] = "reading"
