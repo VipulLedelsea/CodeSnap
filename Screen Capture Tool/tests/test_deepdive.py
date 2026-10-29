@@ -332,3 +332,45 @@ def test_deep_review_waits_for_open_problems_then_runs_once(store, monkeypatch):
     assert DD.pending(store) == []
     monkeypatch.setattr(DD, '_has_open_problem', lambda *a: False)
     assert DD.pending(store)
+
+
+def _hunt_msg(findings):
+    return tool_msg("record_hunt", {"findings": findings})
+
+
+class HuntClient(FakeClient):
+    """Answers the hunt tool from its own queue, everything else as FakeClient."""
+
+    def __init__(self, *a, hunt=None, **kw):
+        super().__init__(*a, **kw)
+        self.hunt = list(hunt or [])
+
+    def create(self, **kw):
+        if (kw.get("tools") or [{}])[0].get("name") == "record_hunt":
+            self.calls.append(kw)
+            return _hunt_msg(self.hunt.pop(0) if self.hunt else [])
+        return super().create(**kw)
+
+
+def test_the_hunt_adds_only_quoted_reasoned_new_findings_and_the_review_still_decides(tmp_path):
+    from core.model import ProgramStore
+    s = ProgramStore.create("Hunt", root=tmp_path)
+    aid = s.add_artifact("PAY.cbl", language="COBOL", transcription=CODE)
+    art = s.artifact(aid)
+    known = fact("Holdback is gross times the holdback percentage", [3, 3], "WS-GROSS * WS-HOLDBACK-PCT")
+    new = {"category": "defect", "statement": "The net can go negative when the holdback exceeds the gross", "lines": [4, 4],
+           "quote": "SUBTRACT WS-HOLDBACK FROM WS-GROSS GIVING WS-NET", "reasoning": "Gross 100 and holdback percent 150 give net -50 with no floor", "severity": "medium"}
+    again = {**new, "statement": "Holdback is gross times the holdback percentage", "lines": [3, 3], "quote": "WS-GROSS * WS-HOLDBACK-PCT"}
+    no_reason = {**new, "reasoning": "", "quote": "WRITE PAYMENT-REC", "lines": [5, 5]}
+    fake_quote = {**new, "quote": "THIS LINE IS NOT IN THE FILE", "lines": [6, 6]}
+    client = HuntClient({"purpose": "p", "facts": [known]}, review={"verdicts": [{"id": 1, "verdict": "supported"}, {"id": 2, "verdict": "supported"}]},
+                        hunt=[[new, again, no_reason, fake_quote]])
+    res = DD.analyse_file(s, client, art, hunt_pass=True)
+    texts = [f["statement"] for f in res["facts"]]
+    assert any("net can go negative" in t for t in texts) and len(texts) == 2
+    assert next(f for f in res["facts"] if "negative" in f["statement"])["source"] == "hunt"
+    assert not any(k.get("tools") and k["tools"][0]["name"] == "record_hunt" for k in HuntClient({"purpose": "p", "facts": []}).calls)
+    off = HuntClient({"purpose": "p", "facts": [known]}, review={"verdicts": [{"id": 1, "verdict": "supported"}]})
+    DD.analyse_file(s, off, art)
+    assert not any((k.get("tools") or [{}])[0].get("name") == "record_hunt" for k in off.calls)
+    s.close()

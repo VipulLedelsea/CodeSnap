@@ -126,7 +126,7 @@ def test_the_review_prompt_asks_for_the_probes_and_forbids_invention():
     for phrase in ("Reachability", "Boundaries and limits", "Check then act", "Output encoding", "work one concrete input through the lines",
                    "Never invent names, values, systems", "contradict each other"):
         assert phrase in s
-    assert deepdive.PROMPT_VERSION.startswith("deepdive-v6")
+    assert deepdive.PROMPT_VERSION.startswith("deepdive-v7") and "Never invent names, values, callers" in deepdive.HUNT_SYSTEM and "concrete input" in deepdive.HUNT_SYSTEM
 
 
 def test_the_same_defect_in_three_files_becomes_one_row_naming_every_file():
@@ -187,3 +187,19 @@ def test_logic_checks_find_the_provable_defects_and_stay_quiet_otherwise():
     ok = {"w.py": 'TRANSITIONS = {\n    "A": ["B"],\n    "B": ["C"],\n    "C": [],\n}\ndef f(db):\n    advance(db, 1, "B")\n    advance(db, 1, "C")\n',
           "s.py": "x = d.weekday() >= 5\n", "t.sql": "CREATE TABLE u (\n    email TEXT UNIQUE\n);\n"}
     assert logicchecks.conflicts(Fake(ok)) == []
+
+
+def test_more_logic_checks_fire_on_proof_and_stay_quiet_when_the_text_is_fine():
+    from core import logicchecks
+    files = {
+        "wf.py": 'TRANSITIONS = {\n    "NEW": ["OPEN"],\n    "OPEN": ["DONE", "HELD"],\n    "HELD": ["OPEN"],\n    "DONE": [],\n}\nSLA = {"a": 10, "b": 21, "c": 5}\n',
+        "rep.py": 'def f():\n    for s in ("NEW", "OPEN", "DONE"):\n        pass\n',
+        "deploy.sh": "git pull\nsqlite3 app.db < schema.sql\npkill python\n",
+        "schema.sql": "CREATE TABLE t (id INT);\nINSERT INTO t VALUES (1);\n",
+        "conf.yaml": "sla:\n  a_days: 10\n  b_days: 21\n  c_days: 5\n",
+    }
+    src = {o["source"] for o in logicchecks.conflicts(Fake(files))}
+    assert {"status list", "rerun unsafe", "settings duplicated"} <= src
+    fine = {"wf.py": files["wf.py"], "rep.py": 'x = ("NEW", "OPEN", "DONE", "HELD")\n', "deploy.sh": "echo hi\n",
+            "schema.sql": "CREATE TABLE IF NOT EXISTS t (id INT);\n", "conf.yaml": "a: 1\n"}
+    assert not {o["source"] for o in logicchecks.conflicts(Fake(fine))} & {"status list", "rerun unsafe", "settings duplicated"}

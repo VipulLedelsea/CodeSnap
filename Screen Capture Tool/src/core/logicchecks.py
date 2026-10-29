@@ -97,9 +97,89 @@ def login_column_not_unique(store):
     return out
 
 
+_LIST = re.compile(r"[(\[]\s*((?:[\"'][A-Z][A-Z0-9_]+[\"']\s*,\s*)+[\"'][A-Z][A-Z0-9_]+[\"'])\s*,?\s*[)\]]")
+
+
+def status_list_omits(store):
+    """A hard-coded list that names all but one of the states a workflow defines: the one left out is almost always a mistake."""
+    arts = _arts(store)
+    out = []
+    for a, t in arts:
+        m = _TRANSITIONS.search(t)
+        states = set(_STATE_KEY.findall(m.group(2))) if m else set()
+        if len(states) < 4:
+            continue
+        for b, bt in arts:
+            for lm in _LIST.finditer(bt):
+                if b is a and m and m.start() <= lm.start() <= m.end():
+                    continue
+                items = set(re.findall(r"[\"']([A-Z][A-Z0-9_]+)[\"']", lm.group(1)))
+                missing = states - items
+                if items <= states and len(items) == len(states) - 1 and len(missing) == 1:
+                    ln = _line(bt, lm.start())
+                    out.append(_obs(f"A list of statuses in {b['name']} leaves out {next(iter(missing))}",
+                                    f"{b['name']} line {ln} lists {len(items)} of the {len(states)} states that {a['name']} defines and leaves out {next(iter(missing))}, "
+                                    f"so anything counted or handled by that list misses permits in that state.", [(b["name"], ln), (a["name"], _line(t, m.start()))],
+                                    "status list", "medium"))
+    return out
+
+
+def rerun_unsafe_schema(store):
+    """A deploy script that loads a SQL file each time it runs, where the file cannot be loaded twice."""
+    arts = _arts(store)
+    sqls = {a["name"].split("/")[-1].lower(): (a, t) for a, t in arts if a["name"].lower().endswith(".sql")}
+    out = []
+    for a, t in arts:
+        if not a["name"].lower().endswith((".sh", ".bash", ".ksh")):
+            continue
+        if not re.search(r"git\s+(pull|fetch|checkout)|pkill|systemctl\s+restart|service\s+\w+\s+restart", t):
+            continue          # not a script that is run again for each release
+        for m in re.finditer(r"(?:sqlite3|psql|mysql|sqlcmd)\b[^\n]*?(?:<\s*|-f\s+|-i\s+)([\w./-]+\.sql)", t):
+            name = m.group(1).split("/")[-1].lower()
+            if name not in sqls:
+                continue
+            sa, st = sqls[name]
+            creates = re.search(r"CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)", st, re.I)
+            seeds = re.search(r"INSERT\s+INTO\b(?![^;]*(?:ON\s+CONFLICT|OR\s+IGNORE|WHERE\s+NOT\s+EXISTS))", st, re.I)
+            if creates or seeds:
+                ln = _line(t, m.start())
+                what = " and ".join(x for x, y in (("fails on tables that already exist", creates), ("inserts its seed rows again", seeds)) if y)
+                out.append(_obs(f"{a['name']} loads {sa['name']} on every run, and it cannot be loaded twice",
+                                f"{a['name']} line {ln} loads {sa['name']} each time the script runs (it also restarts the application), but that file {what}.",
+                                [(a["name"], ln), (sa["name"], _line(st, (creates or seeds).start()))], "rerun unsafe", "medium"))
+    return out
+
+
+def _setting(name):
+    return re.sub(r"_(days?|seconds?|secs?|ms|minutes?|hours?|count|limit|max|min|size|length)$", "", name.lower())
+
+
+def settings_duplicated(store):
+    """Numbers defined both in a settings file and in code under the same names: two sources for one value."""
+    arts = _arts(store)
+    out = []
+    for a, t in arts:
+        if not a["name"].lower().endswith((".yaml", ".yml", ".ini", ".toml", ".json")):
+            continue
+        conf = {(_setting(k), v) for k, v in re.findall(r"^\s*[\"']?(\w+)[\"']?\s*[:=]\s*(\d+)\s*,?\s*$", t, re.M)}
+        if len(conf) < 3:
+            continue
+        for b, bt in arts:
+            if b is a or b["name"].lower().endswith((".yaml", ".yml", ".ini", ".toml", ".json", ".md", ".txt")):
+                continue
+            code = {(_setting(k), v) for k, v in re.findall(r"[\"'](\w+)[\"']\s*:\s*(\d+)", bt)} | {(_setting(k), v) for k, v in re.findall(r"^\s*(\w+)\s*=\s*(\d+)\s*$", bt, re.M)}
+            both = sorted(conf & code)
+            if len(both) >= 3:
+                names = ", ".join(k for k, _ in both[:4])
+                out.append(_obs(f"{len(both)} settings are defined in both {a['name']} and {b['name']}",
+                                f"{names} are set to the same numbers in {a['name']} and in {b['name']}: today they agree, but changing one does not change the other, so they can drift apart.",
+                                [(a["name"], 1), (b["name"], 1)], "settings duplicated", "low"))
+    return out
+
+
 def conflicts(store):
     out = []
-    for fn in (weekend_test, status_never_set, csv_formula, login_column_not_unique):
+    for fn in (weekend_test, status_never_set, csv_formula, login_column_not_unique, status_list_omits, rerun_unsafe_schema, settings_duplicated):
         try:
             out += fn(store)
         except Exception:  # noqa: BLE001 - one check failing must not hide the others

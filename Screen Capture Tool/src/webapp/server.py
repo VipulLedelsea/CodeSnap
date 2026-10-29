@@ -452,7 +452,7 @@ def _deep_start(slug: str, artifact_ids=None) -> dict:
                 if pipeline.staged() and not artifact_ids:
                     res = pipeline.run_staged(st, client, progress=lambda d, t: job.update(done=d, total=t))
                 else:
-                    res = deepdive.run(st, client, artifact_ids=artifact_ids, force=bool(artifact_ids),
+                    res = deepdive.run(st, client, artifact_ids=artifact_ids, force=bool(artifact_ids), hunt=True,
                                        progress=lambda d, t: job.update(done=d, total=t))
                 job["errors"] = res["errors"]
         except Exception as exc:  # noqa: BLE001
