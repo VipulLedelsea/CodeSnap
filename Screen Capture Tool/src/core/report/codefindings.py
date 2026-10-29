@@ -162,7 +162,49 @@ def select(store, code_arts, review_facts, total=24, minimum=2):
             continue
         picked.append(c)
     picked.sort(key=lambda r: (-(r["severity"] == "high"), bool(r.get("gap")), -r["score"]))
-    return picked
+    return group(picked)
+
+
+_QUOTED = re.compile(r"'[^']{2,30}'|\"[^\"]{2,30}\"")
+
+
+def _ids(text):
+    return {x.lower() for x in CAPS.findall(text)} | {x.lower() for x in IDENT.findall(text)} | {x.lower() for x in _QUOTED.findall(text)}
+
+
+def _alike(a, b):
+    """The same defect stated for two different files: the same names and nearly the same words, whatever the file."""
+    wa = {w for w in WORD.findall(a.lower()) if not re.search(r"\d", w)}
+    wb = {w for w in WORD.findall(b.lower()) if not re.search(r"\d", w)}
+    if not wa or not wb:
+        return False
+    shared, ids = len(wa & wb), len(_ids(a) & _ids(b))
+    caps_a, caps_b = set(CAPS.findall(a)), set(CAPS.findall(b))
+    if caps_a and caps_b and not caps_a & caps_b:
+        return False
+    overlap = shared / min(len(wa), len(wb))
+    return (ids >= 1 and overlap >= 0.6 and shared >= 8) or (ids >= 3 and overlap >= 0.5)
+
+
+def group(picked):
+    """One row for the same defect found in several files, naming every file, instead of one row per file. Each item gets
+    'files' (all the files it is in); the strongest statement is kept and says where else the pattern appears."""
+    out = []
+    for c in picked:
+        c.setdefault("files", [c["file"]])
+        for g in out:
+            if c["file"] not in g["files"] and _alike(g["text"], c["text"]):
+                g["files"].append(c["file"])
+                if _RANK.get(c["severity"], 0) > _RANK.get(g["severity"], 0):
+                    g["severity"] = c["severity"]
+                break
+        else:
+            out.append(c)
+    for g in out:
+        if len(g["files"]) > 1:
+            others = [f for f in g["files"] if f != g["file"]]
+            g["text"] = g["text"].rstrip() + f" The same pattern is in {', '.join(others)}."
+    return out
 
 
 def rate(cf):

@@ -5,8 +5,9 @@ import re
 
 _ROLE_LIST = re.compile(r"\bROLES\s*=\s*[(\[]([^)\]]*)[)\]]")
 _ROLE_ASK = re.compile(r"\bhas_role\(\s*[\w.\[\]'\"]+\s*,\s*[\"'](\w+)[\"']\s*\)")
-_TABLE_USE = re.compile(r"\b(?:FROM|JOIN|INTO|UPDATE)\s+([A-Za-z_]\w*)", re.I)
-_TABLE_DEF = re.compile(r"\bCREATE\s+(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_]\w*)", re.I)
+_TABLE_USE = re.compile(r"\b(?:FROM|JOIN|INTO|UPDATE)\s+(?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)", re.I)
+_EXEC_SQL = re.compile(r"EXEC\s+SQL\b(.*?)(?:END-EXEC|;)", re.I | re.S)       # embedded SQL in COBOL, PL/I and RPG, which spans lines
+_TABLE_DEF = re.compile(r"\bCREATE\s+(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:[\[\"`]?\w+[\]\"`]?\.)?[\[\"`]?([A-Za-z_]\w*)", re.I)
 _SECRET_NAME = r"(?:password|passwd|secret|api[_-]?key|token|sms_key)"
 _LITERALS = [
     re.compile(r"\b\w*" + _SECRET_NAME + r"\w*\s*=\s*[\"']([^\"'\s]{8,})[\"']", re.I),                       # python / shell
@@ -15,7 +16,7 @@ _LITERALS = [
 ]
 _NOT_SECRET = re.compile(r"^(\$|\{|<|%|os\.environ|null|none|true|false|changeme$)", re.I)
 _ASSET = re.compile(r"(?:href|src)=[\"'](/?[\w./-]+\.(?:css|js|png|jpg|svg|ico))[\"']", re.I)
-_SQL_WORDS = {"select", "values", "set", "where", "the", "dual", "sqlite_master", "information_schema"}
+_SQL_WORDS = {"select", "values", "set", "where", "the", "dual", "sqlite_master", "information_schema", "of", "lock", "locks", "share", "only", "table", "final"}
 
 
 def _code(store):
@@ -75,6 +76,14 @@ def missing_tables(store):
             if name in _SQL_WORDS or not re.search(r"[\"'`]\s*(?:SELECT|INSERT|UPDATE|DELETE)\b|\bSELECT\b[^\n]{0,200}\bFROM\b", t[max(0, m.start() - 200):m.end()], re.I):
                 continue
             uses.setdefault(name, []).append((a["name"], _line(t, m.start())))
+        for block in _EXEC_SQL.finditer(t):
+            for m in _TABLE_USE.finditer(block.group(1)):
+                name = m.group(1).lower()
+                if name in _SQL_WORDS or name in ("commit", "rollback") or re.match(r"(insert|delete|select|values|update)$", name):
+                    continue
+                line = _line(t, block.start(1) + m.start())
+                if (a["name"], line) not in uses.get(name, []):
+                    uses.setdefault(name, []).append((a["name"], line))
     if not defined:
         return []
     out = []
@@ -132,6 +141,8 @@ def unread_settings(store):
         if not a["name"].lower().endswith((".yaml", ".yml", ".ini", ".toml")):
             continue
         base = a["name"].split("/")[-1]
+        if re.search(r"docker|compose|\.github|workflow|pipeline|ci\.ya?ml|k8s|kubernetes|helm|ansible|playbook|swagger|openapi", a["name"], re.I):
+            continue          # deployment and build files are read by tools, not by the programs
         others = [(n["name"], x) for n, x in files if n["name"] != a["name"] and not n["name"].lower().endswith((".yaml", ".yml", ".ini", ".toml"))]
         if any(re.search(re.escape(base), x) or re.search(r"\b(yaml|configparser|tomllib|toml)\b", x, re.I) for _, x in others):
             continue

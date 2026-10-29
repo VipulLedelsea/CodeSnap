@@ -127,3 +127,34 @@ def test_the_review_prompt_asks_for_the_probes_and_forbids_invention():
                    "Never invent names, values, systems", "contradict each other"):
         assert phrase in s
     assert deepdive.PROMPT_VERSION.startswith("deepdive-v6")
+
+
+def test_the_same_defect_in_three_files_becomes_one_row_naming_every_file():
+    t = "WS-STATUS is set as the FILE STATUS for INPUT-FILE but is never tested anywhere in this visible code, so OPEN, READ or CLOSE errors on INPUT-FILE would go unnoticed."
+    arts = [{"id": i, "name": n} for i, n in enumerate(("06_PAY.cbl", "07_REV.cbl", "08_X.cbl"), 1)]
+    facts = {1: [{"statement": t, "category": "error_handling", "severity": "medium"}],
+             2: [{"statement": t + " (Same file status.)", "category": "error_handling", "severity": "medium"}],
+             3: [{"statement": "SMTP password is a hardcoded constant SMTP_PASSWORD in module scope visible to anyone reading the source.", "category": "security", "severity": "high"}]}
+    picked = CFM.select(None, arts, facts)
+    assert len(picked) == 2
+    row = next(p for p in picked if "WS-STATUS" in p["text"])
+    assert sorted(row["files"]) == ["06_PAY.cbl", "07_REV.cbl"] and "The same pattern is in" in row["text"]
+
+
+def test_two_different_defects_with_different_constants_are_not_grouped():
+    a = "SMTP username and password are embedded as plaintext module-level constants (SMTP_USER, SMTP_PASSWORD) visible in the source."
+    b = "SMS API key is embedded as a plaintext module-level constant (SMS_KEY) visible in the source."
+    assert not CFM._alike(a, b)
+
+
+def test_a_table_used_in_embedded_sql_but_never_created_is_reported_even_across_lines():
+    files = {"PROG.pli": "  EXEC SQL\n    INSERT INTO MUN_AUDIT (RECEIPT)\n    VALUES (:R);\n  EXEC SQL COMMIT;\n  EXEC SQL SELECT A INTO :X FROM LEDGER WHERE ID = :I;\n",
+             "SCHEMA.sql": "CREATE TABLE MDE.LEDGER (ID INT);\nCREATE TABLE audit (receipt TEXT);\n"}
+    t = titles(files)
+    assert any("'mun_audit'" in x for x in t)
+    assert not any("'ledger'" in x or "'commit'" in x for x in t)
+
+
+def test_a_deployment_file_is_not_called_an_unread_settings_file():
+    files = {"app.py": "import os\nx = os.environ.get('A')\n", "docker-compose.yml": "services:\n  web: {}\n"}
+    assert not any("not read" in x for x in titles(files))

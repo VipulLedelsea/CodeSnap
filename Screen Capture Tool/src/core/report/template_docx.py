@@ -555,7 +555,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                    "score": L_ * I_,
                    "why_L": why_l_,
                    "why_I": why_i_,
-                   "comps": [cf_["file"]], "owner": owner_it, "existing": "None visible in the code",
+                   "comps": list(cf_.get("files") or [cf_["file"]]), "owner": owner_it, "existing": "None visible in the code",
                    "mit": "Confirm the intended rule with the business owner, correct the source, and add a test that records the new behavior"})
     BR.sort(key=lambda r_: (-r_["score"], -len(r_.get("comps") or [])))      # a risk that spans more files comes first
     from core import report_review as RRV
@@ -584,7 +584,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                        cics=CICS, screen_copies=COPIES)
     PR = OP.program(CD, len(HP))
     multi_copies = sum(len(g["copies"]) for g in DM["entities"] if len(g["copies"]) >= 2)
-    EST = OP.estimate(CD, {"fin": fin, "copies": multi_copies, "fixes": len(CF), "migrate": PR["code"] in ("rearchitect", "replace", "replatform", "rebuild"),
+    EST = OP.estimate(CD, {"fin": fin, "copies": multi_copies, "fixes": sum(len(c_.get("files") or [1]) for c_ in CF), "migrate": PR["code"] in ("rearchitect", "replace", "replatform", "rebuild"),
                            "copy_names": [g["name"].lower() for g in DM["entities"] if len(g["copies"]) >= 2]})
     phased = PR["code"] in ("rearchitect", "replace")
     span = OP.months({"phased": phased, "platforms": len(HP), "fin": fin}, EST)
@@ -595,7 +595,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                             "data migration" if multi_copies else "") if x]
     no_path_names = sorted({f"{t.get('name')}" for t in techs if t.get("status") in ("eol", "legacy")
                             and any(k.lower() in (t.get("name") or "").lower() for k in OP.NO_PATH)})
-    OPTS = OP.scores({"no_path": no_path_names, "platforms": len(HP), "program_code": PR["code"], "fixes": len(CF),
+    OPTS = OP.scores({"no_path": no_path_names, "platforms": len(HP), "program_code": PR["code"], "fixes": sum(len(c_.get("files") or [1]) for c_ in CF),
                       "posting": sum(1 for c in CD if c["code"] == "consolidate") + (1 if any(c["code"] == "retain" and "Batch" in
                                      next((x["role"] for x in AM["components"] if x["name"] == c["name"]), "") for c in CD) else 0)})
     if OPTS[0][0].split(" (")[0].lower() != PR["label"].split(" (")[0].lower():
@@ -1276,7 +1276,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                     "Fix when the file is next changed" if trivial else "Refactor",
                     "L" if strategic else "S" if trivial else "M", "High" if strategic else "Low" if trivial else "Medium"])
     for cf_ in [c_ for c_ in CF if c_["category"] in ("defect", "calculation", "data_integrity", "error_handling")][:14]:
-        reg.append([f"{CFM.short(cf_['text'])} ({cf_['file']})", "Code", "Defect or fragile rule in the source as written",
+        reg.append([f"{CFM.short(cf_['text'])} ({', '.join(cf_.get('files') or [cf_['file']])})", "Code", "Defect or fragile rule in the source as written",
                     "Wrong results or hard-to-change behavior if left as is; business effect to confirm",
                     "Correct the source after the rule is confirmed, and cover it with a test",
                     "S" if cf_["severity"] != "high" else "M", "High" if cf_["severity"] == "high" else "Medium"])
