@@ -158,3 +158,15 @@ def test_a_table_used_in_embedded_sql_but_never_created_is_reported_even_across_
 def test_a_deployment_file_is_not_called_an_unread_settings_file():
     files = {"app.py": "import os\nx = os.environ.get('A')\n", "docker-compose.yml": "services:\n  web: {}\n"}
     assert not any("not read" in x for x in titles(files))
+
+
+def test_a_code_check_note_that_is_broken_or_contradicts_itself_is_not_added_to_the_report():
+    from core.report_review import note_for
+    for bad in ("The check occurs at line 144, not line 144 as stated correctly.",
+                "Findings show missing foreign key constraints and lack of schema-level relationships (e.g., -96).",
+                "-91 document weak MD5 password hashing and hardcoded credentials.",
+                "The code shows SQLite is used as the database engine; the claim that the engine needs confirming is.",
+                "Findings show password hardcoded in config.yaml (102) and deploy.sh (1) but none of the findings."):
+        assert note_for(bad) == ""
+    good = note_for("The code shows MD5 use for password hashing, but there's no evidence of DES in the files reviewed.")
+    assert good.startswith("The code shows MD5") and good.endswith(".")

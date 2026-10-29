@@ -333,7 +333,33 @@ def note_for(correction):
     text = text.rstrip(" ;,.")
     while text.count("(") > text.count(")"):                # never end inside a bracket
         text = text[:text.rfind("(")].rstrip(" ;,.")
-    return text[:1].upper() + text[1:] + "."
+    return text[:1].upper() + text[1:] + "." if _sound(text) else ""
+
+
+_CONTRAST = re.compile(r"\b(but|not|no evidence|however|although|only|rather|instead|differs?|incorrect|actually|except|unless|never|without|cannot|does not|doesn't|isn't|aren't|neither|nor|less|more than|fewer|whereas|while)\b", re.I)
+_DANGLING = re.compile(r"\b(is|are|was|were|of|and|or|the|that|to|a|an|for|in|with|by|as|but|not)$", re.I)
+
+
+def _sound(text):
+    """A note that reads as a broken fragment, contradicts itself, or points at a number only the checker could see is worse
+    than no note: the reader cannot act on it and it makes a sound statement look doubtful."""
+    t = (text or "").strip(" .;,")
+    if len(t.split()) < 4 or re.match(r"[-\d(\[]", t) or _DANGLING.search(t):
+        return False
+    if re.search(r"\(\s*e\.g\.,?\s*-?\d+\s*\)|(?:^|[\s(,])-\d{2,3}\b|\[\d+(?:,\s*\d+)*\]|\(\d{1,3}\)", t):
+        return False                                           # a stray finding number, e.g. "(e.g., -96)" or "[108]"
+    if re.search(r"as stated\b|stated correctly|\bis\.$", t, re.I):
+        return False
+    if re.search(r"\b(or|and) that [\w ]{1,25}$", t, re.I):
+        return False                                           # a clause cut off mid-thought
+    if re.search(r"\b(some|specific|various|multiple|several)\b[\w\s-]{0,30}\b(issues|practices|references|values|findings)\b", t, re.I):
+        return False                                           # too vague to act on
+    if not _CONTRAST.search(t):
+        return False                                           # a note that agrees with the sentence corrects nothing
+    m = re.search(r"\bline (\d+)\b.{0,40}\bnot (?:on )?line (\d+)\b", t, re.I)
+    if m and m.group(1) == m.group(2):
+        return False                                           # "at line 144, not line 144"
+    return True
 
 
 REMOVED = "Removed after the code check: not shown by the code."
