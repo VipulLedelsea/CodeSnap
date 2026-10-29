@@ -19,7 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-PROMPT_VERSION = "deepdive-v5-checks"
+PROMPT_VERSION = "deepdive-v6-probes"
 MAX_TOKENS = 20000   # the SDK refuses non-streamed calls much above this
 THINKING = 8000
 DEFAULT_DEEP_MODEL = "claude-sonnet-5"
@@ -52,6 +52,13 @@ WORKING ORDER
    - Failure paths: an error, a bad return code or a failed write that still ends with success, or a job step that continues after a failed one.
    - Validity and authority: an eligibility, relief or policy record with no end date or expiry check, and operator, override or user fields accepted without a visible authorization check.
    - Duplicated rules: the same rule coded separately for each district, route or channel where the copies differ in a value (a threshold, a rate, a flag).
+   - Reachability: where the file holds a status or state table (a transitions map, status constants, a workflow), list the states and check that every state an action requires is one something in this file can actually set, and that an action does not demand a state no path reaches. A permitted move with no route to it is a defect.
+   - Boundaries and limits: for each calculation, cap, minimum, discount, rate, loop bound or page number, work the values 0, negative, one below and one above the limit, and the maximum. Record where the result is wrong, negative, unbounded, below a stated minimum, or better or worse for the customer on one path than another (a cap applied to one branch but not the other, a flat subtraction that can pass below zero, integer division that drops a remainder, a total that no longer adds up after rounding each part).
+   - Check then act: a read followed by a write on what was read (read a status then set it, find a free slot then book it, count then insert) with no lock, conditional update, transaction or unique constraint, so two callers can both pass the check.
+   - Output encoding: a value written into a CSV cell, page, SQL text, URL or shell command without escaping when it could come from a user (including a CSV cell that can start with =, +, - or @).
+   - Spelling and case of shared values: a status, role, unit or key written differently here than the same file's own constants or other uses show (lowercase beside uppercase, a role name not in the file's own role list, a comparison like weekday() > 5 that misses a value it was meant to include).
+   - Order of cleanup: something deleted, cancelled or removed before its replacement or its commit is secured, so a failure loses it.
+   Before you record a defect from any of these, work one concrete input through the lines you cite and write it in the reasoning (the value, the line it reaches, the wrong result). If the code gives the right result for that input, it is not a defect and must not be recorded. If the defect depends on code this file does not show, put it in unknowns, not in facts.
 4. Complete the rollup fields (technology_signals through maintainability_signals).
 5. Run the VERIFICATION checklist, then call record_analysis exactly once.
 OUTPUT: call record_analysis once with these fields.
@@ -70,8 +77,7 @@ Group trivial housekeeping (declarations, identical moves, initialization) into 
   - basis: "observed" if the executable code states it directly; "inferred" if it is a conclusion you drew
   - reasoning: required when basis is "inferred": one sentence. For any "never used / written / called /
     reached" claim, say what elsewhere in the application would disprove it.
-  - severity: required for security, data_integrity and defect facts (high, medium, low, info); omit
-    otherwise
+  - severity: required for security, data_integrity and defect facts, and for ANY other fact (calculation, business_rule, control_flow, error_handling, interface) whose statement says the code is wrong, unsafe or loses something (high, medium, low, info); omit only for facts that simply describe what the code does
 technology_signals: evidence of the technology stack, each with line, a short description, and
 version_confidence: "stated" (the file names a version), "implied" (syntax, directives or deprecated constructs suggest a range; say which), or "unknown". Cover language and dialect, compiler or runtime directives, database or middleware calls, OS-specific calls, and third-party libraries. Do not state end-of-life or support status; that is verified externally.
 interfaces: every dependency this file has on something outside itself: files, tables, queues, called
@@ -118,7 +124,8 @@ VERIFICATION (before calling the tool)
 - The final section of the file has findings. If it has none, say why in a fact or in unknowns.
 - Every "inferred" fact has reasoning; every security, data_integrity and defect fact has severity.
 - No secret value appears in any field.
-- No two facts describe the same issue.
+- No two facts describe the same issue, and no two facts about the same function contradict each other: if they do, re-read those lines and keep only what the code does.
+- Every defect or security fact names the lines and the condition or input that triggers it; none rests on a name, a comment, or what code elsewhere might do.
  
 EXAMPLES
 observed:

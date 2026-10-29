@@ -109,3 +109,21 @@ def test_a_finding_read_from_the_source_by_a_rule_is_marked_checked_and_a_model_
            {"title": "Two files never agree", "statement": "y", "files": ["a.py", "b.py"]}]
     risks = CFM.program_items(obs)["risks"]
     assert [r["checked"] for r in risks] == [True, False]
+
+
+def test_a_sentence_that_only_describes_the_code_is_not_a_finding_but_one_that_says_something_is_wrong_is():
+    arts = [{"id": 1, "name": "a.py"}]
+    plain = {"statement": "apply_discount() supports senior, veteran and nonprofit kinds and returns the discounted total.", "category": "business_rule", "severity": "medium"}
+    wrong = {"statement": "next_business_day skips only Sunday because weekday() > 5 is true for 6 alone, so Saturday is booked despite the apparent intent.",
+             "category": "business_rule", "severity": None}
+    picked = CFM.select(None, arts, {1: [plain, wrong]})
+    assert [p["text"][:17] for p in picked] == ["next_business_day"]
+
+
+def test_the_review_prompt_asks_for_the_probes_and_forbids_invention():
+    from core import deepdive
+    s = deepdive.DEEP_SYSTEM
+    for phrase in ("Reachability", "Boundaries and limits", "Check then act", "Output encoding", "work one concrete input through the lines",
+                   "Never invent names, values, systems", "contradict each other"):
+        assert phrase in s
+    assert deepdive.PROMPT_VERSION.startswith("deepdive-v6")

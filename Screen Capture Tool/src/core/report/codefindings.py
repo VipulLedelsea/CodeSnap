@@ -41,9 +41,22 @@ DEFECT_WORDS = re.compile(
     r"never expir|no (expiry|timeout)|every keystroke|never reset|stale|"
     r"does not (check|validate|handle|guard|close|verify)|"
     r"never (checks?|validates?|handles?|closes?|verif)|"
-    r"no (visible )?(role|authorization|authorisation) check|exactly equal", re.I)
+    r"no (visible )?(role|authorization|authorisation) check|exactly equal|"
+    r"despite (the )?(apparent )?intent|only skips|not skipped|can (exceed|never|be (scheduled|booked))|cannot be (selected|reached)|"
+    r"even though|lowercase[^.]*while[^.]*upper|uppercase[^.]*while[^.]*lower|incorrect|"
+    r"(never|not) (sets?|reachable|reached)|no (route|path|transition)|unreachable|"
+    r"(favou?rable|less|cheaper|lower) than|below (zero|the minimum)|drops? (the )?(remainder|fraction)|"
+    r"without (a )?(lock|transaction|unique)|check[- ]then[- ]act|no (transaction|lock)", re.I)
 NOT_A_DEFECT = re.compile(r"\b(is|are) (not supported|functionally fine|incorrect)\b|claim .* (is incorrect|not supported)|is consistent|uses parameteri[sz]ed|"
                           r"requires authentication|reuses the existing|is declared once|redundant database", re.I)
+# A sentence that only says what the code does ("the users table defines id, email ...", "apply_discount supports senior, veteran ...") is a fact about
+# the code, not a finding, even when the model rated it. It stays out unless it also says something is wrong.
+DESCRIBES = re.compile(r"^(?:the |this )?[\w.()'\"/ \-,]{0,70}?\b(defines|records|supports|maps|specifies|declares|groups|returns|reads|stores|holds|lists|contains|"
+                       r"is read from|computes|runs|iterates|accepts|builds|loads|takes|selects|uses|calls|provides|configures)\b", re.I)
+PROBLEM = re.compile(r"\b(no|not|never|without|only|silently|unconditional\w*|forever|bypass\w*|instead|can|could|may|might|risk\w*|unsafe|plaintext|plain text|weak|"
+                     r"hard-?coded|truncat\w*|los(e|ing|s)|negative|fail\w*|error|exception|unhandled|uncaught|incorrect|despite|wrong|but|however|although|"
+                     r"REAL|floating|cents|whole|stale|shared|once|every|uppercase|lowercase|substring|raw|unsalted|unencrypted|world|expos\w+|leak\w*|inject\w*|"
+                     r"overwrit\w+|append\w*|rerun|re-run|duplicate\w*|missing|lacks?|ignor\w+|skips?|cannot|can't|undefined|NaN|forever)\b", re.I)
 WORD = re.compile(r"[a-z0-9_]{4,}")
 GENERIC = re.compile(r"identical structure|^(the )?(file|program|copybook|jcl|rexx)\b.*\b(defines|is a|is an|contains|declares)\b|synthetic", re.I)
 
@@ -63,6 +76,9 @@ def _score(f):
 def _defect_like(f):
     if POSITIVE.search(f["statement"]) or NOT_A_DEFECT.search(f["statement"]):
         return False
+    if (f.get("severity") != "high" and DESCRIBES.search(f["statement"]) and not THEMES.search(f["statement"])
+            and not PROBLEM.search(re.sub(r"\bNOT NULL\b", "", f["statement"]))):
+        return False          # describes the code and says nothing is wrong
     if f.get("severity") in ("high", "medium"):
         return True
     if DEFECT_WORDS.search(f["statement"]) and f.get("category") in CATEGORIES:
