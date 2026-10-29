@@ -216,3 +216,25 @@ def test_a_second_pass_finding_is_reported_only_when_high_or_agreed_and_a_row_sh
     texts = [p["text"] for p in CFM.select(None, arts, facts)]
     assert any("second pass" in t or "loop does not" in t for t in texts) and any("raises an unhandled" in t for t in texts)
     assert not any("export builds" in t for t in texts) and not any("helper does not" in t for t in texts) and not any("months" in t for t in texts)
+
+
+def test_cross_file_observations_are_sorted_by_the_models_own_kind_not_by_words_in_the_title():
+    obs = [{"title": "Fee rules are written twice, in fees.py and permits.js", "statement": "s", "files": ["fees.py", "permits.js"], "kind": "duplication", "severity": "medium"},
+           {"title": "Status vocabulary is the same in three files", "statement": "s", "files": ["a", "b", "c"], "kind": "agreement"},
+           {"title": "cents here, dollars there", "statement": "s", "files": ["models.py", "fees.py"], "kind": "conflict", "severity": "high"},
+           {"title": "Request to booking, end to end", "statement": "s", "files": ["a", "b"], "kind": "flow"},
+           {"title": "Older observation that says the files differ", "statement": "s", "files": ["x", "y"]}]
+    got = CFM.program_items(obs)
+    titles = [r["title"] for r in got["risks"]]
+    assert titles[0] == "cents here, dollars there" and "Fee rules are written twice, in fees.py and permits.js" in titles
+    assert "Status vocabulary is the same in three files" not in titles and got["flow"]["title"].startswith("Request to booking")
+    assert "Older observation that says the files differ" in titles
+
+
+def test_the_synthesis_prompt_and_tool_ask_for_cross_file_probes_and_a_kind():
+    from core import deepdive
+    assert "cents and dollars" in deepdive.SYNTH_SYSTEM and "agreement is not a finding" in deepdive.SYNTH_SYSTEM
+    props = deepdive.PROGRAM_TOOL["input_schema"]["properties"]["observations"]["items"]
+    assert "kind" in props["properties"] and "kind" in props["required"]
+    from core import report_review
+    assert "silence is never a contradiction" in report_review.PROGRAM_SYSTEM

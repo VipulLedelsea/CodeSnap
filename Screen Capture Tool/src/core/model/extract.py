@@ -38,7 +38,11 @@ network/API calls, connections to external systems.
 Rules:
 - Record ONLY what the code shows. Never invent entities, calls, tables or systems.
 - Targets that are not defined in this file are still recorded; they will be matched to other files later.
-- Skip language built-ins and standard-library calls unless they touch data stores, files, the network or the screen.
+- Skip language built-ins and standard-library calls unless they touch data stores, files, the network or the screen. Never record a
+  standard-library module or class (os, datetime, email.message.EmailMessage) as a missing component.
+- A shell command (curl, git, pip, sqlite3) is a tool, not an external system or a data store: record the host it talks to and the
+  database file or table it works on instead. A setting that holds an address (SMS_ENDPOINT) is a config_item; the address itself is the
+  external system. A key in the browser's own storage (localStorage, sessionStorage, cookies) is not a file or an external system.
 - If the listing is a fragment of a larger file, record what is visible."""
 
 STRUCTURE_TOOL = {

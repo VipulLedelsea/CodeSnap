@@ -26,7 +26,7 @@ TOOL = {
 SYSTEM = """You check claims from a draft assessment report against the source code they cite.
 For each numbered claim decide:
 - supported: the code shows it. Copy an exact quote from the code that proves it.
-- partly: some of it holds. Say in `correction` what the code really shows, with an exact quote.
+- partly: some of it holds. Say in `correction` what the code really shows, with an exact quote. The correction must be one complete sentence that makes sense on its own: no finding or line numbers, no "as stated", and do not repeat the claim back.
 - unsupported: the code contradicts it (copy the contradicting code as the quote), or it depends on a specific name, value or identifier that occurs nowhere in the file (put that exact term, as written in the claim, in absent_term). If you can do neither, use cannot_check.
 - cannot_check: the claim is about something outside the code (staff, owners, tests that were not supplied, run schedules, deployed versions, data volumes). Never mark these unsupported.
 Lines marked with a warning sign were not read reliably; do not rest a verdict on them.
@@ -36,7 +36,7 @@ PROGRAM_SYSTEM = """You check claims from a draft assessment report against find
 For each numbered claim decide:
 - supported: the findings show it. Give the finding's number in `finding`.
 - partly: some of it holds. Say in `correction` what the findings show and give the finding's number in `finding`.
-- unsupported: a finding contradicts it. Give that finding's number in `finding` and say in `why` how it contradicts. If no finding contradicts it, use cannot_check.
+- unsupported: a finding states something incompatible with the claim. Give that finding's number in `finding` and say in `why` what it states that the claim cannot be true alongside. A claim that no finding mentions, or that the findings merely do not confirm, is NOT unsupported: use cannot_check. The findings are a partial list, so silence is never a contradiction.
 - cannot_check: the findings neither show nor contradict it, or it is about something outside the code (staff, owners, tests that were not supplied, run schedules, deployed versions, data volumes).
 Judge only what the findings show. Do not invent behaviour."""
 TABLES = (("Risk ID", "risk"), ("Debt ID", "debt"), ("Vuln ID", "vuln"))

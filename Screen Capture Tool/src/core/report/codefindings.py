@@ -295,6 +295,9 @@ def _spans(cites):
     return out
 
 
+MAX_PROGRAM_RISKS = 16      # the whole-program rows are the ones a reader needs first; more than this is a list, not a finding
+
+
 def program_items(observations):
     """Split the whole-program observations into the end-to-end flow, risks (files that disagree or break each other),
     debt (the same rule copied into several files) and agreements (nothing to report)."""
@@ -307,13 +310,21 @@ def program_items(observations):
                 "basis": o.get("basis"),
                 "severity": o.get("severity") or ("high" if SERIOUS.search(text) else "medium"), "weight": len(files), "cites": o.get("cites") or [],
                 "checked": bool(o.get("source"))}       # read from the source text by a rule: the claim check, which sees only findings, cannot overrule it
-        if FLOW.search(o.get("title", "")):
+        kind = o.get("kind")
+        if kind == "agreement":
+            continue                       # the files agree: nothing to report
+        if kind == "flow" or (kind is None and FLOW.search(o.get("title", ""))):
             flow = flow or item            # the first end-to-end flow is the main one; later ones (restart, recovery) are secondary
-        elif (o.get("source") or CONFLICT.search(o.get("title", ""))) and len(files) >= 1:      # the headline says files disagree or break each other
+        elif kind in ("conflict", "defect", "duplication"):
+            item["severity"] = o.get("severity") or ("high" if SERIOUS.search(text) else "medium")
+            risks.append(item)             # the model named it a cross-file problem; its title need not use any particular word
+        elif kind is None and (o.get("source") or CONFLICT.search(o.get("title", ""))) and len(files) >= 1:      # older runs: the headline says files disagree or break each other
             risks.append(item)
         elif AGREE.search(o.get("title", "")) and len(files) >= 3 and re.search(r"hard.?code", text, re.I):
             debt.append(item)
-    return {"flow": flow, "risks": risks, "debt": debt}
+    rank = {"high": 0, "medium": 1, "low": 2}
+    risks.sort(key=lambda r: (not r.get("checked"), rank.get(r["severity"], 1), -len(r["files"])))
+    return {"flow": flow, "risks": risks[:MAX_PROGRAM_RISKS], "debt": debt}
 
 
 def absorb(single, program):
