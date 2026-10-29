@@ -20,3 +20,13 @@ def test_ratings_differ_by_what_the_finding_says():
 def test_high_configuration_fact_is_kept():
     import re
     assert "configuration" not in CFM.CATEGORIES      # kept by the severity rule in select, not by widening the list
+
+
+def test_vendor_does_not_read_javascript_as_java():
+    from core.report.template_docx import _vendor
+    assert _vendor({"name": "JavaScript"}) != "Oracle"
+    assert _vendor({"name": "Java"}) == "Oracle"
+
+
+def test_id_runs_list_pairs_individually():
+    assert _id_runs(["A-1", "A-2", "A-4", "A-5", "A-6"]) == "A-1, A-2 and A-4 to A-6"

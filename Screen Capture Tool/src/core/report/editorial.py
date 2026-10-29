@@ -140,8 +140,8 @@ def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts
             current["elements"].append(el)
     main = [g for g in groups if not g["heading"].startswith("Appendix")]
     for group in main:
-        if not re.match(r"\d", group["heading"]) or group["heading"].startswith("1.2 "):
-            continue
+        if not re.match(r"\d", group["heading"]) or group["heading"].startswith(("1.2 ", "8.3 ")):
+            continue      # 8.3: each bullet explains a different group of register rows, so none can be left out for length
         narrative = [el for el in group["elements"] if el.tag == qn("w:p") and
                      Paragraph(el, document).text.strip() and not el.xpath(".//w:drawing") and
                      not Paragraph(el, document).text.startswith("Figure ") and
@@ -336,7 +336,7 @@ def _cap_registers(document):
                     rows, head = [[r[0]] for r in rows], [head[0]]
                 for r in extra:
                     r._tr.getparent().remove(r._tr)
-                note = _paragraph(document, f"The {keep} highest entries are shown. The other {len(extra)} are listed in Appendix H.")
+                note = _paragraph(document, f"The {keep} highest entries are shown. The other {len(extra)} are listed in Appendix H (a long register continues in the next appendix).")
                 el.addnext(note)
                 moved.append((name, head, rows))
                 break
