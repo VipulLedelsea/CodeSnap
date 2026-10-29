@@ -888,30 +888,48 @@ def _known(new, kept):
     return False
 
 
+HUNT_ANGLES = (
+    "",
+    "Second independent pass: read the file from its last lines back to its first, and weigh the end of the file as much as the start. "
+    "Do not assume the first pass was thorough; report anything it missed.\n",
+)
+
+
 def hunt(store, client, art, kept, model, text, bad_lines, header) -> list:
-    """A second, independent pass that only looks for defects the first pass did not record. Every finding must quote the file verbatim
-    and show its working in `reasoning`; the independent review that follows decides whether it stays."""
+    """Independent defect-hunting passes (CODESNAP_HUNT_RUNS, default 2) that only look for defects the first pass did not record. Findings from
+    every pass are pooled; a finding two passes both reach is marked agreed. Each must quote the file verbatim and show its working in
+    `reasoning`; the independent review that follows decides whether it stays."""
     n_lines = len(text.split("\n"))
     known = "\n".join(f"- (lines {f['lines'][0]}-{f['lines'][-1]}) {f['statement']}" for f in kept[:150]) or "(none)"
+    runs = max(1, min(int(os.environ.get("CODESNAP_HUNT_RUNS", "2") or 2), len(HUNT_ANGLES)))
 
     def window(w):
-        a, b = w
+        a, b, angle = w
         part = "" if (a, b) == (1, n_lines) else f"This call covers lines {a}-{b} of {n_lines}; report only findings whose first line is in {a}-{b} (the rest is context).\n"
         body = listing(text, bad_lines, a - SEGMENT_CONTEXT, b + SEGMENT_CONTEXT) if part else listing(text, bad_lines)
-        msg, ms = _call(client, model, HUNT_SYSTEM, HUNT_TOOL, f"{header}\n{part}Known findings (do not repeat):\n{known}\n\n{body}")
+        msg, ms = _call(client, model, HUNT_SYSTEM, HUNT_TOOL, f"{header}\n{part}{angle}Known findings (do not repeat):\n{known}\n\n{body}")
         _log(store, "deepdive_hunt", art["id"], model, msg, ms)
         if getattr(msg, "stop_reason", None) == "max_tokens":
             raise ValueError("The defect hunt was truncated; review remains incomplete.")
         got = (_tool(msg, HUNT_TOOL["name"]) or {}).get("findings") or []
         return [f for f in got if isinstance(f, dict) and isinstance(f.get("lines"), list) and f["lines"] and isinstance(f["lines"][0], int)
                 and a <= f["lines"][0] <= b]
-    found = [f for part in parallel(window, segments(n_lines)) for f in part]
-    found = [{**f, "basis": "inferred", "source": "hunt"} for f in found if (f.get("reasoning") or "").strip()]
-    good, _, _, _ = check_facts(found, text, bad_lines)
+    tasks = [(a, b, HUNT_ANGLES[k]) for k in range(runs) for a, b in segments(n_lines)]
+    by_pass = {}
+    for (a, b, angle), part in zip(tasks, parallel(window, tasks)):
+        by_pass.setdefault(angle, []).extend(part)
     out = []
-    for f in good:
-        if not _known(f, kept + out):
-            out.append(f)
+    for angle in [HUNT_ANGLES[k] for k in range(runs)]:
+        found = [{**f, "basis": "inferred", "source": "hunt"} for f in by_pass.get(angle, []) if (f.get("reasoning") or "").strip()]
+        good, _, _, _ = check_facts(found, text, bad_lines)
+        for f in good:
+            if _known(f, kept):
+                continue
+            twin = next((o for o in out if _known(f, [o])), None)
+            if twin is not None:
+                twin["agreed"] = True          # two independent passes reached the same defect
+            else:
+                out.append(f)
     return out
 
 
@@ -1203,9 +1221,10 @@ def synthesize(store, client, model=None) -> dict:
 def program_view(store, stored=None) -> dict:
     """The cross-file observations: the model's, if they are current, plus the field-width conflicts read from the structure."""
     from core import commitscope, crossrefs, jclreads, logicchecks, ruledrift, widths
+    from core.security import taint
     base = dict(stored if stored is not None else (store.get_meta("deepdive_program") or {}))
     try:
-        extra = widths.conflicts(store) + jclreads.conflicts(store) + commitscope.conflicts(store) + ruledrift.conflicts(store) + crossrefs.conflicts(store) + logicchecks.conflicts(store)
+        extra = widths.conflicts(store) + jclreads.conflicts(store) + commitscope.conflicts(store) + ruledrift.conflicts(store) + crossrefs.conflicts(store) + logicchecks.conflicts(store) + taint.conflicts(store)
     except Exception:  # noqa: BLE001 - an extra check must never break the report
         extra = []
     base["observations"] = list(base.get("observations") or []) + extra

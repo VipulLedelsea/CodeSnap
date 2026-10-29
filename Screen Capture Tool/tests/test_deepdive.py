@@ -374,3 +374,20 @@ def test_the_hunt_adds_only_quoted_reasoned_new_findings_and_the_review_still_de
     DD.analyse_file(s, off, art)
     assert not any((k.get("tools") or [{}])[0].get("name") == "record_hunt" for k in off.calls)
     s.close()
+
+
+def test_two_hunt_passes_pool_their_findings_and_mark_the_one_both_reach_as_agreed(tmp_path):
+    from core.model import ProgramStore
+    s = ProgramStore.create("Hunt2", root=tmp_path)
+    aid = s.add_artifact("PAY.cbl", language="COBOL", transcription=CODE)
+    art = s.artifact(aid)
+    both = {"category": "defect", "statement": "The net can go negative when the holdback exceeds the gross", "lines": [4, 4],
+            "quote": "SUBTRACT WS-HOLDBACK FROM WS-GROSS GIVING WS-NET", "reasoning": "Gross 100, holdback percent 150 gives net -50", "severity": "medium"}
+    only2 = {"category": "defect", "statement": "The payment record is written even when the net is not computed", "lines": [5, 5],
+             "quote": "WRITE PAYMENT-REC", "reasoning": "A failed subtract still reaches the write", "severity": "low"}
+    client = HuntClient({"purpose": "p", "facts": []}, review={"verdicts": [{"id": 1, "verdict": "supported"}, {"id": 2, "verdict": "supported"}]},
+                        hunt=[[both], [dict(both), only2]])
+    res = DD.analyse_file(s, client, art, hunt_pass=True)
+    by = {f["statement"][:12]: f for f in res["facts"]}
+    assert len(res["facts"]) == 2 and by["The net can "].get("agreed") and not by["The payment "].get("agreed")
+    s.close()

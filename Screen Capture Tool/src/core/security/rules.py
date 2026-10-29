@@ -395,6 +395,12 @@ def scan_text(text: str, filename: str, language: str = "") -> list:
         add("SEC-SQLI", "high", n, reason)
     for rule, sev, n, desc in _whole_file(lines, fam):
         add(rule, sev, n, desc)
+    try:
+        from core.security import taint
+        for rule, sev, n, desc in taint.flows(text, fam):       # request data followed to a query, a path, a command or the page
+            add(rule, sev, n, desc)
+    except Exception:  # noqa: BLE001 - an extra check never stops the scan
+        pass
     return out
 
 
