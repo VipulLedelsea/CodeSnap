@@ -83,3 +83,22 @@ def test_a_table_the_code_uses_but_no_schema_creates_is_drawn_as_not_created(tmp
     assert nodes["bookings"]["stereotype"] == "table · not created by the schema"
     assert nodes["permits"]["stereotype"] == "table"
     s.close()
+
+
+def test_keys_in_browser_storage_are_not_copies_of_the_business_data(tmp_path, monkeypatch):
+    from core.report import dataarch
+    s = _store(tmp_path, monkeypatch)
+    a = s.add_artifact("permits.js", language="JavaScript", transcription="localStorage.setItem('permitToken', t)\n")
+    sql = s.add_artifact("schema.sql", language="SQL", transcription="CREATE TABLE permits (id INT);\n")
+    apply_structure(s, sql, {"entities": [{"name": "permits", "kind": "table"}], "relations": []}, "schema.sql", 1)
+    apply_structure(s, a, {"entities": [{"name": "localStorage.permitToken", "kind": "data_store"}],
+                           "relations": [{"source": "permits.js", "target": "localStorage.permitToken", "target_kind": "data_store", "kind": "writes"},
+                                         {"source": "permits.js", "target": "permits", "target_kind": "table", "kind": "reads"}]}, "permits.js", 1)
+    groups = dataarch.model(s)["entities"]
+    assert all(len(g["copies"]) <= 1 for g in groups)
+    s.close()
+
+
+def test_well_known_runtime_classes_and_browser_storage_keys_are_not_systems():
+    assert is_runtime("EmailMessage", "class") and is_runtime("localStorage.permitToken", "data_store")
+    assert not is_runtime("Permit", "class")

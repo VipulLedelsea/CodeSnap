@@ -44,6 +44,8 @@ class _Model:
         gone = {eid for eid, e in self.ents.items()
                 if e["kind"] in ("module", "class", "library", "unknown", "external_system", "data_store")
                 and (e["origin"] == "placeholder" or e["kind"] in ("external_system", "data_store")) and is_runtime(e["name"], e["kind"])}
+        config_names = {e["name"] for e in self.ents.values() if e["kind"] == "config_item"}
+        gone |= {eid for eid, e in self.ents.items() if e["kind"] == "external_system" and e["name"] in config_names}   # SMS_ENDPOINT is a setting, not a system
         if gone:
             for eid in gone:
                 del self.ents[eid]

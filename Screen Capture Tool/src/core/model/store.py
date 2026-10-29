@@ -942,7 +942,7 @@ class ProgramStore:
                 # auth.purge_old_sessions / workflow.advance / the module 'auth': the file is in the folder, so it is not missing
                 if len(parts) == 1 or parts[-1] in provided:
                     continue
-            elif re.match(r"^[a-z_][A-Za-z0-9_]*$", nm) and placeholder["kind"] == "unknown":
+            elif re.match(r"^[a-z_][A-Za-z0-9_]*$", nm) and placeholder["kind"] in ("unknown", "field", "file"):
                 # a bare lowercase name nothing defines: a library if the code imports it, otherwise a local name or a browser global
                 if any(r["relation"] == "imports" for r in referrers):
                     category = "library"

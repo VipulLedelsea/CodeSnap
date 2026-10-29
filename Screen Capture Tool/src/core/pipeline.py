@@ -140,6 +140,13 @@ def _run_staged(store, client, progress=None, report=True) -> dict:
             errors.append(f"report re-read: {type(exc).__name__}: {exc}"[:240])
     errors += second["errors"]
     dd = store.get_meta("deepdive") or {}
+    undone = [i for i in ids if (dd.get(str(i)) or {}).get("stage") != "final"]
+    if undone:      # a file whose line-by-line review failed (the model gave no usable answer) gets one more try before the report is built
+        _say(store, 3, f"trying again on {len(undone)} file{'s' if len(undone) != 1 else ''} whose review did not finish")
+        retry = deepdive.run(store, client, artifact_ids=undone, force=True, model=FINAL_MODEL, review_model=deepdive.DEFAULT_REVIEW_MODEL,
+                             claims=claims, stage="final", program=True, progress=progress)
+        errors = [e for e in errors if not any(str(a["name"]) in e for a in (store.artifact(i) for i in undone) if a)] + retry["errors"]
+        dd = store.get_meta("deepdive") or {}
     complete = bool(ids) and all((dd.get(str(i)) or {}).get("stage") == "final" for i in ids)
     store.set_meta("analysis_stage", "final" if complete else "draft")
     if complete:

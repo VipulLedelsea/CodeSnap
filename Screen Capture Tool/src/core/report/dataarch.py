@@ -130,6 +130,8 @@ def model(store, AM=None) -> dict:
         from core.model.runtime_names import is_runtime
         if is_runtime(e["name"], e["kind"]):
             continue          # sqlite3 is a command-line tool, not a data store of the application
+        if re.match(r"(?i)(localStorage|sessionStorage|document\.cookie|cookie)\b", e["name"] or ""):
+            continue          # a key in the browser's own storage (a token, a role) is not a copy of the business data
         if e["kind"] == "data_store" and _display_file(store, e):
             displays.append(e["name"])
             continue
