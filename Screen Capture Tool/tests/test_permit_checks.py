@@ -126,7 +126,7 @@ def test_the_review_prompt_asks_for_the_probes_and_forbids_invention():
     for phrase in ("Reachability", "Boundaries and limits", "Check then act", "Output encoding", "work one concrete input through the lines",
                    "Never invent names, values, systems", "contradict each other"):
         assert phrase in s
-    assert deepdive.PROMPT_VERSION.startswith("deepdive-v7") and "Never invent names, values, callers" in deepdive.HUNT_SYSTEM and "concrete input" in deepdive.HUNT_SYSTEM
+    assert deepdive.PROMPT_VERSION.startswith("deepdive-v8") and "Judge what you have described" in s and "Never invent names, values, callers" in deepdive.HUNT_SYSTEM and "concrete input" in deepdive.HUNT_SYSTEM
 
 
 def test_the_same_defect_in_three_files_becomes_one_row_naming_every_file():

@@ -19,7 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-PROMPT_VERSION = "deepdive-v7-hunt"
+PROMPT_VERSION = "deepdive-v8-judge"
 MAX_TOKENS = 20000   # the SDK refuses non-streamed calls much above this
 THINKING = 8000
 DEFAULT_DEEP_MODEL = "claude-sonnet-5"
@@ -43,7 +43,8 @@ capture_concerns.
 WORKING ORDER
 1. Read every line once to identify structure: sections, paragraphs, functions, files, screens, calls, etc.
 2. Re-read section by section, recording facts.
-3. Do a cross-cutting pass for security weaknesses, data loss or corruption paths, and defects. For each of these, decide whether this file shows it and record a fact only when the code does (cite the lines; do not assume):
+3. Judge what you have described. Describing a calculation, a loop, a state change, a delete or a limit is not enough: for each one ask "what input or situation makes this wrong?" (zero, negative, one past the limit, a second caller at the same time, a failure half way, a value another branch treats differently). When you can show a concrete case from the lines, record it as a defect fact with a severity. That is not a guess: "omit a fact rather than guess" applies to behaviour you cannot see, never to a wrong result you can work through the code. A file whose calculations and state changes are all described and none judged has been read, not reviewed.
+   Then do a cross-cutting pass for security weaknesses, data loss or corruption paths, and defects. For each of these, decide whether this file shows it and record a fact only when the code does (cite the lines; do not assume):
    - Commit scope: a commit, rollback or audit write that also commits or undoes work the caller or an earlier step did, or two updates that belong together committed separately.
    - Output completeness: a screen, message, log line, report or export record that leaves out a key value the code has in hand (an amount, an identifier, a status), or one that is written even when the step failed.
    - Width and truncation: a field, parameter, screen or record layout narrower than the value it carries (CHAR(n), substring, pad, a fixed-length map field). State both widths when the file shows them. Also money cut to whole units, and a sign or rounding step that runs before or after a limit check it should precede or follow.
@@ -901,14 +902,17 @@ def hunt(store, client, art, kept, model, text, bad_lines, header) -> list:
     every pass are pooled; a finding two passes both reach is marked agreed. Each must quote the file verbatim and show its working in
     `reasoning`; the independent review that follows decides whether it stays."""
     n_lines = len(text.split("\n"))
-    known = "\n".join(f"- (lines {f['lines'][0]}-{f['lines'][-1]}) {f['statement']}" for f in kept[:150]) or "(none)"
+    # Only what the first pass already called a problem is "known". Its plain descriptions of what the code does are not: listing them made the
+    # hunter treat whole areas as already covered, so a calculation that was described but never judged was never questioned.
+    known = "\n".join(f"- (lines {f['lines'][0]}-{f['lines'][-1]}) {f['statement']}" for f in kept
+                      if f.get("severity") in ("high", "medium", "low") or f.get("category") in ("defect", "security"))[:30000] or "(none)"
     runs = max(1, min(int(os.environ.get("CODESNAP_HUNT_RUNS", "2") or 2), len(HUNT_ANGLES)))
 
     def window(w):
         a, b, angle = w
         part = "" if (a, b) == (1, n_lines) else f"This call covers lines {a}-{b} of {n_lines}; report only findings whose first line is in {a}-{b} (the rest is context).\n"
         body = listing(text, bad_lines, a - SEGMENT_CONTEXT, b + SEGMENT_CONTEXT) if part else listing(text, bad_lines)
-        msg, ms = _call(client, model, HUNT_SYSTEM, HUNT_TOOL, f"{header}\n{part}{angle}Known findings (do not repeat):\n{known}\n\n{body}")
+        msg, ms = _call(client, model, HUNT_SYSTEM, HUNT_TOOL, f"{header}\n{part}{angle}Problems the first reviewer already reported (do not repeat these; everything else in the file is still yours to question):\n{known}\n\n{body}")
         _log(store, "deepdive_hunt", art["id"], model, msg, ms)
         if getattr(msg, "stop_reason", None) == "max_tokens":
             raise ValueError("The defect hunt was truncated; review remains incomplete.")
@@ -1200,23 +1204,32 @@ def synthesize(store, client, model=None) -> dict:
         return {"observations": [], "ran_at": None}
     lines = [f"{fid} [{name} lines {f['lines'][0]}-{f['lines'][1]}] ({f['category']}) {f['statement']}"
              for fid, name, f in cross_file_candidates(facts, SYNTH_MAX_FACTS)]
-    msg, ms = _call(client, model, SYNTH_SYSTEM, PROGRAM_TOOL, "Verified findings:\n" + "\n".join(lines))
-    _log(store, "deepdive_program", None, model, msg, ms)
-    obs = []
-    for o in (_tool(msg, PROGRAM_TOOL["name"]) or {}).get("observations") or []:
-        if not isinstance(o, dict):        # the model sometimes answers an observation as a bare string
-            continue
-        ids = [x for x in (o.get("facts") or []) if x in index]
-        if not ids or not o.get("statement"):
-            continue
-        files = sorted({index[x][0] for x in ids})
-        if len(files) < 2:
-            continue
-        obs.append({"title": o.get("title", "").strip(), "statement": o["statement"].strip(), "facts": ids,
-                    "basis": "observed" if o.get("basis") == "observed" else "inferred",
-                    "cites": [f"{index[x][0]} lines {index[x][1]['lines'][0]}–{index[x][1]['lines'][1]}" for x in ids],
-                    "files": files})
-    return {"observations": obs, "ran_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "model": model}
+    obs, why = [], {"asked": 0, "not_objects": 0, "no_known_facts": 0, "one_file": 0, "attempts": 0}
+    for attempt in range(2):                 # a program with dozens of findings that crosses no file boundary is not credible: ask once more
+        msg, ms = _call(client, model, SYNTH_SYSTEM, PROGRAM_TOOL, "Verified findings:\n" + "\n".join(lines))
+        _log(store, "deepdive_program", None, model, msg, ms)
+        why["attempts"] = attempt + 1
+        obs = []
+        for o in (_tool(msg, PROGRAM_TOOL["name"]) or {}).get("observations") or []:
+            why["asked"] += 1
+            if not isinstance(o, dict):        # the model sometimes answers an observation as a bare string
+                why["not_objects"] += 1
+                continue
+            ids = [x for x in (o.get("facts") or []) if x in index]
+            if not ids or not o.get("statement"):
+                why["no_known_facts"] += 1
+                continue
+            files = sorted({index[x][0] for x in ids})
+            if len(files) < 2:
+                why["one_file"] += 1
+                continue
+            obs.append({"title": o.get("title", "").strip(), "statement": o["statement"].strip(), "facts": ids,
+                        "basis": "observed" if o.get("basis") == "observed" else "inferred",
+                        "cites": [f"{index[x][0]} lines {index[x][1]['lines'][0]}–{index[x][1]['lines'][1]}" for x in ids],
+                        "files": files})
+        if obs or len(facts) < 30:
+            break
+    return {"observations": obs, "ran_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "model": model, "diagnostics": why}
 
 
 def program_view(store, stored=None) -> dict:

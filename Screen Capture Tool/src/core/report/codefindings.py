@@ -63,7 +63,8 @@ PROBLEM = re.compile(r"\b(no|not|never|without|silently|unconditional\w*|forever
                      r"hard-?coded|truncat\w*|los(e|ing|s)|negative|fail\w*|error|exception|unhandled|uncaught|incorrect|despite|wrong|however|although|"
                      r"REAL|floating|cents|stale|shared|uppercase|lowercase|substring|unsalted|unencrypted|world|expos\w+|leak\w*|inject\w*|"
                      r"overwrit\w+|append\w*|rerun|re-run|duplicate\w*|missing|lacks?|ignor\w+|skips?|cannot|can't|undefined|NaN|"
-                     r"only (skips|counts|sums|considers|when|if)|regardless|any (user|caller|client)|before|after (the )?(commit|delete)|"
+                     r"only (skips|counts|sums|considers|when|if)|regardless|any (user|caller|client|domain|origin|host)|anyone|anonymous|unauthenticated|wildcard|"
+                     r"would permit|allowing|exposes?|reveals?|before|after (the )?(commit|delete)|"
                      r"\w*Error|raises?|crash\w*|abort\w*|stops?|leaves?|blocks?|indefinite\w*|exceed\w*|expir\w+|expiry|traversal|secret|password|credential\w*|"
                      r"token|ssn|personal|sensitive|pii|race|lock|concurren\w*|atomic\w*|transaction|rounding|precision|float\w*)\b", re.I)
 WORD = re.compile(r"[a-z0-9_]{4,}")
@@ -72,6 +73,8 @@ GENERIC = re.compile(r"identical structure|^(the )?(file|program|copybook|jcl|re
 
 def _score(f):
     s = {"high": 3, "medium": 2}.get(f.get("severity"), 0)
+    if f.get("category") == "security":
+        s += 2          # a security weakness outranks a robustness note of the same rating
     s += sum(2 for p in SIGNALS if p.search(f["statement"]))
     if f.get("basis") == "observed":
         s += 1
@@ -99,6 +102,8 @@ def _defect_like(f):
     return sum(1 for p in SIGNALS if p.search(f["statement"])) >= 2
 
 
+KIND = re.compile(r"\b(smtp|email|e-mail|sms|database|db|api|ssh|ftp|aws|token|session|admin)\b", re.I)
+FUNC = re.compile(r"\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+|[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*)\s*\(\)")
 CAPS = re.compile(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b|\b[A-Z]{4,}\b")
 IDENT = re.compile(r"\b\w*_\w*\b|\b[A-Za-z]*[a-z][A-Z][A-Za-z]*\b")
 
@@ -111,6 +116,12 @@ def _same(a, b):
     caps_a, caps_b = set(CAPS.findall(a)), set(CAPS.findall(b))
     if caps_a and caps_b and not caps_a & caps_b:
         return False          # each names a different constant (SMS_KEY, SMTP_PASSWORD): two findings, not one said twice
+    first_a, first_b = KIND.search(a), KIND.search(b)
+    if first_a and first_b and first_a.group(1).lower() != first_b.group(1).lower():
+        return False          # a database password and an email password in the same file are two secrets, not one (the first kind named is the subject)
+    funcs_a, funcs_b = {x.lower() for x in FUNC.findall(a)}, {x.lower() for x in FUNC.findall(b)}
+    if funcs_a and funcs_b and not funcs_a & funcs_b:
+        return False          # each is about a different function (get_permit, download_document): the same kind of flaw in two places is two findings
     long_shared = {w for w in ta & tb if len(w) >= 7}
     return len(ids) >= 2 or len(ta & tb) / min(len(ta), len(tb)) >= 0.5 or len(long_shared) >= 5      # one shared name is not enough: two defects can touch the same view
 
@@ -155,8 +166,9 @@ def select(store, code_arts, review_facts, total=24, minimum=2):
     # ones is still represented; the rest is filled by rank up to the total.
     per_file, guaranteed = {}, []
     for c in cands:
-        if (c["severity"] == "high" or per_file.get(c["file"], 0) < PER_FILE) and not any(g["file"] == c["file"] and _same(g["text"], c["text"]) for g in guaranteed):
-            if c["severity"] != "high":                                # a high finding never uses up the slots meant for the rest of its file
+        exempt = c["severity"] == "high" or (c["category"] == "security" and c["severity"] == "medium")      # serious weaknesses never compete for a file's slots
+        if (exempt or per_file.get(c["file"], 0) < PER_FILE) and not any(g["file"] == c["file"] and _same(g["text"], c["text"]) for g in guaranteed):
+            if not exempt:                                # a high finding never uses up the slots meant for the rest of its file
                 per_file[c["file"]] = per_file.get(c["file"], 0) + 1       # a near copy of one already chosen does not use a slot
             guaranteed.append(c)
     for c in cands:           # up to two more per file when the finding matches a known defect pattern (separate commits, MOD, silent failure ...)
