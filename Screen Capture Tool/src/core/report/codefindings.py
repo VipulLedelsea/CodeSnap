@@ -220,7 +220,8 @@ def program_items(observations):
         item = {"title": o.get("title", "").rstrip("."), "text": o.get("statement", ""), "files": files,
                 "spans": {} if o.get("source") else _spans(o.get("cites")),     # a structural check names its own lines and covers no other finding
                 "basis": o.get("basis"),
-                "severity": o.get("severity") or ("high" if SERIOUS.search(text) else "medium"), "weight": len(files), "cites": o.get("cites") or []}
+                "severity": o.get("severity") or ("high" if SERIOUS.search(text) else "medium"), "weight": len(files), "cites": o.get("cites") or [],
+                "checked": bool(o.get("source"))}       # read from the source text by a rule: the claim check, which sees only findings, cannot overrule it
         if FLOW.search(o.get("title", "")):
             flow = flow or item            # the first end-to-end flow is the main one; later ones (restart, recovery) are secondary
         elif (o.get("source") or CONFLICT.search(o.get("title", ""))) and len(files) >= 1:      # the headline says files disagree or break each other

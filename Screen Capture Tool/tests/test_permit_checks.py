@@ -102,3 +102,10 @@ def test_a_form_that_a_script_submits_is_not_a_get_form():
             '<form><input name="password" type="password"></form>\n')
     hits = [f for f in page.check_page(html) if f["rule"] == "UIS-GET"]
     assert len(hits) == 1 and hits[0]["line"] == 2
+
+
+def test_a_finding_read_from_the_source_by_a_rule_is_marked_checked_and_a_model_one_is_not():
+    obs = [{"title": "The same secret is written into a.py and b.py", "statement": "x", "files": ["a.py", "b.py"], "source": "repeated secrets"},
+           {"title": "Two files never agree", "statement": "y", "files": ["a.py", "b.py"]}]
+    risks = CFM.program_items(obs)["risks"]
+    assert [r["checked"] for r in risks] == [True, False]

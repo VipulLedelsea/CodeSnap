@@ -540,14 +540,14 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     from core import report_review as RRV0
     _verdict0 = RRV0.verdicts(store)
     if _verdict0:     # an observation the code check judged unsupported is not reported, so it must not absorb findings either
-        PI["risks"] = [it_ for it_ in PI["risks"] if (_verdict0.get(RRV0.claim_key(RRV0.risk_text(
+        PI["risks"] = [it_ for it_ in PI["risks"] if it_.get("checked") or (_verdict0.get(RRV0.claim_key(RRV0.risk_text(
             CFM.short(it_["title"] + ": " + it_["text"], 170), list(it_["files"])))) or {}).get("verdict") != "unsupported"]
     CF = CFM.absorb(CF, PI)           # a finding the whole-program review already covers is stated once, for the program
     for it_ in PI["risks"]:
         L_, I_, why_l_, why_i_ = CFM.program_rating(it_)
         BR.append({"title": CFM.short(it_["title"] + ": " + it_["text"], 170), "brief": CFM.short(it_["title"], 120),
                    "cat": "Across files", "L": L_, "I": I_, "score": L_ * I_, "why_L": why_l_, "why_I": why_i_,
-                   "comps": list(it_["files"]), "owner": owner_it, "existing": "None visible in the code",
+                   "comps": list(it_["files"]), "owner": owner_it, "existing": "None visible in the code", "checked": bool(it_.get("checked")),
                    "mit": "Confirm the intended behavior with the business owner, correct the files together, and add a test that runs them as one chain"})
     for cf_ in CF:
         L_, I_, why_l_, why_i_ = CFM.rate(cf_)
@@ -564,7 +564,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
         _kept = []
         for r_ in BR:
             v_ = RR.get(RRV.claim_key(RRV.risk_text(r_["title"], r_["comps"]))) or {}
-            if v_.get("verdict") == "unsupported":
+            if v_.get("verdict") == "unsupported" and not r_.get("checked"):
                 continue
             if v_.get("verdict") == "partly" and v_.get("correction"):
                 r_["why_L"] = f"{r_['why_L']}; the code check corrected this: {v_['correction']}"
