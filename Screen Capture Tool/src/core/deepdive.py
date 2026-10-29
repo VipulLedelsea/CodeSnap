@@ -1117,10 +1117,10 @@ def synthesize(store, client, model=None) -> dict:
 
 def program_view(store, stored=None) -> dict:
     """The cross-file observations: the model's, if they are current, plus the field-width conflicts read from the structure."""
-    from core import commitscope, crossrefs, jclreads, ruledrift, widths
+    from core import commitscope, crossrefs, jclreads, logicchecks, ruledrift, widths
     base = dict(stored if stored is not None else (store.get_meta("deepdive_program") or {}))
     try:
-        extra = widths.conflicts(store) + jclreads.conflicts(store) + commitscope.conflicts(store) + ruledrift.conflicts(store) + crossrefs.conflicts(store)
+        extra = widths.conflicts(store) + jclreads.conflicts(store) + commitscope.conflicts(store) + ruledrift.conflicts(store) + crossrefs.conflicts(store) + logicchecks.conflicts(store)
     except Exception:  # noqa: BLE001 - an extra check must never break the report
         extra = []
     base["observations"] = list(base.get("observations") or []) + extra

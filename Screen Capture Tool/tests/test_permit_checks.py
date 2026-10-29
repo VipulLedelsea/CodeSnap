@@ -170,3 +170,20 @@ def test_a_code_check_note_that_is_broken_or_contradicts_itself_is_not_added_to_
         assert note_for(bad) == ""
     good = note_for("The code shows MD5 use for password hashing, but there's no evidence of DES in the files reviewed.")
     assert good.startswith("The code shows MD5") and good.endswith(".")
+
+
+def test_logic_checks_find_the_provable_defects_and_stay_quiet_otherwise():
+    from core import logicchecks
+    files = {
+        "workflow.py": 'TRANSITIONS = {\n    "SUBMITTED": ["IN_REVIEW", "REJECTED"],\n    "IN_REVIEW": ["APPROVED", "REJECTED"],\n    "APPROVED": ["ISSUED"],\n    "ISSUED": [],\n}\n'
+                       'def go(db):\n    advance(db, 1, "APPROVED")\n    advance(db, 1, "REJECTED")\n    advance(db, 1, "ISSUED")\n    rows = db.execute("SELECT id FROM p WHERE status IN (\'SUBMITTED\', \'IN_REVIEW\')")\n',
+        "sched.py": "def nb(d):\n    while d.weekday() > 5:\n        d = d + 1\n",
+        "rep.py": "import csv\ndef export(db):\n    w = csv.writer(open('x'))\n    w.writerow(db.execute('select description from p').fetchone())\n",
+        "schema.sql": "CREATE TABLE users (\n    id INTEGER PRIMARY KEY,\n    email TEXT NOT NULL,\n    name TEXT\n);\n",
+    }
+    got = {o["source"]: o for o in logicchecks.conflicts(Fake(files))}
+    assert set(got) == {"status never set", "weekend test", "csv formula", "login not unique"}
+    assert "IN_REVIEW" in got["status never set"]["title"]
+    ok = {"w.py": 'TRANSITIONS = {\n    "A": ["B"],\n    "B": ["C"],\n    "C": [],\n}\ndef f(db):\n    advance(db, 1, "B")\n    advance(db, 1, "C")\n',
+          "s.py": "x = d.weekday() >= 5\n", "t.sql": "CREATE TABLE u (\n    email TEXT UNIQUE\n);\n"}
+    assert logicchecks.conflicts(Fake(ok)) == []
