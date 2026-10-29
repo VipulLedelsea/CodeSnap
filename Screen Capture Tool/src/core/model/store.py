@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 
 from core import robust
 import sqlite3
@@ -30,6 +31,9 @@ def _row(row) -> dict | None:
         if field in out and isinstance(out[field], str):
             out[field] = json.loads(out[field])
     return out
+
+
+CASE_BLIND_KINDS = ("table", "column")
 
 
 def entity_key(kind: str, name: str, parent_key: str | None = None) -> str:
@@ -104,7 +108,12 @@ class ProgramStore:
         path = programs_root(root) / slug
         if not (path / DB_NAME).exists():
             raise FileNotFoundError(f"no program at {path}")
-        return cls(path)
+        store = cls(path)
+        try:
+            store.merge_case_duplicates()
+        except Exception:  # noqa: BLE001 - tidying must never stop a program opening
+            pass
+        return store
 
     @staticmethod
     def list(root=None) -> list:
@@ -563,7 +572,10 @@ class ProgramStore:
         key = key or entity_key(kind, name, parent_key)
         now = _now()
         with self.transaction() as db:
-            existing = _row(db.execute("SELECT * FROM entity WHERE key = ?", (key,)).fetchone())
+            if kind in CASE_BLIND_KINDS:       # one table is one table whether the schema says PERMITS or the code says permits
+                existing = _row(db.execute("SELECT * FROM entity WHERE key = ? COLLATE NOCASE ORDER BY id LIMIT 1", (key,)).fetchone())
+            else:
+                existing = _row(db.execute("SELECT * FROM entity WHERE key = ?", (key,)).fetchone())
             if existing is None:
                 entity_id = db.execute(
                     "INSERT INTO entity(kind, key, name, parent_id, attrs, artifact_id, line_start, line_end, "
@@ -598,6 +610,34 @@ class ProgramStore:
 
     def entity(self, entity_id: int) -> dict | None:
         return self._one("SELECT * FROM entity WHERE id = ?", (entity_id,))
+
+    def merge_case_duplicates(self) -> int:
+        """Tables and columns that differ only in letter case (PERMITS from the schema, permits from the code) are one thing.
+        Everything that pointed at a duplicate is re-pointed at the one kept, and the duplicate is removed. Returns how many
+        were merged."""
+        merged = 0
+        for kind in ("column", "table"):
+            rows = self._all("SELECT id, key, origin, artifact_id, attrs FROM entity WHERE kind = ? ORDER BY id", (kind,))
+            groups = {}
+            for r in rows:
+                groups.setdefault(r["key"].lower(), []).append(r)
+            for group in (g for g in groups.values() if len(g) > 1):
+                sql_ids = {a["id"] for a in self.artifacts() if (a.get("name") or "").lower().endswith(".sql")}
+                keep = next((r for r in group if r["artifact_id"] in sql_ids and r["origin"] != "placeholder"), None) or \
+                    next((r for r in group if r["origin"] != "placeholder"), group[0])
+                with self.transaction() as db:
+                    for dup in (r for r in group if r["id"] != keep["id"]):
+                        for sql in ("UPDATE relation SET from_id = ? WHERE from_id = ?", "UPDATE relation SET to_id = ? WHERE to_id = ?",
+                                    "UPDATE entity SET parent_id = ? WHERE parent_id = ?", "UPDATE entity_source SET entity_id = ? WHERE entity_id = ?"):
+                            db.execute(sql, (keep["id"], dup["id"]))
+                        db.execute("UPDATE OR IGNORE evidence_link SET target_id = ? WHERE target_type = 'entity' AND target_id = ?", (keep["id"], dup["id"]))
+                        extra = json.loads(dup["attrs"] or "{}") if isinstance(dup["attrs"], str) else (dup["attrs"] or {})
+                        have = json.loads(keep["attrs"] or "{}") if isinstance(keep["attrs"], str) else (keep["attrs"] or {})
+                        db.execute("UPDATE entity SET attrs = ? WHERE id = ?", (json.dumps({**extra, **have}), keep["id"]))
+                        db.execute("DELETE FROM entity WHERE id = ?", (dup["id"],))
+                        merged += 1
+                    db.execute("DELETE FROM relation WHERE id NOT IN (SELECT MIN(id) FROM relation GROUP BY kind, from_id, to_id, COALESCE(line, -1))")
+        return merged
 
     def entity_by_key(self, key: str) -> dict | None:
         return self._one("SELECT * FROM entity WHERE key = ?", (key,))
@@ -877,7 +917,13 @@ class ProgramStore:
         by_kind = {r["kind"]: r["n"] for r in self._all(
             "SELECT kind, COUNT(*) AS n FROM entity WHERE origin != 'placeholder' GROUP BY kind")}
         missing = []
+        from core.model.runtime_names import is_runtime
+        stems = {re.sub(r"\.[^.]+$", "", (a.get("name") or "")).split("/")[-1].lower() for a in self.artifacts()}
+        provided = {e["name"].split(".")[-1] for e in self.entities() if e["origin"] != "placeholder"
+                    and e["kind"] in ("function", "class", "method", "module", "program", "procedure")}
         for placeholder in self.entities(origin="placeholder"):
+            if is_runtime(placeholder["name"], placeholder["kind"], prefixes=False):          # framework namespaces stay counted as libraries
+                continue          # the language runtime or a shell command: referenced, not missing application source
             referrers = self._all(
                 "SELECT DISTINCT e.name, e.kind, r.kind AS relation, a.name AS artifact FROM relation r "
                 "JOIN entity e ON e.id = r.from_id LEFT JOIN artifact a ON a.id = r.artifact_id WHERE r.to_id = ? "
@@ -889,8 +935,21 @@ class ProgramStore:
             if self._one("SELECT 1 FROM relation WHERE kind = 'same_as' AND (from_id = ? OR to_id = ?)",
                          (placeholder["id"], placeholder["id"])):
                 continue
-            missing.append({"id": placeholder["id"], "kind": placeholder["kind"], "name": placeholder["name"],
-                            "category": classify_placeholder(placeholder, referrers), "referenced_by": referrers})
+            category = classify_placeholder(placeholder, referrers)
+            nm = placeholder["name"] or ""
+            parts = nm.split(".")
+            if parts[0].lower() in stems and placeholder["kind"] in ("function", "module", "unknown", "class", "method", "program", "procedure"):
+                # auth.purge_old_sessions / workflow.advance / the module 'auth': the file is in the folder, so it is not missing
+                if len(parts) == 1 or parts[-1] in provided:
+                    continue
+            elif re.match(r"^[a-z_][A-Za-z0-9_]*$", nm) and placeholder["kind"] == "unknown":
+                # a bare lowercase name nothing defines: a library if the code imports it, otherwise a local name or a browser global
+                if any(r["relation"] == "imports" for r in referrers):
+                    category = "library"
+                else:
+                    continue
+            missing.append({"id": placeholder["id"], "kind": placeholder["kind"], "name": nm,
+                            "category": category, "referenced_by": referrers})
         total = sum(by_kind.values())
         counts = {c: sum(1 for m in missing if m["category"] == c) for c in ("missing_code", "external", "library")}
         code_total = total - sum(by_kind.get(k, 0) for k in ("table", "column", "data_store", "external_system",

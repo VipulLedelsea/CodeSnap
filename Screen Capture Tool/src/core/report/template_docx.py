@@ -1948,8 +1948,7 @@ def _infer_stack(stack, arts, DM, AM, store, jobs=()):
         _add_stack(stack, "Operating system", "IBM i (version not confirmed)", "IBM")
 
 
-_STDLIB = set(getattr(__import__("sys"), "stdlib_module_names", ())) | {
-    "fs", "path", "http", "https", "crypto", "os", "util", "events", "stream", "child_process", "url", "zlib", "net", "readline"}      # Python and Node runtime modules
+from core.model.runtime_names import is_runtime  # noqa: E402
 
 
 def _missing(cov, arts) -> list:
@@ -1960,7 +1959,7 @@ def _missing(cov, arts) -> list:
         if m["category"] != "missing_code" or m["name"] in seen:
             continue
         n = re.escape(m["name"])
-        if m["name"].split(".")[0].lower() in _STDLIB:
+        if is_runtime(m["name"], m.get("kind") or ""):
             continue  # a standard-library or runtime module ships with the language; it is not missing application source
         if m['name'].upper() in ('IEFBR14', 'IEBGENER'):
             continue  # IBM utilities are runtime dependencies, not missing custom source.

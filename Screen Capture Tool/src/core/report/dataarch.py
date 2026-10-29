@@ -127,6 +127,9 @@ def model(store, AM=None) -> dict:
         at = e.get("attrs") or {}
         if e["kind"] == "file":
             continue
+        from core.model.runtime_names import is_runtime
+        if is_runtime(e["name"], e["kind"]):
+            continue          # sqlite3 is a command-line tool, not a data store of the application
         if e["kind"] == "data_store" and _display_file(store, e):
             displays.append(e["name"])
             continue
@@ -152,7 +155,7 @@ def model(store, AM=None) -> dict:
             occ.append({"entity_id": e["id"], "store": e["name"], "component": art["name"], "engine": _engine(art, e),
                         "access": "".join(x for x in "DRW" if x in acc), "placeholder": e["origin"] == "placeholder",
                         "business": entity_of(e["name"], prefix), "role": role_of(e["name"], prefix),
-                        "skip": bool(SKIP.search(e["name"]))})
+                        "skip": bool(SKIP.search(e["name"])), "view": bool(at.get("view"))})
     by_comp_writes = {}
     for o in occ:
         if o["business"] and "W" in o["access"]:
@@ -168,6 +171,10 @@ def model(store, AM=None) -> dict:
             continue
         g = groups.setdefault(o["business"], {"name": o["business"], "occ": [], "copies": []})
         g["occ"].append(o)
+        # A copy is another holder of the same data: a stem-matched store of the same kind (not a table only guessed to belong because the same
+        # program writes it, not a view over the table, not its history or staging table). USERS and PERMITS in one schema are not copies.
+        if o.get("inferred") or o.get("view") or o["role"] not in ("", "master", "file"):
+            continue
         key = (o["store"].split(".")[-1].upper(), o["engine"])
         if key not in [(c["store"].split(".")[-1].upper(), c["engine"]) for c in g["copies"]]:
             g["copies"].append(o)

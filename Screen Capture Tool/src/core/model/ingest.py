@@ -98,7 +98,35 @@ def apply_structure(store, artifact_id: int, structure: dict, filename: str, tot
         store.add_relation(kind, from_id, to_id, artifact_id=artifact_id, line=item.get("line"),
                            target_kind=target_kind, attrs=item.get("attrs") or None)
         relations += 1
+    relations += _url_hosts(store, artifact_id, file_id)
     return {"entities": created, "relations": relations}
+
+
+_URL_HOST = re.compile(r"https?://([A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,})(?::\d+)?")
+_NOT_A_SYSTEM = re.compile(r"(^|\.)(w3\.org|schema\.org|xmlsoap\.org|openxmlformats\.org|localhost|example\.invalid)$|^(localhost|127\.|0\.0\.0\.0)", re.I)
+
+
+def _url_hosts(store, artifact_id, file_id) -> int:
+    """A host named in a URL in the code is an outside system the code talks to, whether or not a reader of the structure
+    noticed it. Recorded by rule so the same files give the same systems every run (an XML namespace is not a system)."""
+    art = store.artifact(artifact_id) or {}
+    if art.get("artifact_type") == "ui_screen":
+        return 0
+    added = 0
+    seen = set()
+    for n, line in enumerate((art.get("transcription") or "").splitlines(), 1):
+        for m in _URL_HOST.finditer(line):
+            host = m.group(1).lower().rstrip(".")
+            if host in seen or _NOT_A_SYSTEM.search(host):
+                continue
+            seen.add(host)
+            try:
+                host_id = store.upsert_entity("external_system", host, origin="inferred", confidence=0.9)
+                store.add_relation("connects_to", file_id, host_id, artifact_id=artifact_id, line=n, origin="inferred")
+                added += 1
+            except Exception:  # noqa: BLE001 - an extra; never fail the file over it
+                continue
+    return added
 
 
 def ingest_artifact(store, client, artifact_id: int) -> dict:

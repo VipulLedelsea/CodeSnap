@@ -23,6 +23,7 @@ class _Model:
         self.store = store
         self.ents = {e["id"]: e for e in store.entities()}
         self.rels = store.relations()
+        self._drop_runtime_names()
         self._collapse_numbered_datasets()
         self.arts = {a["id"]: a for a in store.artifacts()}
         self.children = {}
@@ -36,6 +37,17 @@ class _Model:
                 self.sources.setdefault(row["entity_id"], set()).add(row["artifact_id"])
         for eid, aid in self.owner_art.items():
             self.sources.setdefault(eid, set()).add(aid)
+
+    def _drop_runtime_names(self):
+        """A standard-library module or class and a shell command (curl, sqlite3) are not parts of the application: leave them out."""
+        from core.model.runtime_names import is_runtime
+        gone = {eid for eid, e in self.ents.items()
+                if e["kind"] in ("module", "class", "library", "unknown", "external_system", "data_store")
+                and (e["origin"] == "placeholder" or e["kind"] in ("external_system", "data_store")) and is_runtime(e["name"], e["kind"])}
+        if gone:
+            for eid in gone:
+                del self.ents[eid]
+            self.rels = [r for r in self.rels if r["from_id"] not in gone and r["to_id"] not in gone]
 
     def _collapse_numbered_datasets(self, minimum=4):
         """A job that touches SYNTH.RESTART.P00.WORK ... P29.WORK has thirty look-alike datasets; drawing each one makes the
@@ -304,11 +316,21 @@ def classes(store, artifact_id=None) -> dict:
     if artifact_id is not None:
         free = [e for e in m.ents.values() if m.in_file(e["id"], artifact_id) and e["origin"] != "placeholder"
                 and e["kind"] in ("function", "field") and m.top(e["id"]) is None]
-        if free:
+        routes = []
+        for e in sorted((e for e in m.ents.values() if e["kind"] == "api_endpoint" and e["origin"] != "placeholder"
+                         and m.in_file(e["id"], artifact_id)), key=lambda e: (e.get("attrs") or {}).get("path") or e["name"]):
+            at = e.get("attrs") or {}
+            verb = (at.get("method") or "").upper()
+            if (e["name"] or "").startswith("/"):
+                routes.append(_short(f"{verb + ' ' if verb else ''}{e['name']}", 52))
+            else:
+                routes.append(_short(f"{verb + ' ' if verb else ''}{at.get('path') or ''} -> {e['name']}()".replace("  ", " "), 78))
+        if free or routes:
             fields = [_short(e["name"], 52) for e in free if e["kind"] == "field"]
             funcs = [_short(e["name"].split(".")[-1] + "()", 52) for e in free if e["kind"] == "function"]
+            sections = [x for x in (fields, funcs, routes[:24]) if x] if routes else [fields, funcs]
             nodes.insert(0, {"id": f"f{artifact_id}", "title": m.arts[artifact_id]["name"], "stereotype": "file scope",
-                             "kind": "component", "sections": [fields, funcs]})
+                             "kind": "component", "sections": sections})
     scene = layered(nodes, edges, "TB", straight=len(edges) > 12, per_row=max(7, -(-len(nodes) // 6)),
                     max_ranks=5 if len(nodes) > 30 else None)
     title = "Classes & programs" + (f" — {m.arts[artifact_id]['name']}" if artifact_id else f" — {store.info['name']}")
@@ -346,6 +368,7 @@ def data_model(store) -> dict:
         linked = {r[k] for r in m.rels if r["kind"] == "depends_on" for k in ("from_id", "to_id")}
         tables = sorted(all_tables, key=lambda t: (t["id"] not in linked, t["name"]))[:MAX_TABLES]
     nodes, edges, seen = [], [], set()
+    schema_present = any((m.arts.get(a) or {}).get("name", "").lower().endswith(".sql") for t in all_tables for a in getattr(m, "sources", {}).get(t["id"], ()))
     for t in sorted(tables, key=lambda t: t["name"]):
         cols = [k for k in m.children.get(t["id"], []) if k["kind"] == "column"]
         lines = []
@@ -357,8 +380,12 @@ def data_model(store) -> dict:
         if len(cols) > MAX_TABLE_COLS:
             lines.append(f"+{len(cols) - MAX_TABLE_COLS} more")
         stereo = _data_stereotype(t)
+        in_schema = any((m.arts.get(a) or {}).get("name", "").lower().endswith(".sql") for a in getattr(m, "sources", {}).get(t["id"], ()))
+        not_created = schema_present and not in_schema and t["origin"] != "placeholder" and stereo == "table"
+        if not_created:
+            stereo = "table · not created by the schema"          # the code uses it, no file defines it
         nodes.append({"id": f"t{t['id']}", "title": _short(t["name"], 44), "stereotype": stereo, "kind": "table",
-                      "sections": [lines] if lines else [], "dashed": t["origin"] == "placeholder"})
+                      "sections": [lines] if lines else [], "dashed": t["origin"] == "placeholder" or not_created})
     ids = {t["id"] for t in tables}
     for r in m.rels:
         if r["kind"] == "depends_on" and r["from_id"] in ids and r["to_id"] in ids and r["from_id"] != r["to_id"]:
@@ -490,6 +517,7 @@ CHECK_KINDS = ("program", "class", "interface", "copybook", "function", "paragra
 
 
 def diagram_coverage(store, diagrams) -> dict:
+    from core.model.runtime_names import is_runtime
     text = set()
     for d in diagrams:
         for n in d["nodes"]:
@@ -501,6 +529,8 @@ def diagram_coverage(store, diagrams) -> dict:
     for e in store.entities():
         if e["origin"] == "placeholder" or e["kind"] not in CHECK_KINDS:
             continue
+        if e["kind"] in ("data_store", "external_system") and is_runtime(e["name"], e["kind"]):
+            continue          # a shell command or runtime name is deliberately not drawn
         total += 1
         short = e["name"].split(".")[-1]
         if short not in blob and _short(e["name"], 36) not in blob and _short(short, 36) not in blob:
@@ -511,7 +541,7 @@ def diagram_coverage(store, diagrams) -> dict:
 
 ICONS = {"users": ("USR", "#2E7DB0"), "screen": ("UI", "#2E7DB0"), "cobol": ("CBL", "#BE6E4A"), "cs": ("C#", "#7B4FA0"),
          "java": ("JV", "#D9822B"), "cpp": ("C++", "#2A8C8C"), "web": ("WEB", "#2E7DB0"), "js": ("JS", "#B38F00"),
-         "code": ("SRC", "#857A70"), "api": ("API", "#3F51B5"), "transaction": ("TX", "#B3261E"), "job": ("JOB", "#8A4A2C"),
+         "code": ("SRC", "#857A70"), "python": ("PY", "#3C6E9E"), "api": ("API", "#3F51B5"), "transaction": ("TX", "#B3261E"), "job": ("JOB", "#8A4A2C"),
          "database": ("DB", "#3B8F5E"), "table": ("TBL", "#3B8F5E"), "file": ("FILE", "#6E6E73"),
          "external": ("EXT", "#6E6E73"), "missing": ("?", "#A99C90"),
          "ibmi": ("RPG", "#1F6F8B"), "natural": ("NAT", "#6B5B95"), "vb": ("VB", "#5C4B9B"), "script": ("SH", "#4E6E58"),
@@ -591,6 +621,8 @@ def architecture(store) -> dict:
             gid, gt, ic = "g-cpp", "C / C++", "cpp"
         elif fam == "js":
             gid, gt, ic = "g-js", "JavaScript", "js"
+        elif a["name"].lower().endswith((".py", ".pyw")):
+            gid, gt, ic = "g-python", "Python", "python"
         elif proc_sql:
             gid, gt, ic = PACK_GROUPS["sql"]
         elif prof.get("family") in PACK_GROUPS:
@@ -600,7 +632,7 @@ def architecture(store) -> dict:
         else:
             gid, gt, ic = "g-code", "Other code", "code"
         units = sum(1 for e in owned if e["kind"] in ("class", "interface", "program"))
-        lines = len([l for l in (a.get("transcription") or "").splitlines() if l.strip()])
+        lines = len((a.get("transcription") or "").splitlines())      # physical lines, as the report's size indicator counts them
         node_of[f"art:{aid}"] = put("application", gid, gt, {
             "id": f"a{aid}", "title": _short(a["name"], 30), "icon": _icon(ic), "badge": badge(aid),
             "sub": f"{lines} lines" + (f" · {units} unit{'s' if units != 1 else ''}" if units else "")})
