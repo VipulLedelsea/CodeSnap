@@ -21,6 +21,22 @@ from docx.shared import Inches, RGBColor
 from core.text import shorten_at_boundary
 
 
+def _id_runs(ids):
+    """'VUL-1-01, VUL-1-02, VUL-1-05' -> 'VUL-1-01, VUL-1-02 and VUL-1-05'; only consecutive ids collapse to 'a to b'."""
+    nums = [int(i.rsplit("-", 1)[1]) for i in ids]
+    runs, cur = [], [0]
+    for k in range(1, len(ids)):
+        if nums[k] == nums[k - 1] + 1:
+            cur.append(k)
+        else:
+            runs.append(cur)
+            cur = [k]
+    runs.append(cur)
+    parts = [ids[r[0]] if len(r) == 1 else f"{ids[r[0]]}, {ids[r[-1]]}" if len(r) == 2 else f"{ids[r[0]]} to {ids[r[-1]]}"
+             for r in runs]
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
 def _report_stage(store):
     from core import deepdive
     try:
@@ -1394,7 +1410,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     anchor = doc.new_para("What these findings mean:", T[26]._tbl)._p
     for g in vgroups.values():
         f, ids = g["f"], g["ids"]
-        idtxt = ids[0] if len(ids) == 1 else f"{ids[0]} to {ids[-1]}" if len(ids) > 2 else " and ".join(ids)
+        idtxt = _id_runs(ids)
         wh, why_, fix_ = P.describe(f)
         txt = f"{idtxt}: {wh}."
         if why_:

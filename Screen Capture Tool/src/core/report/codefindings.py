@@ -141,7 +141,8 @@ def select(store, code_arts, review_facts, total=24, minimum=2):
         except Exception:  # noqa: BLE001 - the tag is an extra; the finding stands without it
             zones = []
         for f in review_facts.get(art["id"], []):
-            if f.get("category") not in CATEGORIES or (SUSPECT.search(f["statement"]) and not THEMES.search(f["statement"])) or not _defect_like(f):
+            if (f.get("category") not in CATEGORIES and not (f.get("category") == "configuration" and f.get("severity") in ("high", "medium"))) \
+                    or (SUSPECT.search(f["statement"]) and not THEMES.search(f["statement"])) or not _defect_like(f):
                 continue
             if f.get("review") not in (None, "supported", "partly_supported", "corrected"):
                 continue
@@ -229,17 +230,45 @@ def group(picked):
     return out
 
 
+SEVERE_IMPACT = re.compile(r"sql injection|inject|path traversal|arbitrary file|credential|password|secret|api key|\bssn\b|personal|plain ?text|"
+                           r"unsalted|\bmd5\b|traceback|interactive debugger|debug=True|\bXSS\b|cross-site|innerHTML|audit (trail|history)|"
+                           r"deletes? (all|every)|erasing|curl[^.]*bash|world-(writable|readable)|chmod[^.]*777", re.I)
+REACHABLE = re.compile(r"query param|request|any (authenticated )?(user|origin|caller|client)|unauthenticated|0\.0\.0\.0|internet|"
+                       r"\bXSS\b|cross-site|innerHTML|injection|debug|traceback|every keystroke|raw 'name'|f\.filename", re.I)
+
+
+LOCAL_ONLY = re.compile(r"environment variable|child process|echo(es|ed)?\b|hard-?coded|literal|default(s)? to", re.I)      # needs access to the host or the code first
+
+
 def rate(cf):
-    """Likelihood and impact (1 to 5) for a line-by-line finding, with the reason for each."""
-    high = cf["severity"] == "high"
-    every = bool(UNCONDITIONAL.search(cf["text"]))
-    likelihood = 4 if (high or every) else 3
-    impact = 4 if high else 3
-    why_l = (f"{likelihood}: the line-by-line review found this in the source and it applies "
-             + ("on every run of the path" if every else "whenever the path runs")
+    """Likelihood and impact (1 to 5) for a line-by-line finding, with the reason for each. The two grow with what the finding
+    says, so a serious weakness reachable from a request scores above a note about one internal path; equal scores for every
+    finding would leave the heat map unable to rank anything."""
+    text = cf["text"]
+    sev = cf["severity"]
+    high = sev == "high"
+    every = bool(UNCONDITIONAL.search(text))
+    severe = bool(SEVERE_IMPACT.search(text))
+    reachable = bool(REACHABLE.search(text))
+    if high and reachable and not LOCAL_ONLY.search(text):
+        likelihood = 5
+    elif high or every:
+        likelihood = 4
+    elif HEDGED.search(text):
+        likelihood = 2
+    else:
+        likelihood = 3
+    impact = 5 if (high and severe) else 4 if high else 3 if (sev == "medium" or severe) else 2
+    why_l = (f"{likelihood}: the line-by-line review found this in the source and "
+             + ("it can be reached from a request or the page, so no special access is needed" if likelihood == 5 else
+                "it applies on every run of the path" if every or high else
+                "its effect depends on how something outside this file is set up" if likelihood == 2 else
+                "it applies whenever the path runs")
              + "; whether production uses the path is to confirm")
-    why_i = (f"{impact}: " + ("it can change payments, ledger entries or the audit trail" if high
-                              else "the effect on payments depends on how the business uses this path")
+    why_i = (f"{impact}: " + ("it can expose personal or credential data, let an outsider act as a user, or destroy records others rely on" if impact == 5 else
+                              "it can produce wrong results or weaken a control in a core function" if impact == 4 else
+                              "it affects one function or a limited set of records" if impact == 3 else
+                              "it is a minor weakness with a workaround")
              + "; to confirm with the business owner")
     return likelihood, impact, why_l, why_i
 

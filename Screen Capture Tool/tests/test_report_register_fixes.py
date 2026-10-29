@@ -1,0 +1,22 @@
+from core.report import codefindings as CFM
+from core.report.template_docx import _id_runs
+
+
+def test_id_runs_do_not_claim_a_range_across_other_findings():
+    assert _id_runs(["VUL-1-01", "VUL-1-02", "VUL-1-05"]) == "VUL-1-01, VUL-1-02 and VUL-1-05"
+    assert _id_runs(["VUL-1-01", "VUL-1-02", "VUL-1-03"]) == "VUL-1-01 to VUL-1-03"
+    assert _id_runs(["VUL-1-04"]) == "VUL-1-04"
+
+
+def test_ratings_differ_by_what_the_finding_says():
+    sqli = {"text": "search_permits concatenates the query parameter q into SQL: SQL injection", "severity": "high"}
+    local = {"text": "The database password is exported as an environment variable", "severity": "high"}
+    minor = {"text": "The page parameter is not validated", "severity": "medium"}
+    assert CFM.rate(sqli)[:2] == (5, 5)
+    assert CFM.rate(local)[0] == 4
+    assert CFM.rate(minor)[0] * CFM.rate(minor)[1] < 16
+
+
+def test_high_configuration_fact_is_kept():
+    import re
+    assert "configuration" not in CFM.CATEGORIES      # kept by the severity rule in select, not by widening the list
