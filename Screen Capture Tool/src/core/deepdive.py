@@ -147,7 +147,7 @@ For each finding decide, from the cited lines and the rest of the file only:
   - "partly": part of it is wrong or overstated. Give a corrected statement that the code fully supports, and
     corrected_quote: text copied EXACTLY from the file that proves the corrected statement
   - "unsupported": the code does not show it
-A statement about code outside this file is unsupported unless it is worded as limited to this file. Comments and
+A statement about code outside this file is unsupported unless it is worded as limited to this file. This includes the type or shape of anything returned by code outside this file (a database row or cursor, an imported function's result, a library default): it depends on configuration this file may not show, so a defect that rests on such an assumption is "unsupported". Comments and
 names are not evidence of behaviour. Be strict: names, values, conditions and what happens must match the code exactly. Call record_review once."""
 
 SYNTH_SYSTEM = """You combine verified findings from several source files of one application into cross-file
@@ -177,6 +177,7 @@ HOW TO HUNT (apply to any language or file type; skip what does not apply):
 RULES (a wrong finding is worse than a missing one):
 - Report a defect only when you can name the exact line, quote it exactly, and state in `reasoning` the concrete input or situation and the wrong result it produces, worked through the code. If the code gives the right result, it is not a defect.
 - Use only what this file shows. Never invent names, values, callers or behaviour; never assume what other files do. If it depends on code not shown, leave it out.
+- Never assert the type, shape or behaviour of something that comes from code outside this file: a database row or cursor, an imported function's result, a library default, a framework setting. Those depend on configuration this file does not show (for example whether rows are tuples or named rows is set where the connection is made). A finding that needs such an assumption is not a finding.
 - Do not restate a known finding in other words. No style opinions. No findings about comments or names alone.
 - Severity: high = money or data lost, corrupted or exposed, or a control bypassed, by a path visible here (name it); medium = wrong result or failure under a condition the file shows; low = minor but real.
 - Never put a password, key, token or personal identifier in any field; describe the kind of value.

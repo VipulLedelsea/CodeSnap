@@ -203,3 +203,16 @@ def test_more_logic_checks_fire_on_proof_and_stay_quiet_when_the_text_is_fine():
     fine = {"wf.py": files["wf.py"], "rep.py": 'x = ("NEW", "OPEN", "DONE", "HELD")\n', "deploy.sh": "echo hi\n",
             "schema.sql": "CREATE TABLE IF NOT EXISTS t (id INT);\n", "conf.yaml": "a: 1\n"}
     assert not {o["source"] for o in logicchecks.conflicts(Fake(fine))} & {"status list", "rerun unsafe", "settings duplicated"}
+
+
+def test_a_second_pass_finding_is_reported_only_when_high_or_agreed_and_a_row_shape_claim_the_code_contradicts_is_dropped():
+    arts = [{"id": 1, "name": "a.py", "transcription": "db.row_factory = sqlite3.Row\n"}, {"id": 2, "name": "b.py", "transcription": "x = 1\n"}]
+    h = lambda st, **kw: {"statement": st, "category": "defect", "severity": "medium", "source": "hunt", **kw}  # noqa: E731
+    facts = {2: [h("The function does not validate that months is a positive integer so a negative value fails.", severity="low"),
+                 h("The loop does not check the second pass finding when the value is missing so it raises.", agreed=True),
+                 h("The function raises an unhandled error when the key is missing from the input.", severity="high"),
+                 h("export builds rows with r[c] but fetchall returns tuples so the lookup raises a TypeError.", severity="high"),
+                 h("The helper does not validate the input and may raise an error for odd values.", severity="medium")]}
+    texts = [p["text"] for p in CFM.select(None, arts, facts)]
+    assert any("second pass" in t or "loop does not" in t for t in texts) and any("raises an unhandled" in t for t in texts)
+    assert not any("export builds" in t for t in texts) and not any("helper does not" in t for t in texts) and not any("months" in t for t in texts)

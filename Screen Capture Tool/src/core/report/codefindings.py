@@ -49,6 +49,10 @@ DEFECT_WORDS = re.compile(
     r"without (a )?(lock|transaction|unique)|check[- ]then[- ]act|no (transaction|lock)", re.I)
 NOT_A_DEFECT = re.compile(r"\b(is|are) (not supported|functionally fine|incorrect)\b|claim .* (is incorrect|not supported)|is consistent|uses parameteri[sz]ed|"
                           r"requires authentication|reuses the existing|is declared once|redundant database", re.I)
+# Wording that says the model is not sure the problem is real here (it depends on how something else is set up or used).
+HEDGED = re.compile(r"\b(may|might|could|can be|presumably|typically|usually|probably|possibly|potentially|assum\w+|relies?|depends?|"
+                    r"if (?:the |this |any |a |an )?(?:\w+ ){0,3}(?:is|are|were|has|have|stores?|set|used|called|configured)|"
+                    r"unless|in some|no (?:explicit|visible) (?:permission|encoding)|explicit file permissions|without specifying)\b", re.I)
 # A sentence that only says what the code does ("the users table defines id, email ...", "apply_discount supports senior, veteran ...") is a fact about
 # the code, not a finding, even when the model rated it. It stays out unless it also says something is wrong.
 DESCRIBES = re.compile(r"^(?:the |this )?[\w.()'\"/ \-,]{0,70}?\b(defines|records|supports|maps|specifies|declares|groups|returns|reads|stores|holds|lists|contains|"
@@ -118,6 +122,7 @@ _RANK = {"high": 2, "medium": 1}      # within a file a medium finding is chosen
 def select(store, code_arts, review_facts, total=24, minimum=2):
     from core import deepdive as DDV
     cands = []
+    rows_configured = any("row_factory" in (a.get("transcription") or "") for a in code_arts)
     for art in code_arts:
         seen = set()
         try:
@@ -129,10 +134,15 @@ def select(store, code_arts, review_facts, total=24, minimum=2):
                 continue
             if f.get("review") not in (None, "supported", "partly_supported", "corrected"):
                 continue
+            if re.search(r"\btuples?\b", f["statement"], re.I) and rows_configured:
+                continue      # rows are configured as named rows where the connection is made (row_factory), so "rows are tuples" is not true here
+            if f.get("source") == "hunt" and f.get("severity") != "high" and not f.get("agreed") and (
+                    f.get("severity") != "medium" or HEDGED.search(f["statement"])):
+                continue      # a second-pass finding the first pass did not make is reported when it is high, both passes reached it, or it is medium and states its case plainly
             key = f["statement"][:50]
             sc = _score(f)
             sev = f.get("severity")
-            if sev not in ("high", "medium") and DEFECT_WORDS.search(f["statement"]):
+            if sev in (None, "low") and f.get("source") != "hunt" and DEFECT_WORDS.search(f["statement"]):
                 sev, sc = "medium", sc + 2       # a defect the model left unrated ranks and is rated as medium, not dropped
             if sc >= minimum and key not in seen:
                 seen.add(key)
