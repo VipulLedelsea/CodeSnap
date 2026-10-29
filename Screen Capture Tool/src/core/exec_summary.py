@@ -381,6 +381,12 @@ def run(store, client, model=None):
     if expected and out["verdict"] != expected:      # still different: the report's verdict stands, the difference is kept for the reviewer
         out["model_verdict"] = out["verdict"]
         out["verdict"] = expected
+    level = ((store.get_meta("assessment") or {}).get("confidence") or {}).get("level")
+    if level in ("high", "medium", "low"):          # one confidence: the report's computed level, not the model's
+        out["confidence"] = level
+    v = (store.get_meta("assessment") or {}).get("verdict") or {}
+    if expected and v.get("label"):
+        out["report_label"] = v["label"]
     out.update(model=model, ran_at=time.strftime("%Y-%m-%dT%H:%M:%S"), inputs_hash=inputs_hash(store))
     store.set_meta("exec_summary", out)
     return out
@@ -391,7 +397,15 @@ def current(store):
     saved = store.get_meta("exec_summary")
     if not saved or not saved.get("verdict"):
         return None
-    return saved if saved.get("inputs_hash") == inputs_hash(store) else None
+    if saved.get("inputs_hash") != inputs_hash(store):
+        return None
+    a = store.get_meta("assessment") or {}          # the report's own confidence and label, also for summaries saved before this
+    saved = dict(saved)
+    if (a.get("confidence") or {}).get("level") in ("high", "medium", "low"):
+        saved["confidence"] = a["confidence"]["level"]
+    if (a.get("verdict") or {}).get("label"):
+        saved["report_label"] = a["verdict"]["label"]
+    return saved
 
 
 def _severity(value) -> str:
@@ -401,7 +415,9 @@ def _severity(value) -> str:
 
 def paragraphs(s: dict) -> list:
     """The summary as report paragraphs, in the order the prompt lists them."""
-    head = f"Verdict: {s['verdict']}" + (" (provisional)." if s.get("provisional") else ".")
+    label = s.get("report_label")
+    head = f"Verdict: {s['verdict']}" + (f" (the report's recommended disposition: {label})" if label and label.lower() != s["verdict"].lower() else "") \
+        + (" (provisional)." if s.get("provisional") else ".")
     if s.get("provisional") and s.get("needed_to_finalize"):
         head += " Needed to finalize: " + "; ".join(s["needed_to_finalize"]) + "."
     out = [head, s.get("what_it_does") or ""]

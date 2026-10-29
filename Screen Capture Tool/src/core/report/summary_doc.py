@@ -90,7 +90,8 @@ def content(store):
         "program": redact(store.info.get("name") or slug),
         "date": date,
         "draft": DRAFT_NOTE if deepdive.report_stage(store) == "draft" else "",
-        "verdict": summary["verdict"],
+        "verdict": summary["verdict"] + (f" (the report's recommended disposition: {summary['report_label']})" if summary.get("report_label")
+                                         and summary["report_label"].lower() != summary["verdict"].lower() else ""),
         "provisional": bool(summary.get("provisional")),
         "needed": [text(x).rstrip(" .") for x in (summary.get("needed_to_finalize") or []) if str(x).strip()] + _gap_items(store, redact),
         "what": mark(text(summary.get("what_it_does"))),
@@ -98,7 +99,7 @@ def content(store):
         "risks": [(r.get("severity") or "Medium", mark(text(r.get("text")), where(r)), where(r)) for r in risks],
         "lifecycle": (bool(summary.get("lifecycle_verified")), text(summary.get("lifecycle"))),
         "decision": text(summary.get("decision")),
-        "confidence": _confidence(summary.get("confidence") or "low", text(summary.get("confidence_and_coverage")), zones),
+        "confidence": _confidence(((store.get_meta("assessment") or {}).get("confidence") or {}).get("level") or summary.get("confidence") or "low", text(summary.get("confidence_and_coverage")), zones),
         "evidence": [[redact(c) if isinstance(c, str) else c for c in row] for row in ES.evidence_rows(summary, index)],
         "report_file": f"{slug}_assessment_report.docx",
     }
