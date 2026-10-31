@@ -160,14 +160,15 @@ def select(store, code_arts, review_facts, total=24, minimum=2):
                 seen.add(key)
                 gap = DDV.in_gap(zones, f.get("lines")) if zones else None
                 cands.append({"file": art["name"], "text": f["statement"] + (GAP_TAG if gap else ""), "gap": gap, "lines": f.get("lines"),
-                              "severity": sev, "category": f["category"], "score": sc})
+                              "severity": sev, "category": f["category"], "score": sc, "source": f.get("source")})
     cands.sort(key=lambda r: (-_RANK.get(r["severity"], 0), bool(r.get("gap")), not THEMES.search(r["text"]), -r["score"]))      # a known defect pattern before an inferred one
     picked = []
     # Every file with candidates gets its best PER_FILE first, so a file whose defects score lower than another's repeated
     # ones is still represented; the rest is filled by rank up to the total.
     per_file, guaranteed = {}, []
     for c in cands:
-        exempt = c["severity"] == "high" or (c["category"] == "security" and c["severity"] == "medium")      # serious weaknesses never compete for a file's slots
+        exempt = c["severity"] == "high" or (c["category"] == "security" and c["severity"] == "medium") or (
+            c["severity"] == "medium" and c["category"] in ("defect", "data_integrity") and c.get("source") != "hunt")      # serious weaknesses, and a first-pass medium defect, never compete for a file's slots
         if (exempt or per_file.get(c["file"], 0) < PER_FILE) and not any(g["file"] == c["file"] and _same(g["text"], c["text"]) for g in guaranteed):
             if not exempt:                                # a high finding never uses up the slots meant for the rest of its file
                 per_file[c["file"]] = per_file.get(c["file"], 0) + 1       # a near copy of one already chosen does not use a slot
