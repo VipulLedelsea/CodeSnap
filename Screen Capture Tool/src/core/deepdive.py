@@ -183,6 +183,10 @@ HOW TO HUNT (apply to any language or file type; skip what does not apply):
 - Data design: a column that must be unique but is not, a missing key, index or constraint the file's own queries need, money or identifiers held in a lossy type.
 - Scripts and deployment: steps that cannot be run twice, an unchecked failure, a permission or secret handled unsafely.
 - Security: injection, missing authorization on a resource the code names, weak crypto, secrets, personal data written where it should not be.
+- Sign-in and sessions: whether a token, session or credential has an expiry that is enforced where it is read (not only in a cleanup job), whether failed sign-ins are limited, whether password rules exist, whether a password change ends existing sessions, and whether a role name used here is spelled the same where it is defined.
+- Splits and truncation: a total divided into equal parts that are rounded (do the parts add back to the total?), a duration or amount cut to whole units (what is lost at the edge?), a limit or cap placed inside one branch so the other branch escapes it.
+- Cleanup and bookkeeping: a delete judged only by "no matching row" (what if the row is not written yet?), a record that is closed or removed on one path but left open on another, a replace done as cancel-then-create where the second step can fail.
+- Queries and design: a filter, join or sort on a column the file's own schema does not index; a read followed by an update with no condition on what was read.
 RULES (a wrong finding is worse than a missing one):
 - Report a defect only when you can name the exact line, quote it exactly, and state in `reasoning` the concrete input or situation and the wrong result it produces, worked through the code. If the code gives the right result, it is not a defect.
 - Use only what this file shows. Never invent names, values, callers or behaviour; never assume what other files do. If it depends on code not shown, leave it out.
@@ -900,6 +904,8 @@ def _known(new, kept):
     return False
 
 
+UNJUDGED_CATEGORIES = ("calculation", "business_rule", "control_flow", "data_write", "configuration", "data_read")
+
 HUNT_ANGLES = (
     "",
     "Second independent pass: read the file from its last lines back to its first, and weigh the end of the file as much as the start. "
@@ -916,13 +922,18 @@ def hunt(store, client, art, kept, model, text, bad_lines, header) -> list:
     # hunter treat whole areas as already covered, so a calculation that was described but never judged was never questioned.
     known = "\n".join(f"- (lines {f['lines'][0]}-{f['lines'][-1]}) {f['statement']}" for f in kept
                       if f.get("severity") in ("high", "medium", "low") or f.get("category") in ("defect", "security"))[:30000] or "(none)"
+    unjudged = "\n".join(f"- (lines {f['lines'][0]}-{f['lines'][-1]}) {f['statement']}" for f in kept
+                         if f.get("severity") not in ("high", "medium", "low") and f.get("category") in UNJUDGED_CATEGORIES and f.get("lines"))[:14000]
+    asked = ("\n\nThe first reviewer only DESCRIBED these behaviours and never judged them. For each, decide from the code whether the behaviour is wrong "
+             "(boundary, rounding, expiry, ordering, a failure path, a limit that does not hold) and report it as a finding only when it is; describing it again is not a finding:\n"
+             + unjudged) if unjudged else ""
     runs = max(1, min(int(os.environ.get("CODESNAP_HUNT_RUNS", "2") or 2), len(HUNT_ANGLES)))
 
     def window(w):
         a, b, angle = w
         part = "" if (a, b) == (1, n_lines) else f"This call covers lines {a}-{b} of {n_lines}; report only findings whose first line is in {a}-{b} (the rest is context).\n"
         body = listing(text, bad_lines, a - SEGMENT_CONTEXT, b + SEGMENT_CONTEXT) if part else listing(text, bad_lines)
-        msg, ms = _call(client, model, HUNT_SYSTEM, HUNT_TOOL, f"{header}\n{part}{angle}Problems the first reviewer already reported (do not repeat these; everything else in the file is still yours to question):\n{known}\n\n{body}")
+        msg, ms = _call(client, model, HUNT_SYSTEM, HUNT_TOOL, f"{header}\n{part}{angle}Problems the first reviewer already reported (do not repeat these; everything else in the file is still yours to question):\n{known}{asked}\n\n{body}")
         _log(store, "deepdive_hunt", art["id"], model, msg, ms)
         if getattr(msg, "stop_reason", None) == "max_tokens":
             raise ValueError("The defect hunt was truncated; review remains incomplete.")

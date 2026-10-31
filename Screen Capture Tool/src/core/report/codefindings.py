@@ -46,7 +46,9 @@ DEFECT_WORDS = re.compile(
     r"even though|lowercase[^.]*while[^.]*upper|uppercase[^.]*while[^.]*lower|incorrect|"
     r"(never|not) (sets?|reachable|reached)|no (route|path|transition)|unreachable|"
     r"(favou?rable|less|cheaper|lower) than|below (zero|the minimum)|drops? (the )?(remainder|fraction)|"
-    r"without (a )?(lock|transaction|unique)|check[- ]then[- ]act|no (transaction|lock)", re.I)
+    r"without (a )?(lock|transaction|unique)|check[- ]then[- ]act|no (transaction|lock)|"
+    r"\braises? (an? )?\w*(Error|Exception)|(fail|crash)(s|ed)? (on|with|when|if)|"
+    r"adding up|do(es)? not add up|without adjusting|no (cap|limit|upper limit)\b", re.I)
 NOT_A_DEFECT = re.compile(r"\b(is|are) (not supported|functionally fine|incorrect)\b|claim .* (is incorrect|not supported)|is consistent|uses parameteri[sz]ed|"
                           r"requires authentication|reuses the existing|is declared once|redundant database", re.I)
 # Wording that says the model is not sure the problem is real here (it depends on how something else is set up or used).

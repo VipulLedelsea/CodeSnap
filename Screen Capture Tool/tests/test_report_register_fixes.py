@@ -48,3 +48,24 @@ def test_first_pass_medium_defects_are_not_cut_by_the_per_file_slots():
     out = CF.select(None, [{"id": 1, "name": "A.py"}], facts, total=3)
     kept = [r["text"] for r in out]
     assert all(any(f"{W[i]}_load" in t for t in kept) for i in range(14))
+
+
+def test_hunt_prompt_shows_the_hunter_behaviour_the_first_pass_only_described():
+    from types import SimpleNamespace
+    from core import deepdive as DD
+    seen = []
+
+    def fake_call(client, model, system, tool, content, thinking=True):
+        seen.append(content)
+        return SimpleNamespace(stop_reason="end_turn"), 0
+    kept = [{"statement": "installment_schedule rounds each payment without adjusting for drift", "category": "calculation", "lines": [4, 6]},
+            {"statement": "an already judged defect", "category": "defect", "severity": "medium", "lines": [9, 9]}]
+    store = SimpleNamespace(log_run=lambda *a, **k: None)
+    orig = (DD._call, DD._tool, DD._log)
+    DD._call, DD._tool, DD._log = fake_call, (lambda *a, **k: {"findings": []}), (lambda *a, **k: None)
+    try:
+        DD.hunt(store, None, {"id": 1, "name": "f.py"}, kept, "m", "a\nb\nc", set(), "H")
+    finally:
+        DD._call, DD._tool, DD._log = orig
+    assert seen and all("only DESCRIBED" in c and "installment_schedule rounds each payment" in c for c in seen)
+    assert "Sign-in and sessions" in DD.HUNT_SYSTEM and "Splits and truncation" in DD.HUNT_SYSTEM
