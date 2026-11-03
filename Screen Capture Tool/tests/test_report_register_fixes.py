@@ -69,3 +69,13 @@ def test_hunt_prompt_shows_the_hunter_behaviour_the_first_pass_only_described():
         DD._call, DD._tool, DD._log = orig
     assert seen and all("only DESCRIBED" in c and "installment_schedule rounds each payment" in c for c in seen)
     assert "Sign-in and sessions" in DD.HUNT_SYSTEM and "Splits and truncation" in DD.HUNT_SYSTEM
+
+
+def test_short_keeps_the_defect_when_the_sentence_opens_with_the_case_that_is_fine():
+    from core.report.codefindings import short
+    t = ("If the true final batch has exactly PAGE (500) rows, export_csv writes it and loops again; the next query returns an empty batch "
+         "and breaks without writing anything, so in that case no rows are lost, but any batch strictly between 1 and 499 rows at the end "
+         "is dropped entirely, e.g., a last page of 10 rows is never written.")
+    out = short(t)
+    assert "dropped entirely" in out and out.startswith("export_csv")
+    assert short("The loop works as intended for most inputs. It also adds a surcharge.") == "The loop works as intended for most inputs"
