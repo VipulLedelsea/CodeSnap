@@ -33,7 +33,7 @@ DEFECT_WORDS = re.compile(
     r"without (any )?(escaping|sanitiz|encoding|encodeURI|checking|validat|a (check|lock|transaction)|bounds)|not (validated|bounded|checked|escaped|encoded)|"
     r"(will|would|can|could) (raise|fail|throw|crash)|raises? an? (unhandled|error|KeyError|ZeroDivision)|unhandled|"
     r"\bXSS\b|cross-site|stored XSS|innerHTML|localStorage|\bNaN\b|ZeroDivision|negative (OFFSET|value|fee)|"
-    r"truncat|discard(s|ing)? (any )?fraction|(sum|total) of the .* can differ|rounded .* repeated|"
+    r"truncat|discard(s|ing)? (any )?fraction|(sum|total) of (the |all )?.{0,40}can differ|(sum|total) .{0,60}can differ from|rounded .* repeated|"
     r"floating.point|\bREAL\b|precision|"
     r"is (lost|never (closed|called|reached|applied|read))|original booking|(lost|erased|deleted) (if|when)|"
     r"commits? .*before|before .*commit|not atomic|race|concurren|two (requests|reviewers)|"

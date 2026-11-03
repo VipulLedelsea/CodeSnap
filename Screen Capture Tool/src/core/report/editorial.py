@@ -268,7 +268,7 @@ SUMMARY_WORDS = 22
 
 
 ASIDE = re.compile(r"\s*\((?:e\.g\.|i\.e\.|and |such as|including|for example|repeated)[^()]*\)", re.I)
-APPENDIX_WORDS = 40        # the further entries are the only place their text appears, so they keep more of it
+APPENDIX_WORDS = 60        # the further entries are the only place their text appears, so they keep more of it
 
 
 def _short(text, words=SUMMARY_WORDS):
@@ -283,6 +283,11 @@ def _short(text, words=SUMMARY_WORDS):
     stops = [m.start() for m in re.finditer(r"(?<!e\.g)(?<!i\.e)(?<!etc)(?<!vs)\. ", cut)]
     k = max(stops[-1] if stops else -1, cut.rfind("; "), cut.rfind(", "))
     whole = k > len(cut) // 2
+    if not whole:       # no clause ended inside the limit: run on to the next clause end (up to half as many words again) rather than stop mid-thought
+        rest = " ".join(parts[:int(words * 1.5)])
+        nxt = [m.start() for m in re.finditer(r"(?<!e\.g)(?<!i\.e)(?<!etc)(?<!vs)(?:\. |; |, )", rest) if m.start() >= len(cut)]
+        if nxt:
+            return rest[:nxt[0]].rstrip(" ,;:.") + ("." if rest[nxt[0]] == "." else "")
     # when no sentence or clause ends inside the limit, say the text was cut instead of ending it with a full stop
     out = (cut[:k] if whole else cut).rstrip(" ,;:.")
     while out.count("(") > out.count(")"):                  # never leave a bracket open: back up to before it

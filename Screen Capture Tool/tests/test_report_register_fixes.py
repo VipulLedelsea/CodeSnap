@@ -79,3 +79,20 @@ def test_short_keeps_the_defect_when_the_sentence_opens_with_the_case_that_is_fi
     out = short(t)
     assert "dropped entirely" in out and out.startswith("export_csv")
     assert short("The loop works as intended for most inputs. It also adds a surcharge.") == "The loop works as intended for most inputs"
+
+
+def test_review_prompts_ask_for_the_checks_test_10_never_raised_and_a_sum_that_can_differ_is_a_defect():
+    from core import deepdive as DD
+    from core.report import codefindings as CF
+    for needle in ("Sign-in and sessions", "Money type", "Opened and never closed", "Same calculation twice"):
+        assert needle in DD.DEEP_SYSTEM
+    assert "Compare paths" in DD.HUNT_SYSTEM and "a browser estimate and the server" in DD.SYNTH_SYSTEM
+    assert CF.DEFECT_WORDS.search("the sum of all installments can differ from the original total due to per-installment rounding")
+
+
+def test_a_long_register_text_runs_on_to_the_end_of_its_clause_instead_of_stopping_mid_thought():
+    from core.report import editorial
+    text = ("Token expiry or revocation is never checked in this file because the stored token is read back from the database without "
+            "comparing its creation time to the session length, so a stolen token works forever")
+    out = editorial._short(text, 20)
+    assert not out.endswith("…") and "stored token is read back" in out
