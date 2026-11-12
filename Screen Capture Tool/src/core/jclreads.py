@@ -3,7 +3,7 @@ record, so the work grows with the number of steps (one per district or route) i
 Read straight from the JCL text; no model call."""
 import re
 
-_STEP = re.compile(r"^//(\w+)\s+EXEC\s+(?:PGM=)?(\w+)", re.I)
+_STEP = re.compile(r"^//(\w+)\s+EXEC\s+(?:PGM=|PROC=)?(\w+)", re.I)
 _DD = re.compile(r"^//(\w+)\s+DD\s+(.*)", re.I)
 _DSN = re.compile(r"DSN=([\w.&$#@()+-]+)", re.I)
 _SHARED = re.compile(r"DISP=\(?(SHR|OLD)\b", re.I)

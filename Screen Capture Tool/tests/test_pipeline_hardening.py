@@ -6,7 +6,10 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-import httpx
+try:                    # the SDK's HTTP library: httpx, or httpx2 in newer releases
+    import httpx
+except ImportError:
+    import httpx2 as httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))

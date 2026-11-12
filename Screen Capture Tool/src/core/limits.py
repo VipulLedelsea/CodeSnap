@@ -23,5 +23,11 @@ def fit_text(text: str, max_chars: int = MAX_CHARS) -> str:
         tail.append(line)
         used += len(line) + 1
     tail.reverse()
+    if not head or not tail:
+        # A line longer than the budget (minified code, a one-line export): cutting at line breaks would send nothing,
+        # so cut by characters instead.
+        left_out = len(text) - budget_head - budget_tail
+        return text[:budget_head] + f"\n[... {left_out} characters of {len(text)} left out of the middle of this file ...]\n" \
+            + text[len(text) - budget_tail:]
     omitted = len(lines) - len(head) - len(tail)
     return "\n".join(head) + f"\n[... {omitted} lines of {len(lines)} left out of the middle of this file ...]\n" + "\n".join(tail)

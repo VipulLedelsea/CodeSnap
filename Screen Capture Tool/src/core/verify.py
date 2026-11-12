@@ -89,7 +89,10 @@ def repeated_definitions(lines) -> set:
         before = next((l for l in reversed(lines[:number - 1]) if l.strip()), "")
         if before.lstrip().startswith("@"):
             continue
-        key = (len(match.group(1)), match.group(2), match.group(3))
+        indent = len(match.group(1))
+        # a header at this indent closes every deeper scope: the next class's methods are not repeats of the last one's
+        seen = {k for k in seen if k[0] <= indent}
+        key = (indent, match.group(2), match.group(3))
         if key in seen:
             out.add(number)
         seen.add(key)
@@ -157,6 +160,9 @@ def syntax_error(code: str, name: str = ""):
     except Exception as exc:  # noqa: BLE001 - every parser raises its own error type
         line = getattr(exc, "lineno", None) or (getattr(exc, "position", None) or (None,))[0] \
             or getattr(getattr(exc, "problem_mark", None), "line", -1) + 1
+        if not line:      # tomllib carries the line only in its message ("... (at line 4, column 1)")
+            said = re.search(r"\bline (\d+)", str(exc))
+            line = int(said.group(1)) if said else 0
         return max(int(line or 1), 1), str(getattr(exc, "msg", None) or getattr(exc, "problem", None) or exc)[:80]
     return None
 

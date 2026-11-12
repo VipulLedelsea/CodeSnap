@@ -175,7 +175,11 @@ def test_cached_costs_include_write_premium_and_read_discount():
 
 
 def test_real_sdk_serializes_cache_marker_without_provider_call():
-    import httpx,anthropic
+    import anthropic
+    try:
+        import httpx
+    except ImportError:      # newer SDK releases use httpx2
+        import httpx2 as httpx
     from core.usage import cached_request
     seen=[]
     def respond(request):
