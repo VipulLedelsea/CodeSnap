@@ -140,8 +140,8 @@ def apply(doc, assessment, evidence, settings, *, metadata=None, security_counts
             current["elements"].append(el)
     main = [g for g in groups if not g["heading"].startswith("Appendix")]
     for group in main:
-        if not re.match(r"\d", group["heading"]) or group["heading"].startswith("1.2 "):
-            continue
+        if not re.match(r"\d", group["heading"]) or group["heading"].startswith(("1.2 ", "8.3 ")):
+            continue      # 8.3: each bullet explains a different group of register rows, so none can be left out for length
         narrative = [el for el in group["elements"] if el.tag == qn("w:p") and
                      Paragraph(el, document).text.strip() and not el.xpath(".//w:drawing") and
                      not Paragraph(el, document).text.startswith("Figure ") and
@@ -268,7 +268,7 @@ SUMMARY_WORDS = 22
 
 
 ASIDE = re.compile(r"\s*\((?:e\.g\.|i\.e\.|and |such as|including|for example|repeated)[^()]*\)", re.I)
-APPENDIX_WORDS = 40        # the further entries are the only place their text appears, so they keep more of it
+APPENDIX_WORDS = 60        # the further entries are the only place their text appears, so they keep more of it
 
 
 def _short(text, words=SUMMARY_WORDS):
@@ -283,6 +283,11 @@ def _short(text, words=SUMMARY_WORDS):
     stops = [m.start() for m in re.finditer(r"(?<!e\.g)(?<!i\.e)(?<!etc)(?<!vs)\. ", cut)]
     k = max(stops[-1] if stops else -1, cut.rfind("; "), cut.rfind(", "))
     whole = k > len(cut) // 2
+    if not whole:       # no clause ended inside the limit: run on to the next clause end (up to half as many words again) rather than stop mid-thought
+        rest = " ".join(parts[:int(words * 1.5)])
+        nxt = [m.start() for m in re.finditer(r"(?<!e\.g)(?<!i\.e)(?<!etc)(?<!vs)(?:\. |; |, )", rest) if m.start() >= len(cut)]
+        if nxt:
+            return rest[:nxt[0]].rstrip(" ,;:.") + ("." if rest[nxt[0]] == "." else "")
     # when no sentence or clause ends inside the limit, say the text was cut instead of ending it with a full stop
     out = (cut[:k] if whole else cut).rstrip(" ,;:.")
     while out.count("(") > out.count(")"):                  # never leave a bracket open: back up to before it
@@ -336,7 +341,7 @@ def _cap_registers(document):
                     rows, head = [[r[0]] for r in rows], [head[0]]
                 for r in extra:
                     r._tr.getparent().remove(r._tr)
-                note = _paragraph(document, f"The {keep} highest entries are shown. The other {len(extra)} are listed in Appendix H.")
+                note = _paragraph(document, f"The {keep} highest entries are shown. The other {len(extra)} are listed in Appendix H (a long register continues in the next appendix).")
                 el.addnext(note)
                 moved.append((name, head, rows))
                 break

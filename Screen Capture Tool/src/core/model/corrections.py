@@ -254,7 +254,7 @@ def apply_one(store, c) -> str | None:
         if lines[n - 1] != p["old_text"]:
             return f"line {n} no longer matches the reviewed text"
         manual = copy.deepcopy((store.get_meta("manual_capture_concerns") or {}).get(str(art["id"])))
-        p.setdefault("_before", {"artifact_id": art["id"], "text": lines[n - 1],
+        p.setdefault("_before", {"artifact_id": art["id"], "line": n, "text": lines[n - 1],
                                  "text_hash": hashlib.sha1((art.get("transcription") or "").encode()).hexdigest()[:16],
                                  "verification": copy.deepcopy(store.verification(art["id"])),
                                  "manual_concerns": manual})
@@ -291,7 +291,7 @@ def apply_one(store, c) -> str | None:
             return f"line {n} no longer matches the reviewed text"
         p['_reviewed_artifact_id'] = art['id']
         manual = copy.deepcopy((store.get_meta("manual_capture_concerns") or {}).get(str(art["id"])))
-        p.setdefault("_before", {"artifact_id": art["id"], "text": lines[n - 1],
+        p.setdefault("_before", {"artifact_id": art["id"], "line": n, "text": lines[n - 1],
                                  "text_hash": hashlib.sha1((art.get("transcription") or "").encode()).hexdigest()[:16],
                                  "verification": copy.deepcopy(store.verification(art["id"])),
                                  "manual_concerns": manual})
@@ -380,6 +380,8 @@ def apply_one(store, c) -> str | None:
                 if op == "finding.status" and f["status"] != p["status"]:
                     db.execute("UPDATE finding SET status = ? WHERE id = ?", (p["status"], f["id"]))
                 elif op == "finding.severity" and f["severity"] != p["severity"]:
+                    p.setdefault("_before", {}).setdefault(finding_sig(f), f["severity"])
+                    changed = True
                     db.execute("UPDATE finding SET severity = ? WHERE id = ?", (p["severity"], f["id"]))
         if not hits:
             return "finding not present (re-appears after next scan if still relevant)"
@@ -469,7 +471,21 @@ def undo(store, correction_id) -> dict:
         store.fill_artifact(art["id"], artifact_type=art["artifact_type"], language=art["language"],
                             transcription="\n".join(lines) + trailing)
         before = p.get("_before") or {}
-        store.set_verification(art["id"], copy.deepcopy(before.get("verification")))
+        later = [x for x in store.corrections() if x["id"] > correction_id and x["op"].startswith("artifact.")
+                 and (x["payload"] or {}).get("artifact") == p["artifact"]]
+        current = copy.deepcopy(store.verification(art["id"]))
+        if later and current:
+            # Other line corrections were made since: putting the whole old snapshot back would undo their effect on the
+            # line count and flags. Only this line's own doubt comes back.
+            n = p["line"]
+            was = [f for f in (before.get("verification") or {}).get("flags") or [] if f.get("line") == before.get("line", n)]
+            was = [{**f, "line": n} for f in was]
+            kept = [f for f in current.get("flags") or [] if f.get("line") != n]
+            current["flagged"] = max(int(current.get("flagged") or 0) - (len(current.get("flags") or []) - len(kept)) + len(was), 0)
+            current["flags"] = sorted([*kept, *was], key=lambda f: f.get("line") or 0)
+            store.set_verification(art["id"], current)
+        else:
+            store.set_verification(art["id"], copy.deepcopy(before.get("verification")))
         with store.transaction():
             manual = store.get_meta("manual_capture_concerns") or {}
             if before.get("manual_concerns") is None:
@@ -536,8 +552,18 @@ def undo(store, correction_id) -> dict:
         with store.transaction() as db:
             db.execute("DELETE FROM finding WHERE origin = 'user' AND title = ?", (p["title"],))
     elif op == "finding.status":
+        # the same findings the correction was applied to: by stable signature, by the old rule|title form, or by title
+        hits = [f for f in store.findings() if p["sig"] in (finding_sig(f), legacy_sig(f)) or f["title"] == p["sig"]]
         with store.transaction() as db:
-            db.execute("UPDATE finding SET status = 'open' WHERE (rule || '|' || title) = ? OR title = ?", (p["sig"], p["sig"]))
+            for f in hits:
+                db.execute("UPDATE finding SET status = 'open' WHERE id = ?", (f["id"],))
+    elif op == "finding.severity" and p.get("_before"):
+        hits = [f for f in store.findings() if p["sig"] in (finding_sig(f), legacy_sig(f)) or f["title"] == p["sig"]]
+        with store.transaction() as db:
+            for f in hits:
+                old = p["_before"].get(finding_sig(f))
+                if old:
+                    db.execute("UPDATE finding SET severity = ? WHERE id = ?", (old, f["id"]))
     return {"id": correction_id, "undone": describe(c)}
 
 

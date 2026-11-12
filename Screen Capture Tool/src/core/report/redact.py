@@ -10,6 +10,30 @@ ORG = re.compile(r"(?:[A-Z][a-z]+[_ ]){0,3}(?:Department|Dept|Agency|Office|Mini
                  r"[_ ]of[_ ](?:[A-Z][a-z]+(?:[_ ]|(?=\.)|$)){1,4}")
 
 
+def _common_org(phrases):
+    """The match takes up to four capitalised words after "of", so in Dept_of_Education_Payroll_Report.cbl it runs into the
+    rest of the file name. When several names share the words up to the one after "of", only the words they all share are
+    the organisation; the rest is what tells the files apart and stays."""
+    groups = {}
+    for p in set(phrases):
+        words = [w for w in re.split(r"[_ ]", p) if w]
+        head = tuple(words[:words.index("of") + 2]) if "of" in words else tuple(words)
+        groups.setdefault(head, []).append(words)
+    out = []
+    for head, members in groups.items():
+        if len(members) < 2:
+            out.append("_".join(members[0]))
+            continue
+        common = members[0]
+        for words in members[1:]:
+            k = 0
+            while k < min(len(common), len(words)) and common[k] == words[k]:
+                k += 1
+            common = common[:k]
+        out.append("_".join(common if len(common) >= len(head) else head))
+    return out
+
+
 class Redactor:
     def __init__(self, settings: dict, names=()):
         client = (settings.get("client") or "").lower()
@@ -22,9 +46,11 @@ class Redactor:
                 words = [w for w in re.split(r"[_ ]", phrase) if w]
                 if phrase and not all(w.lower() in client for w in words):
                     auto.append(phrase)
+        auto = _common_org(auto)
         self.rules = []
         for p in sorted(set(auto), key=len, reverse=True):
             spaced = p.replace("_", " ")
+            self.rules.append((re.compile(r"(?<![A-Za-z0-9_])" + re.escape(p) + r"_"), ""))   # at the start of a name: nothing left to join
             self.rules.append((re.compile(r"_?" + re.escape(p) + r"_?"), "_"))
             self.rules.append((re.compile(re.escape(spaced)), repl))
         for t in sorted(set(terms), key=len, reverse=True):

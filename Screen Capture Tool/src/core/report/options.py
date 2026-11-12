@@ -45,7 +45,7 @@ def components(AM, techs, sec_f, texts=None, fin=False, legacy_ui=(), copies=Fal
             skill = cobol if role != "3270 terminal screen" else "Web front end"
         elif c["layer"] == "Presentation" and (n in legacy_ui or n in eol or fs):
             d, why = "rebuild", "screen or web page rebuilt in the new front end" + (
-                f"; its {len(fs)} security finding{'s are' if len(fs) != 1 else ' is'} fixed now" if fs else "")
+                f"; its {len(fs)} security finding{'s are' if len(fs) != 1 else ' is'} fixed as part of the rebuild" if fs else "")
             skill = "Web front end"
         elif role == "Database definition":
             ims = "IMS" in lang or "Assembl" in lang or "DBD" in _text(c)

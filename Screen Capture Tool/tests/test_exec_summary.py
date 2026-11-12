@@ -1,3 +1,4 @@
+import re
 from types import SimpleNamespace
 
 from core import deepdive as DD
@@ -118,7 +119,8 @@ def test_the_summary_is_its_own_file_and_the_report_only_points_to_it(store):  #
     own = docx.Document(io.BytesIO(summary_doc.docx_bytes(store)))
     body = "\n".join(p.text for p in own.paragraphs)
     cells = "\n".join(c.text for t in own.tables for r in t.rows for c in r.cells)
-    assert "Remediate (provisional)" in body and "Unchecked approval" in cells
+    # the verdict line names the report's recommended disposition between the verdict word and "(provisional)"
+    assert re.search(r"Remediate( \([^)]*\))? \(provisional\)", body) and "Unchecked approval" in cells
     assert "<insert business purpose and users information here>" in body              # an unknown is asked for, not guessed
     assert "Approve sets the batch status." in cells and f"[{name}:F1]" not in body + cells   # tags become plain references
 

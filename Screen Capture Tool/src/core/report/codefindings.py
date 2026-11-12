@@ -33,7 +33,7 @@ DEFECT_WORDS = re.compile(
     r"without (any )?(escaping|sanitiz|encoding|encodeURI|checking|validat|a (check|lock|transaction)|bounds)|not (validated|bounded|checked|escaped|encoded)|"
     r"(will|would|can|could) (raise|fail|throw|crash)|raises? an? (unhandled|error|KeyError|ZeroDivision)|unhandled|"
     r"\bXSS\b|cross-site|stored XSS|innerHTML|localStorage|\bNaN\b|ZeroDivision|negative (OFFSET|value|fee)|"
-    r"truncat|discard(s|ing)? (any )?fraction|(sum|total) of the .* can differ|rounded .* repeated|"
+    r"truncat|discard(s|ing)? (any )?fraction|(sum|total) of (the |all )?.{0,40}can differ|(sum|total) .{0,60}can differ from|rounded .* repeated|"
     r"floating.point|\bREAL\b|precision|"
     r"is (lost|never (closed|called|reached|applied|read))|original booking|(lost|erased|deleted) (if|when)|"
     r"commits? .*before|before .*commit|not atomic|race|concurren|two (requests|reviewers)|"
@@ -46,7 +46,9 @@ DEFECT_WORDS = re.compile(
     r"even though|lowercase[^.]*while[^.]*upper|uppercase[^.]*while[^.]*lower|incorrect|"
     r"(never|not) (sets?|reachable|reached)|no (route|path|transition)|unreachable|"
     r"(favou?rable|less|cheaper|lower) than|below (zero|the minimum)|drops? (the )?(remainder|fraction)|"
-    r"without (a )?(lock|transaction|unique)|check[- ]then[- ]act|no (transaction|lock)", re.I)
+    r"without (a )?(lock|transaction|unique)|check[- ]then[- ]act|no (transaction|lock)|"
+    r"\braises? (an? )?\w*(Error|Exception)|(fail|crash)(s|ed)? (on|with|when|if)|"
+    r"adding up|do(es)? not add up|without adjusting|no (cap|limit|upper limit)\b", re.I)
 NOT_A_DEFECT = re.compile(r"\b(is|are) (not supported|functionally fine|incorrect)\b|claim .* (is incorrect|not supported)|is consistent|uses parameteri[sz]ed|"
                           r"requires authentication|reuses the existing|is declared once|redundant database", re.I)
 # Wording that says the model is not sure the problem is real here (it depends on how something else is set up or used).
@@ -141,7 +143,8 @@ def select(store, code_arts, review_facts, total=24, minimum=2):
         except Exception:  # noqa: BLE001 - the tag is an extra; the finding stands without it
             zones = []
         for f in review_facts.get(art["id"], []):
-            if f.get("category") not in CATEGORIES or (SUSPECT.search(f["statement"]) and not THEMES.search(f["statement"])) or not _defect_like(f):
+            if (f.get("category") not in CATEGORIES and not (f.get("category") == "configuration" and f.get("severity") in ("high", "medium"))) \
+                    or (SUSPECT.search(f["statement"]) and not THEMES.search(f["statement"])) or not _defect_like(f):
                 continue
             if f.get("review") not in (None, "supported", "partly_supported", "corrected"):
                 continue
@@ -159,14 +162,15 @@ def select(store, code_arts, review_facts, total=24, minimum=2):
                 seen.add(key)
                 gap = DDV.in_gap(zones, f.get("lines")) if zones else None
                 cands.append({"file": art["name"], "text": f["statement"] + (GAP_TAG if gap else ""), "gap": gap, "lines": f.get("lines"),
-                              "severity": sev, "category": f["category"], "score": sc})
+                              "severity": sev, "category": f["category"], "score": sc, "source": f.get("source")})
     cands.sort(key=lambda r: (-_RANK.get(r["severity"], 0), bool(r.get("gap")), not THEMES.search(r["text"]), -r["score"]))      # a known defect pattern before an inferred one
     picked = []
     # Every file with candidates gets its best PER_FILE first, so a file whose defects score lower than another's repeated
     # ones is still represented; the rest is filled by rank up to the total.
     per_file, guaranteed = {}, []
     for c in cands:
-        exempt = c["severity"] == "high" or (c["category"] == "security" and c["severity"] == "medium")      # serious weaknesses never compete for a file's slots
+        exempt = c["severity"] == "high" or (c["category"] == "security" and c["severity"] == "medium") or (
+            c["severity"] == "medium" and c["category"] in ("defect", "data_integrity") and c.get("source") != "hunt")      # serious weaknesses, and a first-pass medium defect, never compete for a file's slots
         if (exempt or per_file.get(c["file"], 0) < PER_FILE) and not any(g["file"] == c["file"] and _same(g["text"], c["text"]) for g in guaranteed):
             if not exempt:                                # a high finding never uses up the slots meant for the rest of its file
                 per_file[c["file"]] = per_file.get(c["file"], 0) + 1       # a near copy of one already chosen does not use a slot
@@ -229,17 +233,45 @@ def group(picked):
     return out
 
 
+SEVERE_IMPACT = re.compile(r"sql injection|inject|path traversal|arbitrary file|credential|password|secret|api key|\bssn\b|personal|plain ?text|"
+                           r"unsalted|\bmd5\b|traceback|interactive debugger|debug=True|\bXSS\b|cross-site|innerHTML|audit (trail|history)|"
+                           r"deletes? (all|every)|erasing|curl[^.]*bash|world-(writable|readable)|chmod[^.]*777", re.I)
+REACHABLE = re.compile(r"query param|request|any (authenticated )?(user|origin|caller|client)|unauthenticated|0\.0\.0\.0|internet|"
+                       r"\bXSS\b|cross-site|innerHTML|injection|debug|traceback|every keystroke|raw 'name'|f\.filename", re.I)
+
+
+LOCAL_ONLY = re.compile(r"environment variable|child process|echo(es|ed)?\b|hard-?coded|literal|default(s)? to", re.I)      # needs access to the host or the code first
+
+
 def rate(cf):
-    """Likelihood and impact (1 to 5) for a line-by-line finding, with the reason for each."""
-    high = cf["severity"] == "high"
-    every = bool(UNCONDITIONAL.search(cf["text"]))
-    likelihood = 4 if (high or every) else 3
-    impact = 4 if high else 3
-    why_l = (f"{likelihood}: the line-by-line review found this in the source and it applies "
-             + ("on every run of the path" if every else "whenever the path runs")
+    """Likelihood and impact (1 to 5) for a line-by-line finding, with the reason for each. The two grow with what the finding
+    says, so a serious weakness reachable from a request scores above a note about one internal path; equal scores for every
+    finding would leave the heat map unable to rank anything."""
+    text = cf["text"]
+    sev = cf["severity"]
+    high = sev == "high"
+    every = bool(UNCONDITIONAL.search(text))
+    severe = bool(SEVERE_IMPACT.search(text))
+    reachable = bool(REACHABLE.search(text))
+    if high and reachable and not LOCAL_ONLY.search(text):
+        likelihood = 5
+    elif high or every:
+        likelihood = 4
+    elif HEDGED.search(text):
+        likelihood = 2
+    else:
+        likelihood = 3
+    impact = 5 if (high and severe) else 4 if high else 3 if (sev == "medium" or severe) else 2
+    why_l = (f"{likelihood}: the line-by-line review found this in the source and "
+             + ("it can be reached from a request or the page, so no special access is needed" if likelihood == 5 else
+                "it applies on every run of the path" if every or high else
+                "its effect depends on how something outside this file is set up" if likelihood == 2 else
+                "it applies whenever the path runs")
              + "; whether production uses the path is to confirm")
-    why_i = (f"{impact}: " + ("it can change payments, ledger entries or the audit trail" if high
-                              else "the effect on payments depends on how the business uses this path")
+    why_i = (f"{impact}: " + ("it can expose personal or credential data, let an outsider act as a user, or destroy records others rely on" if impact == 5 else
+                              "it can produce wrong results or weaken a control in a core function" if impact == 4 else
+                              "it affects one function or a limited set of records" if impact == 3 else
+                              "it is a minor weakness with a workaround")
              + "; to confirm with the business owner")
     return likelihood, impact, why_l, why_i
 
@@ -247,10 +279,18 @@ def rate(cf):
 GAP_TAG = " (check against the source: the captured copy has a gap or cut-off here)"
 
 
+CONCESSION = re.compile(r"^(.{20,}?\b(?:no (?:rows?|data|records?|\w+) (?:are|is|were) (?:lost|dropped|affected)|nothing is (?:lost|dropped)|"
+                        r"is (?:fine|correct|handled)|works?)\b[^,;]*)[,;]?\s+(?:but|however|although)\s+(.+)$", re.I)
+
+
 def short(text, limit=230):
     if text.endswith(GAP_TAG):                      # the tag always survives shortening
         return short(text[:-len(GAP_TAG)], limit) + GAP_TAG
     first = re.split(r"(?<!e\.g\.)(?<!i\.e\.)(?<=[.!?])\s+(?=[A-Z])", text.strip())[0].rstrip(".")
+    conceded = CONCESSION.match(first)
+    if conceded and len(first) > limit * 0.7:      # "in that case nothing is lost, but ..." : the point is after the but, not the case that is fine
+        who = re.search(r"\b([A-Za-z_]\w*_\w+)\(?", conceded.group(1))
+        first = (f"{who.group(1)}: " if who else "") + conceded.group(2)
     if len(first) > limit:      # a long aside in brackets pushes the defect past the limit; the point matters more than the aside
         first = re.sub(r"\s*\((?:e\.g\.|i\.e\.|and |such as|including|for example|repeated)[^()]*\)", "", first, flags=re.I)
     if re.match(r"(because|since|if|when|although)\b", first, re.I):

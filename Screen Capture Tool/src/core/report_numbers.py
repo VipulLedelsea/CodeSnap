@@ -7,7 +7,8 @@ import re
 
 _WORDS = {w: i for i, w in enumerate("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
                                      "fifteen sixteen seventeen eighteen nineteen twenty".split())}
-_NUM = r"(\d{1,6}|" + "|".join(_WORDS) + r")"
+# Not the tail of a longer number: the "five" of "twenty-five" or the "204" of "1,204" is not the stated count.
+_NUM = r"(?<![\w-])(?<!\d,)(\d{1,3}(?:,\d{3})+|\d{1,6}|" + "|".join(sorted(_WORDS, key=len, reverse=True)) + r")"
 _SCOPE = r"(?:provided |supplied |received |source |code |application |UI |program )*"
 _DONE = r"(?:were|was|are|is|have been|has been)?\s*(?:all\s+)?(?:reviewed|provided|supplied|received|analysed|analyzed|read)"
 # noun -> patterns whose first group is the stated number
@@ -30,7 +31,8 @@ def truth(store) -> dict:
 
 
 def _number(token):
-    return int(token) if token.isdigit() else _WORDS.get(token.lower())
+    digits = token.replace(",", "")
+    return int(digits) if digits.isdigit() else _WORDS.get(token.lower())
 
 
 def check(report_text: str, actual: dict) -> list:

@@ -62,7 +62,7 @@ class SessionManager:
                 from core.spacing import validate_profile
                 settings['spacing'] = validate_profile(saved['spacing'])
             return settings
-        except (OSError, ValueError, TypeError):
+        except (OSError, ValueError, TypeError, AttributeError):   # AttributeError: the file holds a list, not an object
             return capture_settings()
 
     def _save(self):

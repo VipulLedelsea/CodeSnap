@@ -64,6 +64,8 @@ def save_report_bundle(report: dict, dest_dir, name: str, code_name: str = None)
     ext = safe_ext(report.get("extension", "txt"))
     code = strip_code_fences(report.get("code", ""))
     code_path = dest_dir / f"{code_name or name}.{ext}"
+    if code_path == dest_dir / f"{name}.json":     # a .json code file would be overwritten by the bundle below
+        code_path = dest_dir / f"{name}_code.json"
     code_path.write_text(code)
     meta = {
         "language": report.get("language", ""),

@@ -1417,6 +1417,8 @@ def api_program_budget(slug: str, body: dict = Body(...)):
         value = float(body.get("budget_usd") or 0)
     except (TypeError, ValueError):
         return JSONResponse({"error": "budget must be a number"}, status_code=400)
+    if value != value or value in (float("inf"), float("-inf")):   # nan / inf would be stored and break the program page
+        return JSONResponse({"error": "budget must be a number"}, status_code=400)
     if value < 0:
         return JSONResponse({"error": "budget must be zero or more (0 = no limit)"}, status_code=400)
     from core.model.health import pipeline_health
@@ -1686,10 +1688,12 @@ def api_project_analyze(payload: dict = Body(...)):
     def _slug(x, default="File"):
         b = re.sub(r"[^A-Za-z0-9_]+", "_", (x or "").strip()).strip("_")
         return b or default
+    taken = set()
     def _unique(dirp, stem):
         cand, i = stem, 2
-        while (dirp / f"{cand}.json").exists():
+        while (dirp / f"{cand}.json").exists() or cand in taken:
             cand = f"{stem}_{i}"; i += 1
+        taken.add(cand)
         return cand
 
     files, picked = [], []
@@ -1727,15 +1731,16 @@ def api_project_analyze(payload: dict = Body(...)):
         stem = _unique(REPORTS, _slug(base))
         new_name = r["name"]
         try:
-            save_report_bundle({
+            code_path = save_report_bundle({
                 "language": r.get("language", ""), "overview": r.get("overview", ""),
                 "errors": r.get("errors", ""), "tech_stack": r.get("tech_stack", ""),
                 "diagrams": r.get("diagrams", ""), "extension": ext, "code": r.get("code", ""),
             }, REPORTS, stem)
+            written = {(REPORTS / f"{stem}.json").resolve(), Path(code_path).resolve()}
             for base_dir in (REPORTS, PENDING):          # remove the old report_<ts> bundle
                 for victim in (f"{r['name']}.json", r.get("code_file") or ""):
                     fp = _file_in(base_dir, victim) if victim else None   # plain names inside base_dir only
-                    if fp is None:
+                    if fp is None or fp.resolve() in written:           # never the files this rename just wrote
                         continue
                     try:
                         if fp.exists():
@@ -1869,12 +1874,12 @@ def api_session_pause(paused: bool = True):
 @app.post("/api/session/park")
 def api_session_park():
     """End the capture without analysing: saved to the program as a paused file to resume later."""
+    if _session.running() and not _session.program:   # refuse before the park flag is written, not after
+        return JSONResponse({"error": "Saving for later needs a program. Pause instead, or stop the session."}, status_code=400)
     try:
         _session.control(park=True)
     except RuntimeError as exc:
         return JSONResponse({"error": str(exc)}, status_code=409)
-    if not _session.program:
-        return JSONResponse({"error": "Saving for later needs a program. Pause instead, or stop the session."}, status_code=400)
     return {"running": True, "parking": True}
 
 

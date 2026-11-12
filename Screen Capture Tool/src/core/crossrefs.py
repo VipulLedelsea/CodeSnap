@@ -15,6 +15,7 @@ _LITERALS = [
     re.compile(r"\b\w*" + _SECRET_NAME + r"\w*[^\n]{0,60}?,\s*[\"']([^\"'\s]{8,})[\"']\s*\)", re.I),        # environ.get(name, "default")
 ]
 _NOT_SECRET = re.compile(r"^(\$|\{|<|%|os\.environ|null|none|true|false|changeme$)", re.I)
+_EXPRESSION = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+;?$|[()\[\]]")     # user.password, get_token(), row[2]: code, not a literal
 _ASSET = re.compile(r"(?:href|src)=[\"'](/?[\w./-]+\.(?:css|js|png|jpg|svg|ico))[\"']", re.I)
 _SQL_WORDS = {"select", "values", "set", "where", "the", "dual", "sqlite_master", "information_schema", "of", "lock", "locks", "share", "only", "table", "final"}
 
@@ -104,6 +105,8 @@ def repeated_secrets(store):
         for rx in _LITERALS:
             for m in rx.finditer(t):
                 v = m.group(1).strip()
+                if rx is _LITERALS[1] and _EXPRESSION.search(v):
+                    continue
                 if _NOT_SECRET.match(v) or v.lower() in ("password", "required", "optional"):
                     continue
                 seen.setdefault(v, {}).setdefault(a["name"], _line(t, m.start()))

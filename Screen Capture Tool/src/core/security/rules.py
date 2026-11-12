@@ -139,6 +139,9 @@ def code_lines(text: str, fam: str) -> list:
 
 _SECRET_VALUE = re.compile(r'''((?:password|passwd|pwd|secret|api_?key|access_?key|token)\w*["']?\s*[:=]\s*["'])([^"']{3,})(["'])''', re.I)
 _CONN_PWD = re.compile(r"((?:Password|Pwd)\s*=\s*)([^;\"'\s]+)", re.I)
+# a connection-string password runs to the ; or the closing quote, spaces included
+_CONN_PWD_SPACED = re.compile(r"(;\s*(?:Password|Pwd)\s*=\s*)([^;\"']+)(?=[;\"'])", re.I)
+_URL_PWD = re.compile(r"(\b[a-z][a-z0-9+.-]*://[^\s/:@\"']+:)[^\s@/\"']+(@)", re.I)   # scheme://user:password@host
 
 
 _CRED_ASSIGN = re.compile(
@@ -169,7 +172,9 @@ def mask_snippet(line: str, rule: str | None = None) -> str:
     token on the line is redacted (the rule fired, so something on this line is a secret)."""
     line = _SECRET_VALUE.sub(lambda m: m.group(1) + "****" + m.group(3), line)
     line = _CRED_ASSIGN.sub(lambda m: m.group(1) + m.group(2) + "****" + m.group(4), line)
+    line = _CONN_PWD_SPACED.sub(lambda m: m.group(1) + "****", line)
     line = _CONN_PWD.sub(lambda m: m.group(1) + "****", line)
+    line = _URL_PWD.sub(lambda m: m.group(1) + "****" + m.group(2), line)
     line = re.sub(r"(VALUE\s+['\"])([^'\"]+)(['\"])", lambda m: m.group(1) + "****" + m.group(3), line) \
         if re.search(r"(PASSWORD|PASSWD|PWD)", line, re.I) else line
     if rule == "SEC-CRED":

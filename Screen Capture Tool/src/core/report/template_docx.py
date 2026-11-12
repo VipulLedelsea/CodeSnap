@@ -21,6 +21,23 @@ from docx.shared import Inches, RGBColor
 from core.text import shorten_at_boundary
 
 
+def _id_runs(ids):
+    """'VUL-1-01, VUL-1-02, VUL-1-05' -> 'VUL-1-01, VUL-1-02 and VUL-1-05'; only consecutive ids collapse to 'a to b'."""
+    nums = [int(i.rsplit("-", 1)[1]) for i in ids]
+    runs, cur = [], [0]
+    for k in range(1, len(ids)):
+        if nums[k] == nums[k - 1] + 1:
+            cur.append(k)
+        else:
+            runs.append(cur)
+            cur = [k]
+    runs.append(cur)
+    parts = []
+    for r in runs:
+        parts += [f"{ids[r[0]]} to {ids[r[-1]]}"] if len(r) >= 3 else [ids[k] for k in r]
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
 def _report_stage(store):
     from core import deepdive
     try:
@@ -558,6 +575,12 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
                    "comps": list(cf_.get("files") or [cf_["file"]]), "owner": owner_it, "existing": "None visible in the code",
                    "mit": "Confirm the intended rule with the business owner, correct the source, and add a test that records the new behavior"})
     BR.sort(key=lambda r_: (-r_["score"], -len(r_.get("comps") or [])))      # a risk that spans more files comes first
+    _uniq = []
+    for r_ in BR:      # the same weakness reached by the program-level and the file-level review is one risk, stated once
+        if any(set(u_.get("comps") or []) == set(r_.get("comps") or []) and CFM._same(u_["title"], r_["title"]) for u_ in _uniq):
+            continue
+        _uniq.append(r_)
+    BR[:] = _uniq
     from core import report_review as RRV
     RR = RRV.verdicts(store)
     if RR:
@@ -1394,7 +1417,7 @@ def _render(store, report: dict, diagrams: dict, today=None, metadata=None) -> b
     anchor = doc.new_para("What these findings mean:", T[26]._tbl)._p
     for g in vgroups.values():
         f, ids = g["f"], g["ids"]
-        idtxt = ids[0] if len(ids) == 1 else f"{ids[0]} to {ids[-1]}" if len(ids) > 2 else " and ".join(ids)
+        idtxt = _id_runs(ids)
         wh, why_, fix_ = P.describe(f)
         txt = f"{idtxt}: {wh}."
         if why_:
@@ -1899,6 +1922,14 @@ def _infer_stack(stack, arts, DM, AM, store, jobs=()):
         detail=f"{lab} (version not confirmed)" if category=='Programming languages' else f"{lab} (source label; deployed use and version not confirmed)"
         _add_stack(stack, layer, detail, _vendor({"name": lab}) if _vendor({"name": lab}) != UNKNOWN
                    else "Microsoft" if "C#" in lab else "IBM" if "Assembler" in lab else UNKNOWN)
+    for pat, layer, label, vendor in (
+            (r"^\s*(?:from|import)\s+flask\b", "Application framework", "Flask (Python web framework; version not confirmed)", "Pallets"),
+            (r"^\s*(?:from|import)\s+flask_cors\b", "Third-party libraries and components", "Flask-CORS (version not confirmed)", "Open source"),
+            (r"^\s*(?:from|import)\s+django\b", "Application framework", "Django (version not confirmed)", "Django Software Foundation"),
+            (r"require\(['\"]express['\"]\)|from\s+['\"]express['\"]", "Application framework", "Express (Node.js; version not confirmed)", "OpenJS Foundation"),
+            (r"^\s*(?:from|import)\s+sqlite3\b", "Database", "SQLite (through the Python sqlite3 module; version not confirmed)", "SQLite (public domain)")):
+        if any(re.search(pat, x.get("transcription") or "", re.M) for x in arts):
+            _add_stack(stack, layer, label, vendor)
     if any((x.get("name") or "").lower().endswith(".bms") or
            re.search(r"\bDFHMSD\b|\bDFHMDI\b", x.get("transcription") or "") for x in arts):
         _add_stack(stack, "Presentation / UI", "CICS BMS map source (deployed interface and version to confirm)", "IBM")
@@ -2218,7 +2249,7 @@ def _vendor(t):
                  ("jquery", "OpenJS Foundation"), (".net", "Microsoft"), ("asp", "Microsoft"), ("visual basic", "Microsoft"),
                  ("sql server", "Microsoft"), ("windows", "Microsoft"), ("oracle", "Oracle"), ("java", "Oracle"),
                  ("delphi", "Embarcadero"), ("html", "W3C standard")):
-        if k in n:
+        if re.search(rf"(?<![a-z]){re.escape(k)}(?![a-z])", n):      # 'java' is not 'javascript'
             return v
     return UNKNOWN
 

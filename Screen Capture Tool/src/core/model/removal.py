@@ -69,7 +69,7 @@ def remove_file(store, artifact_id, force=False):
         for table in ('finding', 'evidence_link', 'correction'):
             for kind, target in (('entity', 'entity'), ('relation', 'relation'), ('artifact', 'artifact')):
                 db.execute(f"DELETE FROM {table} WHERE target_type=? AND target_id NOT IN (SELECT id FROM {target})", (kind,))
-        for key in ('pending_captures', 'verification', 'deepdive', 'deepdive_active', 'manual_capture_concerns'):
+        for key in ('pending_captures', 'verification', 'deepdive', 'deepdive_active', 'manual_capture_concerns', 'exact_sources'):
             value = meta(key, {}) or {}
             if isinstance(value, dict):
                 put(key, {k: v for k, v in value.items() if str(k) not in {str(i) for i in ids} and k not in names})

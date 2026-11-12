@@ -16,6 +16,11 @@ _TRIGGER_ON = re.compile(rf"\b(?:BEFORE|AFTER|INSTEAD\s+OF|FOR)\b[\w\s,]*?\bON\s
 _RESERVED = {"AS", "SET", "WHERE", "VALUES", "SELECT", "FROM", "ON", "OF", "INTO", "TABLE", "BEGIN", "END", "OR",
              "AND", "NEW", "OLD", "EACH", "ROW", "FOR"}
 _CONSTRAINT_WORDS = {"CONSTRAINT", "PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "INDEX", "KEY", "PERIOD", "LIKE"}
+# The shape a table constraint has. A column can be named PERIOD, KEY, INDEX, CHECK, UNIQUE or LIKE; then a type follows.
+_CONSTRAINT_SHAPE = re.compile(
+    r"""^[\[\"`]?(?:CONSTRAINT\b|(?:PRIMARY|FOREIGN)\s+KEY\b|(?:UNIQUE|CHECK)\s*(?:\(|(?:KEY|INDEX)\b)|(?:KEY|INDEX)\s*(?:\(|[\w\[\]"`]+\s*\(\s*[A-Za-z_\["`])"""
+    r"""|(?:UNIQUE|FULLTEXT|SPATIAL)\s+(?:KEY|INDEX)\b|PERIOD\s+FOR\b|LIKE\s+[\w.\[\]"`]+\s*(?:\w+\s+\w+\s*)*$)""", re.I | re.X)
+_TYPE = re.compile(r"([A-Za-z_]\w*(?:\s+(?:VARYING|PRECISION|LARGE\s+OBJECT))?)\s*(\([^)]*\))?", re.I)
 
 
 def _strip_comments(sql: str) -> str:
@@ -118,7 +123,7 @@ def parse_sql(text: str, filename: str = "") -> dict:
                 continue
             first = piece.split()[0].upper().strip('[]"`')
             part_line = line_of(sql, m.end() + offset + (len(part) - len(part.lstrip())))
-            if first in _CONSTRAINT_WORDS:
+            if first in _CONSTRAINT_WORDS and _CONSTRAINT_SHAPE.match(piece):
                 pk = re.search(r"PRIMARY\s+KEY\s*\(([^)]*)\)", piece, re.I)
                 if pk:
                     pks |= set(_cols(pk.group(1)))
@@ -132,8 +137,8 @@ def parse_sql(text: str, filename: str = "") -> dict:
                 continue
             col = clean_ident(cm.group(1)).split(".")[-1]
             rest = " ".join(cm.group(2).split())
-            ctype = re.match(r"([A-Za-z_][\w ]*?(?:\([^)]*\))?)(?=\s|$)", rest)
-            ctype = ctype.group(1).upper() if ctype else rest.split(" ")[0].upper()
+            ctype = _TYPE.match(rest)
+            ctype = (" ".join(ctype.group(1).split()) + (ctype.group(2) or "")).upper() if ctype else rest.split(" ")[0].upper()
             ctype = re.sub(r"\s+(NOT|NULL|DEFAULT|PRIMARY|REFERENCES|CONSTRAINT|WITH|GENERATED|IDENTITY|UNIQUE|CHECK|FOR)\b.*$", "", ctype)
             upper = rest.upper()
             is_pk = "PRIMARY KEY" in upper

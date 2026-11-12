@@ -158,10 +158,16 @@ def technologies(profile: dict) -> list:
     for rt in settings.get("supportedRuntime") or []:
         if rt and str(rt).lower().startswith("v2.0"):
             add("dotnetfx", "3.5", label=f".NET CLR {rt} (.NET Framework 2.0–3.5)", basis="supportedRuntime in config")
-        elif rt and re.search(r"v?4\.\d", str(rt)):
-            ver = re.search(r"(4(\.\d+)+)", str(rt)).group(1)
+        elif rt and re.search(r"Version\s*=\s*v?4\.\d", str(rt), re.I):
+            ver = re.search(r"Version\s*=\s*v?(4(\.\d+)+)", str(rt), re.I).group(1)
             add("dotnetfx", ver, label=f".NET Framework {ver}", basis="supportedRuntime in config")
+        elif rt and re.match(r"v?4\.\d", str(rt)):
+            # A bare v4.0 / v4.0.30319 is the CLR version shared by .NET Framework 4.0 to 4.8.x, not the framework version.
+            add("dotnetfx", None, label=f".NET CLR {rt} (.NET Framework 4.0–4.8.x)", confidence="unconfirmed",
+                basis="supportedRuntime in config")
     for lib in profile.get("libraries") or []:
+        if not str(lib).strip():
+            continue
         m = re.match(r"^([A-Za-z][\w.\-]*?)[\s\-]+v?(\d+(?:\.\d+)*)", str(lib))
         name = (m.group(1) if m else str(lib).split()[0]).lower()
         version = m.group(2) if m else None

@@ -59,6 +59,10 @@ WORKING ORDER
    - Output encoding: a value written into a CSV cell, page, SQL text, URL or shell command without escaping when it could come from a user (including a CSV cell that can start with =, +, - or @).
    - Spelling and case of shared values: a status, role, unit or key written differently here than the same file's own constants or other uses show (lowercase beside uppercase, a role name not in the file's own role list, a comparison like weekday() > 5 that misses a value it was meant to include).
    - Order of cleanup: something deleted, cancelled or removed before its replacement or its commit is secured, so a failure loses it.
+   - Sign-in and sessions: a password change or reset that leaves existing sessions or tokens valid, no rule on password length or strength where passwords are created, no limit on failed sign-ins, a token with no enforced age.
+   - Money type: amounts added, multiplied or compared as binary floating point (float, REAL, double) and rounded only at the end, so parts and totals drift by a cent.
+   - Opened and never closed: a record opened for each item (an assignment, reservation, lock, queue entry, open flag) that is closed on some end states but not others (for example closed when issued but not when rejected or withdrawn), so counts built on it grow wrong.
+   - Same calculation twice: a fee, rate or rule computed in two places (client and server, two modules) where one copy leaves out a term the other has (a surcharge, minimum, cap or discount), so the two give different answers.
    Before you record a defect from any of these, work one concrete input through the lines you cite and write it in the reasoning (the value, the line it reaches, the wrong result). If the code gives the right result for that input, it is not a defect and must not be recorded. If the defect depends on code this file does not show, put it in unknowns, not in facts.
 4. Complete the rollup fields (technology_signals through maintainability_signals).
 5. Run the VERIFICATION checklist, then call record_analysis exactly once.
@@ -161,7 +165,7 @@ in particular for these cross-file problems, each of which needs findings from t
 a value one file produces in one unit, case, width or format and another consumes in a different one (cents and dollars, upper and
 lower case, 12 and 16 characters, inclusive and exclusive limits); a name one file asks for that another file's own list does not contain
 (a role, a status, a column, a table, a setting); a function called with other arguments than it defines; the same rule or constant
-written in several places so the copies can drift apart; a check done in one file that another file's path goes around. Every
+written in several places so the copies can drift apart; a calculation done in two files (a browser estimate and the server, two modules) where the findings show one copy leaving out a term the other has (a surcharge, a minimum, a cap); a check done in one file that another file's path goes around. Every
 observation must rest on findings from at least two files. Give each a `kind`: "conflict" when the files disagree or break each other,
 "defect" when one flaw spans files, "duplication" when the same rule is copied, "flow" for an end-to-end flow, "agreement" when the files
 simply agree (an agreement is not a finding). Give a `severity` (high, medium, low) for conflict, defect and duplication: high only when
@@ -183,6 +187,12 @@ HOW TO HUNT (apply to any language or file type; skip what does not apply):
 - Data design: a column that must be unique but is not, a missing key, index or constraint the file's own queries need, money or identifiers held in a lossy type.
 - Scripts and deployment: steps that cannot be run twice, an unchecked failure, a permission or secret handled unsafely.
 - Security: injection, missing authorization on a resource the code names, weak crypto, secrets, personal data written where it should not be.
+- Sign-in and sessions: whether a token, session or credential has an expiry that is enforced where it is read (not only in a cleanup job), whether failed sign-ins are limited, whether password rules exist, whether a password change ends existing sessions, and whether a role name used here is spelled the same where it is defined.
+- Splits and truncation: a total divided into equal parts that are rounded (do the parts add back to the total?), a duration or amount cut to whole units (what is lost at the edge?), a limit or cap placed inside one branch so the other branch escapes it.
+- Cleanup and bookkeeping: a delete judged only by "no matching row" (what if the row is not written yet?), a record that is closed or removed on one path but left open on another, a replace done as cancel-then-create where the second step can fail.
+- Queries and design: a filter, join or sort on a column the file's own schema does not index; a read followed by an update with no condition on what was read.
+- Money and records: amounts held as binary floating point and rounded only at the end; a record opened for each item that is closed on some end states (issued) but not others (rejected); a calculation also repeated elsewhere in the file with a term left out.
+- Compare paths: work the same large input down the premium path and the plain path (expedited and standard, discounted and full, capped and uncapped); report any path that comes out better for the customer than the path it should cost more than.
 RULES (a wrong finding is worse than a missing one):
 - Report a defect only when you can name the exact line, quote it exactly, and state in `reasoning` the concrete input or situation and the wrong result it produces, worked through the code. If the code gives the right result, it is not a defect.
 - Use only what this file shows. Never invent names, values, callers or behaviour; never assume what other files do. If it depends on code not shown, leave it out.
@@ -900,6 +910,8 @@ def _known(new, kept):
     return False
 
 
+UNJUDGED_CATEGORIES = ("calculation", "business_rule", "control_flow", "data_write", "configuration", "data_read")
+
 HUNT_ANGLES = (
     "",
     "Second independent pass: read the file from its last lines back to its first, and weigh the end of the file as much as the start. "
@@ -916,13 +928,18 @@ def hunt(store, client, art, kept, model, text, bad_lines, header) -> list:
     # hunter treat whole areas as already covered, so a calculation that was described but never judged was never questioned.
     known = "\n".join(f"- (lines {f['lines'][0]}-{f['lines'][-1]}) {f['statement']}" for f in kept
                       if f.get("severity") in ("high", "medium", "low") or f.get("category") in ("defect", "security"))[:30000] or "(none)"
+    unjudged = "\n".join(f"- (lines {f['lines'][0]}-{f['lines'][-1]}) {f['statement']}" for f in kept
+                         if f.get("severity") not in ("high", "medium", "low") and f.get("category") in UNJUDGED_CATEGORIES and f.get("lines"))[:14000]
+    asked = ("\n\nThe first reviewer only DESCRIBED these behaviours and never judged them. For each, decide from the code whether the behaviour is wrong "
+             "(boundary, rounding, expiry, ordering, a failure path, a limit that does not hold) and report it as a finding only when it is; describing it again is not a finding:\n"
+             + unjudged) if unjudged else ""
     runs = max(1, min(int(os.environ.get("CODESNAP_HUNT_RUNS", "2") or 2), len(HUNT_ANGLES)))
 
     def window(w):
         a, b, angle = w
         part = "" if (a, b) == (1, n_lines) else f"This call covers lines {a}-{b} of {n_lines}; report only findings whose first line is in {a}-{b} (the rest is context).\n"
         body = listing(text, bad_lines, a - SEGMENT_CONTEXT, b + SEGMENT_CONTEXT) if part else listing(text, bad_lines)
-        msg, ms = _call(client, model, HUNT_SYSTEM, HUNT_TOOL, f"{header}\n{part}{angle}Problems the first reviewer already reported (do not repeat these; everything else in the file is still yours to question):\n{known}\n\n{body}")
+        msg, ms = _call(client, model, HUNT_SYSTEM, HUNT_TOOL, f"{header}\n{part}{angle}Problems the first reviewer already reported (do not repeat these; everything else in the file is still yours to question):\n{known}{asked}\n\n{body}")
         _log(store, "deepdive_hunt", art["id"], model, msg, ms)
         if getattr(msg, "stop_reason", None) == "max_tokens":
             raise ValueError("The defect hunt was truncated; review remains incomplete.")

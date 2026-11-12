@@ -43,9 +43,16 @@ def publish(msg: str, kind: str = "info", stage: str = None, program: str = None
 def recent(limit: int = 60, program: str = None) -> list:
     try:
         lines = status_file(_program(program)).read_text().splitlines()[-limit:]
-        return [json.loads(x) for x in lines if x.strip()]
     except Exception:  # noqa: BLE001
         return []
+    out = []
+    for x in lines:
+        try:                       # one half-written line must not hide every other event
+            if x.strip():
+                out.append(json.loads(x))
+        except ValueError:
+            continue
+    return out
 
 
 def clear(program: str = None) -> None:
