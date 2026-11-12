@@ -164,3 +164,24 @@ def test_a_schema_script_that_loads_a_table_it_never_creates_is_reported_as_miss
     assert not [r for r in check(whole, "s.sql")["reasons"] if "never creates" in r]
     assert any("start probably not captured" in r for r in check(cut, "s.sql")["reasons"])
     assert not [r for r in check(loads_only, "load.sql")["reasons"] if "never creates" in r]   # no CREATE at all: a plain data load
+
+
+def test_pinned_header_rows_do_not_reject_the_true_overlap():
+    """Sticky scroll keeps the enclosing headers (<html>, <body>, <form>) at the top of every screenshot. They are rows from
+    far above, so they never match the rows just above the overlap; the overlap is still the true one."""
+    from core.analysis import _agrees_above, _pinned_rows, _stitch_two
+    page = ["<html>", "<body onload=\"start()\">", "<h1>District lookup</h1>", "<form method=\"get\" name=\"lookup\">",
+            "<table width=\"760\" border=\"1\">"]
+    page += [f"  <tr><td>Field {i}</td><td><input name=\"f{i}\" size=\"{i + 4}\"></td></tr>" for i in range(1, 41)]
+    page += ["</table>", "</form>", "</body>", "</html>"]
+    pinned = [page[0], page[1], page[3], page[4]]
+    merged = page[:24]
+    screen = pinned + page[18:40]                      # four pinned rows, then six rows already read, then new rows
+    at, o = 24 - 6, len(pinned)
+    assert _pinned_rows(merged, at, screen, o) == 4
+    assert _agrees_above(merged, at, screen, o)
+    assert _stitch_two(list(merged), screen) == page[:40]
+    # rows that are simply the text above the overlap are not "pinned", and a different routine above is still refused
+    assert _pinned_rows(page[:24], 20, page[10:30], 10) == 0
+    other = [f"  <tr><td>Other {i}</td></tr>" for i in range(12)]
+    assert not _agrees_above(merged, 18, other + page[18:30], 12)

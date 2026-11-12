@@ -1,11 +1,12 @@
 import shutil
+import threading
 from pathlib import Path
 
 import pytest
 
 from core import deepdive as DD, pipeline
 from core.model import ProgramStore
-from tests.test_deepdive import FakeClient, fact, RUN1
+from tests.test_deepdive import FakeClient, fact, tool_msg, RUN1
 
 
 @pytest.fixture
@@ -21,18 +22,36 @@ def models(client):
     return [(c["model"], (c.get("tools") or [{}])[0].get("name")) for c in client.calls]
 
 
+class ForFile(FakeClient):
+    """The files are read in parallel, so which file's call arrives first is not fixed. The scripted analysis is the answer
+    for one named file only; every other file gets the empty answer, whatever order the calls come in."""
+
+    def __init__(self, name, analysis, **kw):
+        super().__init__(analysis, **kw)
+        self.name, self.lock = name, threading.Lock()
+
+    def create(self, **kw):
+        tool = (kw.get("tools") or [{}])[0].get("name")
+        with self.lock:
+            if tool == "record_analysis" and f"File: {self.name}\n" not in str(kw["messages"][0]["content"]):
+                self.calls.append(kw)
+                return tool_msg(tool, {"facts": []})
+            return super().create(**kw)
+
+
 def test_draft_then_final_uses_each_model_and_grounds_the_second_pass(store):
     art = next(a for a in store.artifacts() if (a.get("transcription") or "").strip())
     text = art["transcription"].splitlines()
     first = next(i for i, l in enumerate(text, 1) if l.strip())
     quote = text[first - 1].strip()
     f = fact("Draft claim about the first line", [first, first], quote)
-    client = FakeClient({"facts": [f], "capture_concerns": []}, review={"verdicts": []})
+    client = ForFile(art["name"], {"facts": [f], "capture_concerns": []}, review={"verdicts": []})
     res = pipeline.run_staged(store, client, report=False)
     seen = models(client)
     assert seen[0] == (pipeline.DRAFT_MODEL, "record_analysis")
     assert any(m == pipeline.FINAL_MODEL and t == "record_analysis" for m, t in seen)
-    final_prompts = [c for c in client.calls if c["model"] == pipeline.FINAL_MODEL and (c.get("tools") or [{}])[0].get("name") == "record_analysis"]
+    final_prompts = [c for c in client.calls if c["model"] == pipeline.FINAL_MODEL and (c.get("tools") or [{}])[0].get("name") == "record_analysis"
+                     and f"File: {art['name']}\n" in str(c["messages"][0]["content"])]
     body = str(final_prompts[0]["messages"])
     assert "Draft claim about the first line" in body and "Claims:" in body
     assert not any(m == pipeline.DRAFT_MODEL and t == "record_review" for m, t in seen)

@@ -2117,12 +2117,27 @@ def _conflict_context(lines, at):
     return context
 
 
+def _pinned_rows(merged, at, b, o, most=8):
+    """How many rows at the top of screen b are headers the editor keeps pinned there (sticky scroll): <html>, <body>, the
+    enclosing function. Each is a row read earlier in the file, in file order, and not the row that sits at that distance
+    above the overlap. They are part of the screen, not of the text just above the overlap, so they say nothing about
+    whether the overlap is in the right place."""
+    pos, count = -1, 0
+    for k, row in enumerate(b[:min(o, most)]):
+        key = row.strip()
+        found = next((i for i in range(pos + 1, at) if merged[i].strip() == key), None) if key else None
+        if found is None or found == at - (o - k):
+            break
+        pos, count = found, count + 1
+    return count
+
+
 def _agrees_above(merged, at, b, o, rows=40, need=0.88):
     """Do the rows above b[o] look like the rows above merged[at]? When the tail really sits at b[o], everything above it in
     this screen is what was already read just before the tail, so the two agree row for row (OCR noise aside). Template
     routines repeat the same last lines, so a match can sit inside the wrong routine; the routine header and the lines
     with other numbers above it then disagree. True when there are too few rows to compare."""
-    n = min(o, at, rows)
+    n = min(o - _pinned_rows(merged, at, b, o), at, rows)
     pairs = [(merged[at - j], b[o - j]) for j in range(1, n + 1)
              if merged[at - j].strip() and b[o - j].strip() and "[CUT OFF]" not in merged[at - j] + b[o - j]]
     if len(pairs) < 3:

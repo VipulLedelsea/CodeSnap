@@ -111,7 +111,8 @@ def test_verified_lines_are_never_wrong(case):
         assert len(pixel_flags) <= 3, s["flags"]
 
 
-@pytest.mark.parametrize("case,floor", [("run2/aidpayrn_cobol", 1.0), ("run2/aidpost_rpg", 1.0), ("run2/aiddbd_ims_one_screen", 1.0),
+@pytest.mark.parametrize("case,floor", [("run2/aidpayrn_cobol", 170/174),      # rebuilt exactly; three dash lines and one spacing disagreement stay flagged for a look
+                                        ("run2/aidpost_rpg", 1.0), ("run2/aiddbd_ims_one_screen", 1.0),
                                         ("run2/aiddbd_ims_recapture", 1.0), ("run2/district_lookup_html", 0.84),       # one more divider line is flagged for its dash, not verified
                                         # Ambiguous equally optimal pixel alignments are now
                                         # unverified; the exact-output and wrong-line tests above
